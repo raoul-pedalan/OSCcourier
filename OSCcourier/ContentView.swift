@@ -1,0 +1,2455 @@
+import SwiftUI
+import PDFKit
+import UniformTypeIdentifiers
+
+// A circle with smooth rounded "teeth" around its edge, like a gear or a
+// flower — used to give the RotaryKnob a notched/knurled look.
+struct NotchedKnobShape: Shape {
+    var lobes: Int = 8
+    var lobeDepth: CGFloat = 0.22 // fraction of the base radius
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let baseRadius = min(rect.width, rect.height) / 2
+        let segments = 240
+        for i in 0...segments {
+            let theta = (CGFloat(i) / CGFloat(segments)) * 2 * .pi
+            let r = baseRadius * (1 - lobeDepth / 2 + lobeDepth / 2 * cos(CGFloat(lobes) * theta))
+            let point = CGPoint(x: center.x + r * cos(theta), y: center.y + r * sin(theta))
+            if i == 0 {
+                path.move(to: point)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct RotaryKnob: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let onDoubleTap: () -> Void
+    @State private var initialValue: Double?
+    @State private var initialTranslation: CGFloat?
+
+    var body: some View {
+        ZStack {
+            NotchedKnobShape()
+                .fill(Color.gray.opacity(0.2))
+                .frame(width: 30, height: 30)
+
+            NotchedKnobShape()
+                .stroke(Color.gray, lineWidth: 2)
+                .frame(width: 30, height: 30)
+        }
+        .rotationEffect(.degrees(valueToAngle(value: value)))
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { gesture in
+                    if initialValue == nil {
+                        initialValue = value
+                        initialTranslation = gesture.translation.height
+                    } else {
+                        let translationDiff = initialTranslation! - gesture.translation.height
+                        let sensitivity: Double = 0.05
+                        let newValue = initialValue! + Double(translationDiff) * sensitivity
+                        value = min(max(newValue, range.lowerBound), range.upperBound)
+                    }
+                }
+                .onEnded { _ in
+                    initialValue = nil
+                    initialTranslation = nil
+                }
+        )
+        // Simultaneous (not exclusive) so it isn't swallowed by the drag
+        // gesture above, which claims the interaction immediately since it
+        // has minimumDistance: 0 — a plain .onTapGesture would never fire.
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                onDoubleTap()
+            }
+        )
+    }
+
+    private func valueToAngle(value: Double) -> Double {
+        let normalized = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+        return normalized * 270 - 135
+    }
+}
+
+struct TimelineEvent: Identifiable, Comparable, Codable {
+    let id: UUID
+    var time: Double
+    var label: String
+    var y: Double = 0.5
+    // Curvature of the curve segment that starts at this point and ends at
+    // the next point (curve tracks only). 0 = straight line. Positive values
+    // bend it into a symmetric S-curve (like Logic Pro's automation curve
+    // tool): stays close to this point's value, then transitions rapidly
+    // around the segment's midpoint, then flattens near the next point's value.
+    // Controlled by horizontal drag on the segment.
+    var segmentCurve: Double = 0
+    // Simple power-curve bulge for this segment (no inflection point, unlike
+    // segmentCurve's S-shape) — a plain concave/convex bow in one direction
+    // only. Controlled by vertical drag on the segment.
+    var segmentBulge: Double = 0
+
+    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0) {
+        self.id = id
+        self.time = time
+        self.label = label
+        self.y = y
+        self.segmentCurve = segmentCurve
+        self.segmentBulge = segmentBulge
+    }
+
+    static func < (lhs: TimelineEvent, rhs: TimelineEvent) -> Bool {
+        lhs.time < rhs.time
+    }
+}
+
+// SwiftUI's Color isn't natively Codable, so we go through plain RGBA
+// components to save/load it.
+struct CodableColor: Codable {
+    var red: Double
+    var green: Double
+    var blue: Double
+    var opacity: Double
+
+    init(color: Color) {
+        let nsColor = NSColor(color).usingColorSpace(.deviceRGB) ?? NSColor(color)
+        red = Double(nsColor.redComponent)
+        green = Double(nsColor.greenComponent)
+        blue = Double(nsColor.blueComponent)
+        opacity = Double(nsColor.alphaComponent)
+    }
+
+    var color: Color {
+        Color(red: red, green: green, blue: blue, opacity: opacity)
+    }
+}
+
+struct TimelineTrack: Identifiable, Codable {
+    let id: UUID
+    var nom: String
+    var couleur: Color
+    var evenements: [TimelineEvent]
+    var type: TrackType
+    var isMuted: Bool = false
+    var minAmplitude: Double = 0.0
+    var maxAmplitude: Double = 1.0
+    var height: CGFloat = 60
+
+    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60) {
+        self.id = id
+        self.nom = nom
+        self.couleur = couleur
+        self.evenements = evenements
+        self.type = type
+        self.isMuted = isMuted
+        self.minAmplitude = minAmplitude
+        self.maxAmplitude = maxAmplitude
+        self.height = height
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        nom = try container.decode(String.self, forKey: .nom)
+        couleur = try container.decode(CodableColor.self, forKey: .couleur).color
+        evenements = try container.decode([TimelineEvent].self, forKey: .evenements)
+        type = try container.decode(TrackType.self, forKey: .type)
+        isMuted = try container.decode(Bool.self, forKey: .isMuted)
+        minAmplitude = try container.decode(Double.self, forKey: .minAmplitude)
+        maxAmplitude = try container.decode(Double.self, forKey: .maxAmplitude)
+        height = CGFloat(try container.decode(Double.self, forKey: .height))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(nom, forKey: .nom)
+        try container.encode(CodableColor(color: couleur), forKey: .couleur)
+        try container.encode(evenements, forKey: .evenements)
+        try container.encode(type, forKey: .type)
+        try container.encode(isMuted, forKey: .isMuted)
+        try container.encode(minAmplitude, forKey: .minAmplitude)
+        try container.encode(maxAmplitude, forKey: .maxAmplitude)
+        try container.encode(Double(height), forKey: .height)
+    }
+}
+
+enum TrackType: String, Codable {
+    case bang, curve, step, message, normal
+}
+
+// Top-level project file format. `_comment` is a real field (not a stripped
+// // comment — plain JSON doesn't support those) so the file stays
+// self-documenting if someone opens it in a text editor, while remaining
+// strictly valid JSON.
+struct SaveData: Codable {
+    var _comment: String = "OSCcourier project file. Contains all track/point data plus basic UI settings (duration, OSC address, zoom level)."
+    var duree: Double
+    var oscAddress: String
+    var zoomX: Double
+    var pistes: [TimelineTrack]
+}
+
+// MARK: - Direct-control horizontal scroll view (used to keep the zoom centered on screen)
+//
+// We don't use SwiftUI's ScrollViewReader/scrollTo here: it races against the
+// content-size change caused by zoomX, which makes programmatic recentering
+// unreliable. Driving an NSScrollView directly gives us a deterministic offset.
+
+// A transparent overlay that shows a custom SF-Symbol cursor over its whole
+// area when `isActive` is true, using an NSTrackingArea with .cursorUpdate —
+// the AppKit API specifically meant for dynamically customizing the cursor.
+// Unlike ad-hoc NSCursor.set() calls (which macOS silently overrides on
+// plain mouse-moved events outside of an active drag) or static cursor rects
+// (which didn't reliably activate in this deeply-nested SwiftUI hierarchy),
+// cursorUpdate(with:) is the callback AppKit itself invokes to let us decide
+// the cursor, so our .set() call inside it is respected.
+struct CursorOverlay: NSViewRepresentable {
+    var isActive: Bool
+    var symbolName: String
+
+    func makeNSView(context: Context) -> TrackingView {
+        let view = TrackingView()
+        view.symbolName = symbolName
+        view.isActive = isActive
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackingView, context: Context) {
+        nsView.symbolName = symbolName
+        let changed = nsView.isActive != isActive
+        nsView.isActive = isActive
+        // cursorUpdate/mouseEntered only fire on actual mouse movement, so if
+        // isActive just flipped (e.g. Option pressed/released while the mouse
+        // sits still), force the cursor to update right now if the mouse
+        // happens to already be within this view.
+        guard changed, let window = nsView.window, window.isKeyWindow else { return }
+        let mouseLocation = nsView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard nsView.bounds.contains(mouseLocation) else { return }
+        if isActive {
+            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(config) ?? NSImage()
+            NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8)).set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    class TrackingView: NSView {
+        var symbolName: String = ""
+        var isActive: Bool = false
+        private var trackingArea: NSTrackingArea?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let existing = trackingArea {
+                removeTrackingArea(existing)
+            }
+            let area = NSTrackingArea(
+                rect: bounds,
+                options: [.activeAlways, .cursorUpdate, .mouseEnteredAndExited],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(area)
+            trackingArea = area
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            guard isActive else {
+                NSCursor.arrow.set()
+                return
+            }
+            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(config) ?? NSImage()
+            NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8)).set()
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            cursorUpdate(with: event)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            NSCursor.arrow.set()
+        }
+    }
+}
+
+struct TimelineScrollView<Content: View>: NSViewRepresentable {
+    @Binding var offsetX: CGFloat
+    @Binding var zoomX: Double
+    @Binding var isPinchZooming: Bool
+    var zoomRange: ClosedRange<Double> = 1.0...10.0
+    var duree: Double
+    var contentWidth: CGFloat
+    var contentHeight: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(offsetX: $offsetX, zoomX: $zoomX, isPinchZooming: $isPinchZooming, zoomRange: zoomRange)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasHorizontalScroller = true
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.horizontalScrollElasticity = .allowed
+        scrollView.verticalScrollElasticity = .allowed
+        scrollView.allowsMagnification = false // we drive zoomX ourselves, not NSScrollView's own magnification
+
+        let hosting = NSHostingView(rootView: content())
+        hosting.frame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
+        scrollView.documentView = hosting
+
+        context.coordinator.hostingView = hosting
+        context.coordinator.scrollView = scrollView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.boundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+
+        let magnificationRecognizer = NSMagnificationGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleMagnification(_:))
+        )
+        scrollView.addGestureRecognizer(magnificationRecognizer)
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.hostingView?.rootView = content()
+        context.coordinator.zoomRange = zoomRange
+        context.coordinator.duree = duree
+        context.coordinator.currentContentWidth = contentWidth
+
+        let newFrame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
+        if context.coordinator.hostingView?.frame != newFrame {
+            context.coordinator.hostingView?.frame = newFrame
+        }
+
+        // Only push our own offset into the scroll view if it actually changed
+        // (i.e. it was set programmatically from outside, e.g. on zoom change).
+        // This avoids fighting with the user's own trackpad/scroll input.
+        if abs(context.coordinator.lastKnownOffset - offsetX) > 0.5 {
+            let maxX = max(0, contentWidth - scrollView.contentView.bounds.width)
+            let clampedX = max(0, min(offsetX, maxX))
+            scrollView.contentView.scroll(to: NSPoint(x: clampedX, y: 0))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            context.coordinator.lastKnownOffset = clampedX
+        }
+    }
+
+    class Coordinator: NSObject {
+        var offsetXBinding: Binding<CGFloat>
+        var zoomXBinding: Binding<Double>
+        var isPinchZoomingBinding: Binding<Bool>
+        var zoomRange: ClosedRange<Double>
+        var duree: Double = 30
+        var currentContentWidth: CGFloat = 0
+        weak var hostingView: NSHostingView<Content>?
+        weak var scrollView: NSScrollView?
+        var lastKnownOffset: CGFloat = 0
+        private var zoomAtGestureStart: Double = 1.0
+
+        init(offsetX: Binding<CGFloat>, zoomX: Binding<Double>, isPinchZooming: Binding<Bool>, zoomRange: ClosedRange<Double>) {
+            self.offsetXBinding = offsetX
+            self.zoomXBinding = zoomX
+            self.isPinchZoomingBinding = isPinchZooming
+            self.zoomRange = zoomRange
+        }
+
+        @objc func boundsChanged(_ note: Notification) {
+            guard let clipView = note.object as? NSClipView else { return }
+            let x = clipView.bounds.origin.x
+            lastKnownOffset = x
+            DispatchQueue.main.async { [weak self] in
+                self?.offsetXBinding.wrappedValue = x
+            }
+        }
+
+        @objc func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
+            guard let scrollView = scrollView else { return }
+
+            switch recognizer.state {
+            case .began:
+                zoomAtGestureStart = zoomXBinding.wrappedValue
+                isPinchZoomingBinding.wrappedValue = true
+            case .changed:
+                let currentZoom = zoomXBinding.wrappedValue
+                let outerWidth = currentContentWidth / CGFloat(currentZoom)
+                let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
+                guard largeurAvant > 0 else { return }
+
+                // Where is the mouse right now, in viewport-local coordinates?
+                let locationX = recognizer.location(in: scrollView).x
+
+                // Which timeline instant is currently under the mouse?
+                let absoluteContentXBefore = offsetXBinding.wrappedValue + locationX
+                let anchorTime = min(max(Double((absoluteContentXBefore - 140) / largeurAvant) * duree, 0), duree)
+
+                // recognizer.magnification is cumulative since .began, e.g. 0.3 = pinched out 30%
+                let proposed = zoomAtGestureStart * (1 + recognizer.magnification)
+                let newZoom = min(max(proposed, zoomRange.lowerBound), zoomRange.upperBound)
+                zoomXBinding.wrappedValue = newZoom
+
+                // Recompute the offset so that same instant stays under the mouse
+                let largeurApres = outerWidth * CGFloat(newZoom) - 140
+                guard largeurApres > 0 else { return }
+                let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
+                let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
+                let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
+                offsetXBinding.wrappedValue = newOffsetX
+            case .ended, .cancelled, .failed:
+                isPinchZoomingBinding.wrappedValue = false
+            default:
+                break
+            }
+        }
+    }
+}
+
+// Used by the File menu commands (defined in the App file) to trigger
+// save/load without ContentView needing to expose its private functions.
+extension Notification.Name {
+    static let OSCcourierSave = Notification.Name("OSCcourierSave")
+    static let OSCcourierSaveAs = Notification.Name("OSCcourierSaveAs")
+    static let OSCcourierLoad = Notification.Name("OSCcourierLoad")
+    static let OSCcourierShowHelp = Notification.Name("OSCcourierShowHelp")
+}
+
+struct ContentView: View {
+    @StateObject private var oscManager = OSCManager()
+    @StateObject private var messageStore = OSCMessageStore()
+    @State private var duree: Double = 30.0
+    @State private var position: Double = 0.0
+    @State private var enLecture: Bool = false
+    @State private var enBoucle: Bool = false
+    @State private var timer: Timer?
+    // Real wall-clock timestamp of the previous playback tick (monotonic
+    // clock, in seconds). Used to advance `position` by the actual elapsed
+    // time between ticks instead of an assumed fixed 0.05 — Timer doesn't
+    // guarantee exact intervals, so assuming a fixed delta would let small
+    // per-tick errors accumulate into real drift over a long playback session.
+    @State private var lastTickTimestamp: Double?
+    @State private var zoomX: Double = 1.0
+    @State private var pistes: [TimelineTrack] = [
+        TimelineTrack(nom: "/markers", couleur: Color(red: 0.45, green: 0.4, blue: 0.4), evenements: [], type: .bang, height: 45),
+        TimelineTrack(nom: "/track_1", couleur: .blue, evenements: [], type: .bang, height: 45),
+        TimelineTrack(nom: "/track_2", couleur: .yellow, evenements: [], type: .curve, height: 60),
+        TimelineTrack(nom: "/track_3", couleur: .yellow, evenements: [], type: .curve, height: 60),
+        TimelineTrack(nom: "/track_4", couleur: Color(red: 0.608, green: 0.086, blue: 0.365), evenements: [], type: .step, height: 60)
+    ]
+    @State private var lastSentEvents: Set<String> = []
+    @State private var indexPisteARenommer: Int?
+    @State private var nouveauNomPiste = ""
+    @State private var pointAEditer: (trackIndex: Int, eventId: UUID)?
+    @State private var nouvellePositionString = ""
+    @State private var nouveauLabel = "M"
+    @State private var nouvelleYString = "0.5"
+    @State private var amplitudeEditorTrackIndex: Int?
+    // Autofill Rectangle popup (step tracks): generates a rectangular/pulse
+    // pattern of step events across the track.
+    @State private var autofillTrackIndex: Int?
+    @State private var autofillPeriodString: String = "1.0"
+    @State private var autofillPhaseString: String = "0.0"
+    @State private var autofillPulseWidthString: String = "0.5"
+    @State private var autofillAmpMinString: String = "0.0"
+    @State private var autofillAmpMaxString: String = "1.0"
+
+    // Autofill Wave popup (curve tracks): generates a sine or (skewed) sawtooth wave.
+    @State private var waveTrackIndex: Int?
+    @State private var waveIsSine: Bool = true // true = Sin, false = Saw
+    @State private var wavePeriodString: String = "1.0"
+    @State private var wavePhaseString: String = "0.0"
+    @State private var waveSkewString: String = "0.5"
+    @State private var waveAmpMinString: String = "0.0"
+    @State private var waveAmpMaxString: String = "1.0"
+
+    // Autofill Bang popup (bang/markers tracks): generates evenly spaced bangs.
+    @State private var bangTrackIndex: Int?
+    @State private var bangPeriodString: String = "1.0"
+    @State private var bangPhaseString: String = "0.0"
+    // Set when the pencil button is pressed on a track that already has
+    // points, to show an "Overwrite track?" confirmation before opening
+    // the actual autofill popup.
+    @State private var pendingAutofillIndex: Int?
+    @State private var showClearAllConfirmation = false
+    // Modifier-aware cursor over points: shift = delete cursor, cmd = snap cursor.
+    // Tracks whether the mouse is currently over any point, and listens for
+    // modifier key changes while hovering (since .onHover alone only fires on
+    // enter/exit, not when a modifier key is pressed mid-hover).
+    @State private var isHoveringPoint: Bool = false
+    // Option-drag on a curve segment (Logic Pro automation-curve style).
+    @State private var isNearCurveControlZone: Bool = false
+    @State private var isOptionHeldForCursor: Bool = false
+    @State private var curveDragSegmentID: UUID?
+    @State private var curveDragBaseline: Double?
+    @State private var curveDragBulgeBaseline: Double?
+    @State private var isNearSnapZone: Bool = false
+    @State private var flagsChangedMonitor: Any?
+    @State private var tempMinAmplitude: String = "0"
+    @State private var tempMaxAmplitude: String = "1"
+    @State private var messagesWindowController: NSWindowController?
+    @State private var pdfWindowController: NSWindowController?
+    // Remembers the file chosen on the first Save, so subsequent saves
+    // silently overwrite it instead of prompting again.
+    @State private var savedFileURL: URL?
+    // Managing focus explicitly (defaulting to nil) stops macOS from
+    // automatically giving keyboard focus to the first text field at launch.
+    private enum ToolbarField: Hashable {
+        case duree, oscAddress
+    }
+    @FocusState private var focusedField: ToolbarField?
+    @State private var draggedTrackIndex: Int?
+    @State private var dragStartHeight: CGFloat = 0
+    // Track reordering (drag handle in the header). "markers" (index 0) stays pinned.
+    @State private var reorderingIndex: Int?
+    @State private var reorderDragTranslation: CGFloat = 0
+    // Accumulates by ± the swapped neighbor's height each time a swap happens during
+    // the same drag, so the raw (cumulative-since-start) gesture translation can be
+    // corrected into the right visual offset without ever being overwritten wrong.
+    @State private var reorderBaselineOffset: CGFloat = 0
+
+    // Vertical margin (= circle radius) reserved at the top/bottom of a curve
+    // track so that points at the extreme values (0 or 1) aren't half-clipped.
+    // Shared by the ruler labels, the path, and the point positions so they
+    // all stay consistent with each other.
+    private let curveMargin: CGFloat = 6
+
+    // MARK: - Zoom-centering state
+    @State private var scrollOffsetX: CGFloat = 0
+    // True while a pinch gesture is in progress: TimelineScrollView's Coordinator
+    // handles its own mouse-anchored centering during a pinch, so the viewport-center
+    // recentering below (used for the RotaryKnob) should stand down while this is true.
+    @State private var isPinchZooming: Bool = false
+    // Toggle for showing/hiding the "time, value" coordinate labels next to points.
+    @State private var showPointCoordinates: Bool = true
+    // Width of the timeline viewport (updated from the outer GeometryReader), used to
+    // compute how much zoom is needed to reach the 1s = 1000px target regardless of `duree`.
+    @State private var timelineAreaWidth: CGFloat = 1500
+
+    // Maximum zoom factor such that at max zoom, 1 second of timeline = 1000px,
+    // no matter how long the track (`duree`) is. Without this, a fixed max zoom
+    // (e.g. 10x) isn't enough to reach that resolution once `duree` gets large.
+    private var maxZoomX: Double {
+        let outerWidth = max(timelineAreaWidth, 1)
+        let desiredLargeur = 1000.0 * duree // pixels needed so that 1s = 1000px
+        let zoom = (desiredLargeur + 140) / outerWidth
+        return max(1.0, zoom)
+    }
+
+    // Real total height of the ruler + all tracks (mirrors the `totalHeight` computed
+    // inside the inner GeometryReader), plus the top padding reserved for the playhead
+    // triangle. Used as the document's actual height so vertical scrolling can reveal
+    // tracks that would otherwise be clipped below the visible viewport.
+    private var totalTracksHeight: CGFloat {
+        24 + pistes.reduce(CGFloat(0)) { $0 + (($1.type == .bang || $1.type == .message) ? 45 : $1.height) } + CGFloat(pistes.count * 5) + 14
+    }
+
+    // Shared naming counter across all track types (bang or curve), so a new
+    // track never reuses a number already taken by a track of the other color.
+    // Based on the highest existing /track_N suffix rather than a raw count,
+    // so it stays correct even after tracks have been deleted or reordered.
+    private var nextTrackName: String {
+        let existingNumbers = pistes.compactMap { piste -> Int? in
+            guard piste.nom.hasPrefix("/track_") else { return nil }
+            return Int(piste.nom.dropFirst("/track_".count))
+        }
+        return "/track_\((existingNumbers.max() ?? 0) + 1)"
+    }
+
+    private func encodedProjectData() -> Data? {
+        let data = SaveData(duree: duree, oscAddress: oscManager.address, zoomX: zoomX, pistes: pistes)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(data)
+    }
+
+    private func saveProject() {
+        guard let jsonData = encodedProjectData() else { return }
+
+        if let url = savedFileURL {
+            try? jsonData.write(to: url)
+        } else {
+            promptAndSave(jsonData)
+        }
+    }
+
+    // Always prompts for a new location, regardless of any previously saved file.
+    private func saveProjectAs() {
+        guard let jsonData = encodedProjectData() else { return }
+        promptAndSave(jsonData)
+    }
+
+    private func promptAndSave(_ jsonData: Data) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "OSCcourier.json"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            savedFileURL = url
+            try? jsonData.write(to: url)
+        }
+    }
+
+    private func loadProject() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let jsonData = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
+
+        enLecture = false
+        position = 0
+        lastSentEvents.removeAll()
+        duree = decoded.duree
+        zoomX = decoded.zoomX
+        oscManager.address = decoded.oscAddress
+        oscManager.setupOSCConnection()
+        pistes = decoded.pistes
+        savedFileURL = url // further saves overwrite the file we just loaded
+    }
+
+    private func openPDFWindow() {
+        if pdfWindowController != nil {
+            pdfWindowController?.showWindow(nil)
+            return
+        }
+        guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
+        let document = PDFDocument(url: pdfURL)
+        let pdfView = PDFView()
+        pdfView.document = document
+        pdfView.autoScales = false
+        pdfView.scaleFactor = 1.5
+
+        // Size the window to fit the PDF's actual page at that same scale,
+        // instead of a fixed guess, so nothing gets cut off horizontally.
+        var contentWidth: CGFloat = 600
+        var contentHeight: CGFloat = 800
+        if let page = document?.page(at: 0) {
+            let pageBounds = page.bounds(for: .mediaBox)
+            contentWidth = pageBounds.width * pdfView.scaleFactor
+            contentHeight = pageBounds.height * pdfView.scaleFactor
+        }
+        if let screenFrame = NSScreen.main?.visibleFrame {
+            contentWidth = min(contentWidth, screenFrame.width * 0.9)
+            contentHeight = min(contentHeight, screenFrame.height * 0.9)
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight),
+                             styleMask: [.titled, .closable, .resizable],
+                             backing: .buffered,
+                             defer: false)
+        window.title = "Help"
+        window.center()
+        window.contentView = pdfView
+        pdfWindowController = NSWindowController(window: window)
+        pdfWindowController?.showWindow(nil)
+    }
+
+    // Shared with SettingsView via the same @AppStorage key.
+    @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
+    @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
+
+    private func sendOSCMessage(_ message: String) {
+        let fullMessage = oscAddressPrefix + message
+        oscManager.sendMessage(fullMessage)
+        messageStore.addMessage(fullMessage)
+    }
+
+    private func openOSCMessagesWindow() {
+        if messagesWindowController != nil {
+            messagesWindowController?.showWindow(nil)
+            return
+        }
+
+        let contentView = OSCMessagesView(messageStore: messageStore)
+        let hostingView = NSHostingView(rootView: contentView)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 300)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 300),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Outgoing OSC Messages"
+        window.setFrameAutosaveName("OSCMessagesWindow")
+        window.setContentSize(NSSize(width: 220, height: 300))
+        window.contentView = hostingView
+        window.minSize = NSSize(width: 50, height: 300)
+
+        // Top-right of the screen, with a small margin from the edges —
+        // applied after setFrameAutosaveName so it always ends up there,
+        // rather than wherever a previously saved frame happened to be.
+        if let screenFrame = NSScreen.main?.visibleFrame {
+            let margin: CGFloat = 20
+            let origin = NSPoint(
+                x: screenFrame.maxX - window.frame.width - margin,
+                y: screenFrame.maxY - window.frame.height - margin
+            )
+            window.setFrameOrigin(origin)
+        }
+
+        messagesWindowController = NSWindowController(window: window)
+        messagesWindowController?.showWindow(nil)
+    }
+
+    // Generates a rectangular/pulse-train pattern of step events across [0, duree].
+    // period: T in seconds. phase: fraction of the period (0...1) the pattern is
+    // shifted by. pulseWidth: fraction of the period (0...1) spent at ampMax.
+    private func rectangleEvents(period: Double, phase: Double, pulseWidth: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
+        guard period > 0 else { return [] }
+        let phaseOffset = phase * period
+        let highDuration = min(max(pulseWidth, 0), 1) * period
+
+        var events: [TimelineEvent] = []
+        let firstN = Int((-phaseOffset / period).rounded(.down)) - 1
+        var n = firstN
+        while true {
+            let cycleStart = Double(n) * period + phaseOffset
+            if cycleStart > duree { break }
+            let highEnd = cycleStart + highDuration
+            if cycleStart >= 0 && cycleStart <= duree {
+                events.append(TimelineEvent(time: cycleStart, label: "", y: ampMax))
+            }
+            if highEnd >= 0 && highEnd <= duree {
+                events.append(TimelineEvent(time: highEnd, label: "", y: ampMin))
+            }
+            n += 1
+        }
+
+        // Make sure playback starting at t=0 reflects the correct held value,
+        // even if the first generated edge falls after 0.
+        if !events.contains(where: { $0.time == 0 }) {
+            let containingN = Int(((0 - phaseOffset) / period).rounded(.down))
+            let cycleStart0 = Double(containingN) * period + phaseOffset
+            let highEnd0 = cycleStart0 + highDuration
+            let valueAtZero = (0 >= cycleStart0 && 0 < highEnd0) ? ampMax : ampMin
+            events.insert(TimelineEvent(time: 0, label: "", y: valueAtZero), at: 0)
+        }
+
+        return events.sorted { $0.time < $1.time }
+    }
+
+    // Generates a sine or skewed-sawtooth wave for curve tracks (piecewise-linear
+    // interpolation between the generated points, so a Sin wave needs many
+    // samples per period to look smooth; a Saw only needs 2 points per cycle
+    // since it's already piecewise-linear).
+    // Warps a normalized progress value t (0...1) into a symmetric S-curve
+    // shape based on a single curvature parameter, matching Logic Pro's
+    // automation curve tool. curvature == 0 leaves t unchanged (straight line).
+    private func curvedProgress(_ t: Double, curvature: Double) -> Double {
+        guard curvature != 0 else { return t }
+        let k = pow(2, curvature)
+        if t < 0.5 {
+            return pow(t * 2, k) / 2
+        } else {
+            return 1 - pow((1 - t) * 2, k) / 2
+        }
+    }
+
+    // A simple power-curve warp with no inflection point (single concave or
+    // convex bow throughout, unlike curvedProgress's symmetric S-shape).
+    // bulge == 0 leaves t unchanged (straight line).
+    private func bulgeProgress(_ t: Double, bulge: Double) -> Double {
+        guard bulge != 0 else { return t }
+        let k = pow(2, bulge)
+        return pow(t, k)
+    }
+
+    // Combines both warps: horizontal drag (segmentCurve, S-shape) and
+    // vertical drag (segmentBulge, simple bow) apply together.
+    private func combinedProgress(_ t: Double, curvature: Double, bulge: Double) -> Double {
+        curvedProgress(bulgeProgress(t, bulge: bulge), curvature: curvature)
+    }
+
+    // The curve's rendered y-position (in track-local pixels), at a given
+    // time, accounting for each segment's curvature. Returns nil if the time
+    // falls outside the track's own point range (no curve there).
+    private func curveYPosition(forTime time: Double, trackIndex: Int) -> CGFloat? {
+        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
+        guard sorted.count > 1, let first = sorted.first, let last = sorted.last,
+              time >= first.time, time <= last.time else { return nil }
+
+        for i in 0..<(sorted.count - 1) {
+            let a = sorted[i]
+            let b = sorted[i + 1]
+            guard time >= a.time && time <= b.time else { continue }
+            let t = (b.time - a.time) > 0 ? (time - a.time) / (b.time - a.time) : 0
+            let curvedT = combinedProgress(t, curvature: a.segmentCurve, bulge: a.segmentBulge)
+            let value = a.y + (b.y - a.y) * curvedT
+            let amplitudeRange = pistes[trackIndex].maxAmplitude - pistes[trackIndex].minAmplitude
+            let normalizedY = amplitudeRange > 0 ? (value - pistes[trackIndex].minAmplitude) / amplitudeRange : 0.5
+            return curveMargin + (pistes[trackIndex].height - 2 * curveMargin) * (1 - normalizedY)
+        }
+        return nil
+    }
+
+    private func waveEvents(isSine: Bool, period: Double, phase: Double, skew: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
+        guard period > 0 else { return [] }
+        let phaseOffset = phase * period
+        var events: [TimelineEvent] = []
+
+        if isSine {
+            // Only place control points at the peaks and troughs (where a sine's
+            // tangent is naturally horizontal), and let the existing curve
+            // interpolation (segmentCurve) compute the shape between them —
+            // instead of approximating the wave with many sampled points.
+            // curvature ≈ 1.0 was picked to closely match a real sine's shape
+            // between a peak and a trough (a symmetric S-curve is a good fit,
+            // since sine also has zero slope at the extremes and its steepest
+            // slope exactly at the midpoint).
+            let sineSegmentCurvature = 1.0
+            let halfPeriod = period / 2
+            let firstPeakTime = phaseOffset + period / 4
+            let firstN = Int(((0 - firstPeakTime) / halfPeriod).rounded(.down)) - 1
+            var n = firstN
+            while true {
+                let time = firstPeakTime + Double(n) * halfPeriod
+                if time > duree { break }
+                let parity = ((n % 2) + 2) % 2 // n=0 → first peak, alternating from there
+                let value = parity == 0 ? ampMax : ampMin
+                if time >= 0 && time <= duree {
+                    events.append(TimelineEvent(time: time, label: "", y: value, segmentCurve: sineSegmentCurvature))
+                }
+                n += 1
+            }
+        } else {
+            // Skew = fraction of the period spent rising (0...1). 0.5 = symmetric
+            // triangle; near 1 = classic rising sawtooth; near 0 = reversed sawtooth.
+            let riseDuration = min(max(skew, 0.01), 0.99) * period
+            let firstN = Int(((0 - phaseOffset) / period).rounded(.down)) - 1
+            var n = firstN
+            while true {
+                let cycleStart = Double(n) * period + phaseOffset
+                if cycleStart > duree { break }
+                let peakTime = cycleStart + riseDuration
+                if cycleStart >= 0 && cycleStart <= duree {
+                    events.append(TimelineEvent(time: cycleStart, label: "", y: ampMin))
+                }
+                if peakTime >= 0 && peakTime <= duree {
+                    events.append(TimelineEvent(time: peakTime, label: "", y: ampMax))
+                }
+                n += 1
+            }
+        }
+
+        return events.sorted { $0.time < $1.time }
+    }
+
+    // Generates evenly spaced bang events for bang/markers tracks.
+    private func bangEvents(period: Double, phase: Double, duree: Double, defaultLabel: String = "M", numberedLabelPrefix: String? = nil) -> [TimelineEvent] {
+        guard period > 0 else { return [] }
+        let phaseOffset = phase * period
+        var events: [TimelineEvent] = []
+        var n = 0
+        var counter = 1
+        while true {
+            let time = Double(n) * period + phaseOffset
+            if time > duree { break }
+            if time >= 0 {
+                let label: String
+                if let prefix = numberedLabelPrefix {
+                    label = "\(prefix)_\(counter)"
+                    counter += 1
+                } else {
+                    label = defaultLabel
+                }
+                events.append(TimelineEvent(time: time, label: label, y: 0.5))
+            }
+            n += 1
+        }
+        return events
+    }
+
+    // Called by the pencil button. Warns first if the track already has
+    // points (since autofill replaces them entirely), otherwise opens the
+    // relevant popup directly.
+    // Builds an NSCursor from an SF Symbol image.
+    private func cursor(fromSymbol name: String) -> NSCursor {
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) ?? NSImage()
+        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
+    }
+
+    // Is xPos (in timeline pixels) within the 7px snap zone of the nearest marker line?
+    private func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
+        guard !pistes[0].evenements.isEmpty, duree > 0 else { return false }
+        let closestMarker = pistes[0].evenements.min(by: { markerA, markerB in
+            let xA = (markerA.time / duree) * largeurTimeline
+            let xB = (markerB.time / duree) * largeurTimeline
+            return abs(xA - xPos) < abs(xB - xPos)
+        })
+        guard let closestMarker = closestMarker else { return false }
+        let markerXPos = (closestMarker.time / duree) * largeurTimeline
+        return abs(markerXPos - xPos) < 7
+    }
+
+    // Applies the right cursor for the current hover + modifier-key state:
+    // shift = delete-point cursor, cmd = snap-to-marker cursor (only once
+    // actually within the snap zone), otherwise the default arrow (or
+    // nothing, if not hovering a point at all).
+    private func updatePointCursor() {
+        guard isHoveringPoint else {
+            NSCursor.arrow.set()
+            return
+        }
+        if NSEvent.modifierFlags.contains(.shift) {
+            cursor(fromSymbol: "eraser.badge.xmark").set()
+        } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
+            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left").set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+
+    private func openAutofillPopup(for index: Int) {
+        if pistes[index].evenements.isEmpty {
+            proceedWithAutofill(for: index)
+        } else {
+            pendingAutofillIndex = index
+        }
+    }
+
+    private func proceedWithAutofill(for index: Int) {
+        switch pistes[index].type {
+        case .step:
+            autofillTrackIndex = index
+            autofillPeriodString = "1.0"
+            autofillPhaseString = "0.0"
+            autofillPulseWidthString = "0.5"
+            autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
+            autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
+        case .curve:
+            waveTrackIndex = index
+            waveIsSine = true
+            wavePeriodString = "1.0"
+            wavePhaseString = "0.0"
+            waveSkewString = "0.5"
+            waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
+            waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
+        case .bang, .message:
+            bangTrackIndex = index
+            bangPeriodString = "1.0"
+            bangPhaseString = "0.0"
+        case .normal:
+            break
+        }
+    }
+
+    private func sendOSCMessagesForPosition(_ pos: Double) {
+        for piste in pistes where !piste.isMuted {
+            if piste.type == .bang {
+                let tol = 0.01
+                for event in piste.evenements {
+                    if abs(pos - event.time) < tol {
+                        if piste.nom == "/markers" {
+                            let label = event.label.isEmpty ? "marker" : event.label
+                            sendOSCMessage(piste.nom + " " + label)
+                        } else {
+                            sendOSCMessage(piste.nom + " bang")
+                        }
+                    }
+                }
+            } else if piste.type == .message {
+                let tol = 0.01
+                for event in piste.evenements {
+                    if abs(pos - event.time) < tol {
+                        sendOSCMessage(piste.nom + " " + event.label)
+                    }
+                }
+            } else if piste.type == .curve {
+                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
+                if sortedEvents.isEmpty { continue }
+
+                let lastEventBefore = sortedEvents.last(where: { $0.time <= pos })
+                let nextEvent = sortedEvents.first(where: { $0.time > pos })
+
+                if let lastEventBefore = lastEventBefore {
+                    if let nextEvent = nextEvent {
+                        let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
+                        let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
+                        let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
+                        sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY))
+                    } else {
+                        sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
+                    }
+                } else if let firstEvent = sortedEvents.first {
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+                }
+            } else if piste.type == .step {
+                // Zero-order hold: send the last event's value as-is, never interpolated.
+                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
+                if sortedEvents.isEmpty { continue }
+
+                if let lastEventBefore = sortedEvents.last(where: { $0.time <= pos }) {
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
+                } else if let firstEvent = sortedEvents.first {
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+                }
+            }
+        }
+    }
+
+    // Called every 50ms by the playback timer. Pulled out into its own
+    // function (rather than a large inline closure) so Swift type-checks it
+    // on its own, instead of as part of one giant expression tree together
+    // with the rest of the view body — which was timing out the compiler.
+    private func advancePlaybackTick() {
+        guard enLecture else {
+            // Reset so that resuming later doesn't compute a delta spanning
+            // the whole time playback was paused/stopped.
+            lastTickTimestamp = nil
+            return
+        }
+
+        let now = Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+        // First tick after starting/resuming: fall back to the nominal 0.05
+        // since there's no previous timestamp yet to compute a real delta from.
+        let delta = lastTickTimestamp.map { now - $0 } ?? 0.05
+        lastTickTimestamp = now
+
+        let prev = position
+        position += delta
+        if position >= duree {
+            position = 0.0
+            if !enBoucle { enLecture = false }
+            lastSentEvents.removeAll()
+        }
+
+        for piste in pistes {
+            guard piste.type == .bang, !piste.isMuted else { continue }
+            let tol = 0.001
+            for event in piste.evenements {
+                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                let key = piste.nom + "-" + String(event.time)
+                guard !lastSentEvents.contains(key) else { continue }
+                lastSentEvents.insert(key)
+                if piste.nom == "/markers" {
+                    let label = event.label.isEmpty ? "marker" : event.label
+                    sendOSCMessage(piste.nom + " " + label)
+                } else {
+                    sendOSCMessage(piste.nom + " bang")
+                }
+            }
+        }
+
+        for piste in pistes {
+            guard piste.type == .message, !piste.isMuted else { continue }
+            let tol = 0.001
+            for event in piste.evenements {
+                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                let key = piste.nom + "-message-" + String(event.time)
+                guard !lastSentEvents.contains(key) else { continue }
+                lastSentEvents.insert(key)
+                sendOSCMessage(piste.nom + " " + event.label)
+            }
+        }
+
+        for piste in pistes {
+            guard piste.type == .curve, !piste.isMuted else { continue }
+            let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
+            if sortedEvents.isEmpty { continue }
+
+            let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
+            let nextEvent = sortedEvents.first(where: { $0.time > position })
+
+            if let lastEventBefore = lastEventBefore {
+                if let nextEvent = nextEvent {
+                    let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
+                    let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
+                    let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY))
+                } else {
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
+                }
+            } else if let firstEvent = sortedEvents.first {
+                sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+            }
+        }
+
+        for piste in pistes {
+            guard piste.type == .step, !piste.isMuted else { continue }
+            // Zero-order hold, but only send OSC when a new point is crossed —
+            // the value doesn't change between two points, so continuous sending
+            // (like every 50ms tick) would just flood the system uselessly.
+            let tol = 0.001
+            for event in piste.evenements {
+                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                let key = piste.nom + "-step-" + String(event.time)
+                guard !lastSentEvents.contains(key) else { continue }
+                lastSentEvents.insert(key)
+                sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y))
+            }
+        }
+    }
+
+    // Everything that used to run inline in .onAppear's closure, pulled out
+    // into its own function for the same reason as advancePlaybackTick():
+    // large closures embedded directly in the view body get type-checked as
+    // part of one giant expression tree together with the rest of `body`,
+    // which was timing out the compiler.
+    private func setupOnAppear() {
+        // macOS assigns first responder to the first key-view-eligible
+        // NSTextField right after the window appears, regardless of
+        // FocusState's initial value — so we explicitly clear it again
+        // a beat later to actually win that race.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            focusedField = nil
+        }
+
+        // Incoming OSC messages control transport from the outside.
+        oscManager.onOSCMessageReceived = handleReceivedOSCMessage
+        oscManager.startListening(port: oscReceivePort)
+
+        // .onHover alone only fires on enter/exit; this keeps the point
+        // cursor (shift/cmd) in sync if the modifier key changes while
+        // the mouse stays over the same point.
+        if flagsChangedMonitor == nil {
+            flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                updatePointCursor()
+                isOptionHeldForCursor = event.modifierFlags.contains(.option)
+                return event
+            }
+        }
+
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            DispatchQueue.main.async {
+                advancePlaybackTick()
+            }
+        }
+    }
+
+    private func handleReceivedOSCMessage(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        switch normalized {
+        case "play":
+            enLecture = true
+        case "pause":
+            enLecture = false
+        case "stop":
+            enLecture = false
+            position = 0
+            lastSentEvents.removeAll()
+        default:
+            break
+        }
+    }
+
+    private func tearDownOnDisappear() {
+        timer?.invalidate()
+        timer = nil
+        oscManager.cancelConnection()
+        oscManager.stopListening()
+        if let monitor = flagsChangedMonitor {
+            NSEvent.removeMonitor(monitor)
+            flagsChangedMonitor = nil
+        }
+    }
+
+    // Recenters the horizontal scroll so the same instant that was at the
+    // center of the screen before a zoom change stays there afterward (used
+    // by the RotaryKnob; pinch-zoom centers on the mouse instead, handled
+    // separately in TimelineScrollView's Coordinator).
+    private func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
+        guard !isPinchZooming else { return }
+        let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
+        guard largeurAvant > 0 else { return }
+
+        let centreVisibleX = scrollOffsetX + outerWidth / 2
+        let centreContenuX = centreVisibleX - 140
+        let centerTime = min(max(Double(centreContenuX / largeurAvant) * duree, 0), duree)
+
+        let largeurApres = outerWidth * CGFloat(newZoom) - 140
+        guard largeurApres > 0 else { return }
+        let nouvelleCentreContenuX = CGFloat(centerTime / duree) * largeurApres + 140
+        scrollOffsetX = max(0, nouvelleCentreContenuX - outerWidth / 2)
+    }
+
+    private func commitPointEdit() {
+        if let (trackIndex, eventId) = pointAEditer,
+           let newPosition = Double(nouvellePositionString),
+           let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == eventId }) {
+            pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), duree)
+            if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(nouvelleYString) {
+                let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
+                pistes[trackIndex].evenements[eventIndex].y = constrainedY
+            }
+            if trackIndex == 0 || pistes[trackIndex].type == .message {
+                pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
+            }
+            pistes[trackIndex].evenements.sort()
+            lastSentEvents.removeAll()
+        }
+        pointAEditer = nil
+    }
+
+    private func commitAmplitudeEdit() {
+        if let index = amplitudeEditorTrackIndex,
+           let minVal = Double(tempMinAmplitude),
+           let maxVal = Double(tempMaxAmplitude) {
+            pistes[index].minAmplitude = minVal
+            pistes[index].maxAmplitude = maxVal
+        }
+        amplitudeEditorTrackIndex = nil
+    }
+
+    private func commitAutofillRectangle() {
+        if let index = autofillTrackIndex,
+           let period = Double(autofillPeriodString),
+           let phase = Double(autofillPhaseString),
+           let pulseWidth = Double(autofillPulseWidthString),
+           let ampMin = Double(autofillAmpMinString),
+           let ampMax = Double(autofillAmpMaxString) {
+            pistes[index].evenements = rectangleEvents(
+                period: period,
+                phase: phase,
+                pulseWidth: pulseWidth,
+                ampMin: ampMin,
+                ampMax: ampMax,
+                duree: duree
+            )
+            lastSentEvents.removeAll()
+        }
+        autofillTrackIndex = nil
+    }
+
+    private func commitAutofillWave() {
+        if let index = waveTrackIndex,
+           let period = Double(wavePeriodString),
+           let phase = Double(wavePhaseString),
+           let skew = Double(waveSkewString),
+           let ampMin = Double(waveAmpMinString),
+           let ampMax = Double(waveAmpMaxString) {
+            pistes[index].evenements = waveEvents(
+                isSine: waveIsSine,
+                period: period,
+                phase: phase,
+                skew: skew,
+                ampMin: ampMin,
+                ampMax: ampMax,
+                duree: duree
+            )
+            lastSentEvents.removeAll()
+        }
+        waveTrackIndex = nil
+    }
+
+    private func commitAutofillBang() {
+        if let index = bangTrackIndex,
+           let period = Double(bangPeriodString),
+           let phase = Double(bangPhaseString) {
+            let isMessageTrack = pistes[index].type == .message
+            pistes[index].evenements = bangEvents(
+                period: period,
+                phase: phase,
+                duree: duree,
+                numberedLabelPrefix: isMessageTrack ? "key" : nil
+            )
+            lastSentEvents.removeAll()
+        }
+        bangTrackIndex = nil
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX) {
+                    zoomX = 1.0
+                }
+                .overlay(alignment: .bottom) {
+                    Text("zoom")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.6))
+                        .offset(y: 19)
+                }
+                .offset(x: -100)
+                Button(action: { enLecture.toggle() }) {
+                    Image(systemName: enLecture ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                        .foregroundColor(.black)
+                        .frame(width: 60, height: 32)
+                        .background(enLecture ? Color(red: 0.5, green: 1.0, blue: 0.2) : Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.space, modifiers: [])
+                Button(action: { enLecture = false; position = 0.0; lastSentEvents.removeAll() }) {
+                    Image(systemName: "stop.fill")
+                        .font(.title2)
+                        .foregroundColor(.black)
+                        .frame(width: 60, height: 32)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: [])
+                Button(action: { enBoucle.toggle() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.title2)
+                        .foregroundColor(enBoucle ? .black : .gray)
+                        .frame(width: 60, height: 32)
+                        .background(enBoucle ? Color.yellow : Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("c", modifiers: [])
+                // Hidden button: "z" resets zoom (double-tapping the knob does the same thing).
+                Button(action: { zoomX = 1.0 }) {
+                    EmptyView()
+                }
+                .keyboardShortcut("z", modifiers: [])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                TextField("Duration", value: $duree, formatter: NumberFormatter())
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(width: 60, height: 22)
+                    .focused($focusedField, equals: .duree)
+                    .onSubmit {
+                        if focusedField == .duree { focusedField = nil }
+                    }
+                    .overlay(alignment: .bottom) {
+                        Text("duration")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 23)
+                    }
+                Text("\(position, specifier: "%.2f")s")
+                    .font(.system(.body, design: .monospaced))
+                    .fontWeight(.bold)
+                    .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
+                    .frame(width: 120, height: 22)
+                    .background(Color.black)
+                    .cornerRadius(5)
+                    .overlay(alignment: .bottom) {
+                        Text("position")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 23)
+                    }
+                TextField("OSC", text: Binding(
+                    get: { oscManager.address },
+                    set: { newValue in
+                        oscManager.address = newValue
+                        oscManager.setupOSCConnection()
+                    }
+                ))
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(width: 150, height: 22)
+                .focused($focusedField, equals: .oscAddress)
+                .onSubmit {
+                    if focusedField == .oscAddress { focusedField = nil }
+                }
+                .overlay(alignment: .bottom) {
+                    Text("OSC address")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.6))
+                        .offset(y: 23)
+                }
+                HStack(spacing: 0) {
+                    Button(action: {
+                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: .blue, evenements: [], type: .bang, height: 45))
+                    }) {
+                        Image("button_bangTrack")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        Text("bang")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 18)
+                    }
+
+                    Button(action: {
+                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: .yellow, evenements: [], type: .curve, height: 60))
+                    }) {
+                        Image("button_curveTrack")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        Text("curve")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 18)
+                    }
+
+                    Button(action: {
+                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: Color(red: 0.6549019607843137, green: 0.6784313725490196, blue: 0.0), evenements: [], type: .message, height: 45))
+                    }) {
+                        Image("button_messageTrack")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        Text("message")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 18)
+                    }
+
+                    Button(action: {
+                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: Color(red: 0.608, green: 0.086, blue: 0.365), evenements: [], type: .step, height: 60))
+                    }) {
+                        Image("button_stepTrack")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .bottom) {
+                        Text("step")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .offset(y: 18)
+                    }
+                }
+                Button(action: { showPointCoordinates.toggle() }) {
+                    Text("x,y")
+                        .font(.body)
+                        .foregroundColor(.black)
+                        .frame(width: 44, height: 28)
+                        .background(showPointCoordinates ? Color.yellow : Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                Button(action: {
+                    showClearAllConfirmation = true
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.body)
+                        .foregroundColor(.red)
+                        .frame(width: 44, height: 28)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                Button(action: openOSCMessagesWindow) {
+                    Image(systemName: "list.bullet.rectangle.portrait")
+                        .font(.body)
+                        .foregroundColor(.black)
+                        .frame(width: 44, height: 28)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .help("Show OSC messages")
+                .overlay(alignment: .bottom) {
+                    Text("OSC")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.6))
+                        .offset(y: 20)
+                }
+
+                Button(action: saveProject) {
+                    Text("Save")
+                }
+                .buttonStyle(.bordered)
+                .padding(.leading, 100)
+                Button(action: loadProject) {
+                    Text("Load")
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+            .padding(.top, 30)
+            .frame(height: 100)
+
+            GeometryReader { outerGeometry in
+                TimelineScrollView(
+                    offsetX: $scrollOffsetX,
+                    zoomX: $zoomX,
+                    isPinchZooming: $isPinchZooming,
+                    zoomRange: 1.0...maxZoomX,
+                    duree: duree,
+                    contentWidth: outerGeometry.size.width * CGFloat(zoomX),
+                    contentHeight: max(outerGeometry.size.height, totalTracksHeight)
+                ) {
+                        GeometryReader { geometry in
+                            let largeurTimeline = geometry.size.width - 140
+                            let totalHeight = 24 + pistes.reduce(CGFloat(0)) { $0 + (($1.type == .bang || $1.type == .message) ? 45 : $1.height) } + CGFloat(pistes.count * 5)
+
+                            ZStack(alignment: .topLeading) {
+                                VStack(spacing: 0) {
+                                    ZStack(alignment: .leading) {
+                                        Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
+                                        // Dynamic tick interval: depends on pixels per second (so it already
+                                        // accounts for zoom, via largeurTimeline), not just the total duration —
+                                        // otherwise, zoomed in a lot on a long track, the interval would represent
+                                        // thousands of pixels and no tick would fall within the visible area.
+                                        let pixelsPerSecond = largeurTimeline / CGFloat(max(duree, 0.001))
+                                        let minPixelSpacing: CGFloat = 100
+                                        let niceIntervals: [Double] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
+                                        let labelInterval = niceIntervals.first(where: { CGFloat($0) * pixelsPerSecond >= minPixelSpacing }) ?? (niceIntervals.last ?? 3600)
+
+                                        // Only generate ticks for the currently visible portion (plus a small
+                                        // buffer), not the whole duration: zoomed in a lot, computing ticks over
+                                        // an entire long track would be both useless (invisible) and costly
+                                        // (tens of thousands of elements).
+                                        let outerWidth = outerGeometry.size.width
+                                        let buffer: CGFloat = 200
+                                        let visibleStartSeconde = max(0, Double((scrollOffsetX - buffer - 140) / largeurTimeline) * duree)
+                                        let visibleEndSeconde = min(duree, Double((scrollOffsetX + outerWidth + buffer - 140) / largeurTimeline) * duree)
+                                        let firstTick = max(0, (visibleStartSeconde / labelInterval).rounded(.down) * labelInterval)
+
+                                        ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
+                                            VStack(spacing: 0) {
+                                                Text(labelInterval < 1 ? String(format: "%.2f", seconde) : String(Int(seconde.rounded())))
+                                                    .font(.caption)
+                                                Rectangle().fill(Color.gray).frame(width: 1, height: 5)
+                                            }
+                                            .frame(width: 60) // fixed, so the center stays exact regardless of label text width
+                                            .padding(.leading, 140)
+                                            .offset(x: CGFloat(seconde / duree) * largeurTimeline - 30)
+                                        }
+                                    }
+
+                                    ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
+                                        HStack(spacing: 0) {
+                                            ZStack(alignment: .topLeading) {
+                                                Rectangle()
+                                                    .fill(pistes[index].couleur)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                                                if index == 0 {
+                                                    Text("/markers")
+                                                        .font(.system(size: 12, weight: .bold))
+                                                        .padding(.leading, 10)
+                                                        .offset(y: 5)
+                                                        .onTapGesture(count: 2) { }
+                                                } else {
+                                                    Text(pistes[index].nom)
+                                                        .font(.system(size: 12, weight: .bold))
+                                                        .padding(.leading, 10)
+                                                        .offset(y: 5)
+                                                        .onTapGesture(count: 2) {
+                                                            let piste = pistes[index]
+                                                            indexPisteARenommer = index
+                                                            nouveauNomPiste = piste.nom
+                                                        }
+
+                                                    // Drag handle for reordering this track among its siblings
+                                                    // ("markers" at index 0 stays pinned, never reordered).
+                                                    Image(systemName: "line.3.horizontal")
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(.black.opacity(0.35))
+                                                        .padding(6)
+                                                        .contentShape(Rectangle())
+                                                        .offset(x: 116, y: 2)
+                                                        .gesture(
+                                                            DragGesture(minimumDistance: 3, coordinateSpace: .global)
+                                                                .onChanged { value in
+                                                                    if reorderingIndex == nil {
+                                                                        reorderingIndex = index
+                                                                        reorderBaselineOffset = 0
+                                                                    }
+                                                                    guard let currentIndex = reorderingIndex else { return }
+                                                                    let effectiveTranslation = value.translation.height - reorderBaselineOffset
+
+                                                                    if effectiveTranslation > 0, currentIndex < pistes.count - 1 {
+                                                                        let belowHeight = ((pistes[currentIndex + 1].type == .bang || pistes[currentIndex + 1].type == .message) ? 45 : pistes[currentIndex + 1].height) + 5
+                                                                        if effectiveTranslation > belowHeight / 2 {
+                                                                            pistes.swapAt(currentIndex, currentIndex + 1)
+                                                                            reorderBaselineOffset += belowHeight
+                                                                            reorderingIndex = currentIndex + 1
+                                                                        }
+                                                                    } else if effectiveTranslation < 0, currentIndex > 1 {
+                                                                        let aboveHeight = ((pistes[currentIndex - 1].type == .bang || pistes[currentIndex - 1].type == .message) ? 45 : pistes[currentIndex - 1].height) + 5
+                                                                        if effectiveTranslation < -aboveHeight / 2 {
+                                                                            pistes.swapAt(currentIndex, currentIndex - 1)
+                                                                            reorderBaselineOffset -= aboveHeight
+                                                                            reorderingIndex = currentIndex - 1
+                                                                        }
+                                                                    }
+
+                                                                    reorderDragTranslation = value.translation.height - reorderBaselineOffset
+                                                                }
+                                                                .onEnded { _ in
+                                                                    reorderingIndex = nil
+                                                                    reorderDragTranslation = 0
+                                                                    reorderBaselineOffset = 0
+                                                                }
+                                                        )
+                                                        .onHover { isHovering in
+                                                            if isHovering {
+                                                                NSCursor.openHand.set()
+                                                            } else {
+                                                                NSCursor.arrow.set()
+                                                            }
+                                                        }
+                                                        .help("Drag to reorder this track")
+                                                }
+
+                                                if pistes[index].type == .curve || pistes[index].type == .step {
+                                                    let trackHeight = pistes[index].height
+                                                    let topY = curveMargin
+                                                    let midY = trackHeight / 2
+                                                    let bottomY = trackHeight - curveMargin
+                                                    let tickWidth: CGFloat = 6
+
+                                                    ZStack(alignment: .topLeading) {
+                                                        HStack(spacing: 3) {
+                                                            Rectangle()
+                                                                .fill(Color.gray.opacity(0.5))
+                                                                .frame(width: tickWidth, height: 1)
+                                                            Text(String(format: "%.2f", pistes[index].maxAmplitude))
+                                                                .font(.caption2)
+                                                                .foregroundColor(.gray.opacity(0.5))
+                                                        }
+                                                        .offset(y: topY - 6)
+
+                                                        HStack(spacing: 3) {
+                                                            Rectangle()
+                                                                .fill(Color.gray.opacity(0.5))
+                                                                .frame(width: tickWidth, height: 1)
+                                                            Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
+                                                                .font(.caption2)
+                                                                .foregroundColor(.gray.opacity(0.5))
+                                                        }
+                                                        .offset(y: midY - 6)
+
+                                                        HStack(spacing: 3) {
+                                                            Rectangle()
+                                                                .fill(Color.gray.opacity(0.5))
+                                                                .frame(width: tickWidth, height: 1)
+                                                            Text(String(format: "%.2f", pistes[index].minAmplitude))
+                                                                .font(.caption2)
+                                                                .foregroundColor(.gray.opacity(0.5))
+                                                        }
+                                                        .offset(y: bottomY - 6)
+                                                    }
+                                                    .frame(width: 60, height: trackHeight, alignment: .topLeading)
+                                                    .offset(x: 144)
+                                                }
+
+                                                if index == 0 {
+                                                    HStack(spacing: 5) {
+                                                        Button(action: { pistes[index].isMuted.toggle() }) {
+                                                            Image(systemName: pistes[index].isMuted ? "speaker.slash.fill" : "speaker.fill")
+                                                                .foregroundColor(pistes[index].isMuted ? .gray : .green)
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                        .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
+
+                                                        Button(action: { pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
+                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                        .help("Clear all points on this track")
+                                                    }
+                                                    .offset(x: -20)
+                                                    .padding(.trailing, 20)
+                                                    .padding(.bottom, 6)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+                                                    Button(action: {
+                                                        openAutofillPopup(for: index)
+                                                    }) {
+                                                        Image(systemName: "pencil.tip.crop.circle.fill")
+                                                    }
+                                                    .buttonStyle(.borderless)
+                                                    .padding(.leading, 10)
+                                                    .padding(.bottom, 6)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                                                    .help("Autofill: generate evenly spaced markers")
+                                                } else {
+                                                    HStack(spacing: 5) {
+                                                        if pistes[index].type == .curve || pistes[index].type == .step {
+                                                            Button(action: {
+                                                                amplitudeEditorTrackIndex = index
+                                                                tempMinAmplitude = String(format: "%.2f", pistes[index].minAmplitude)
+                                                                tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
+                                                            }) {
+                                                                Image(systemName: "slider.horizontal.3")
+                                                            }
+                                                            .buttonStyle(.borderless)
+                                                            .help("Edit min/max amplitude range")
+                                                        }
+
+                                                        Button(action: { pistes[index].isMuted.toggle() }) {
+                                                            Image(systemName: pistes[index].isMuted ? "speaker.slash.fill" : "speaker.fill")
+                                                                .foregroundColor(pistes[index].isMuted ? .gray : .green)
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                        .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
+
+                                                        Button(action: { pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
+                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                        .help("Clear all points on this track")
+
+                                                        Button(action: { pistes.remove(at: index); lastSentEvents.removeAll() }) {
+                                                            Image(systemName: "minus.circle.fill").foregroundColor(.red)
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                        .help("Delete this track")
+                                                    }
+                                                    .padding(.trailing, 20)
+                                                    .padding(.bottom, pistes[index].type == .bang ? 6 : 10)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+                                                    Button(action: {
+                                                        openAutofillPopup(for: index)
+                                                    }) {
+                                                        Image(systemName: "pencil.tip.crop.circle.fill")
+                                                    }
+                                                    .buttonStyle(.borderless)
+                                                    .help("Autofill: generate a pattern for this track")
+                                                    .padding(.leading, 10)
+                                                    .padding(.bottom, pistes[index].type == .bang ? 6 : 10)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                                                }
+
+                                                if pistes[index].type == .curve || pistes[index].type == .step {
+                                                    VStack(spacing: 0) {
+                                                        Spacer()
+                                                        Rectangle()
+                                                            .fill(pistes[index].type == .step ? Color(red: 0.8862745098039215, green: 0.2627450980392157, blue: 0.19215686274509805) : Color(red: 0.8, green: 0.5, blue: 0.0))
+                                                            .frame(width: 140, height: 4)
+                                                            .contentShape(Rectangle())
+                                                            .gesture(
+                                                                DragGesture(coordinateSpace: .global)
+                                                                    .onChanged { value in
+                                                                        if draggedTrackIndex != index {
+                                                                            draggedTrackIndex = index
+                                                                            dragStartHeight = pistes[index].height
+                                                                        }
+                                                                        let newHeight = max(30, dragStartHeight + value.translation.height)
+                                                                        pistes[index].height = newHeight
+                                                                    }
+                                                                    .onEnded { _ in
+                                                                        draggedTrackIndex = nil
+                                                                    }
+                                                            )
+                                                            .onHover { isHovering in
+                                                                if isHovering {
+                                                                    NSCursor.resizeUpDown.set()
+                                                                } else {
+                                                                    NSCursor.arrow.set()
+                                                                }
+                                                            }
+                                                            .onTapGesture(count: 2) {
+                                                                pistes[index].height = 60
+                                                            }
+                                                    }
+                                                }
+                                            }
+                                            .frame(width: 140, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+
+                                            ZStack(alignment: .leading) {
+                                                Rectangle()
+                                                    .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(0.3) : Color.clear)
+                                                    .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+
+                                                if pistes[index].type == .bang || pistes[index].type == .message {
+                                                    Color.clear
+                                                        .contentShape(Rectangle())
+                                                        .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                                        .onTapGesture { location in
+                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                            let defaultLabel = pistes[index].type == .message ? "key" : "M"
+                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: defaultLabel, y: 0.5))
+                                                            pistes[index].evenements.sort()
+                                                            lastSentEvents.removeAll()
+                                                        }
+                                                } else if pistes[index].type == .curve {
+                                                    Color.clear
+                                                        .contentShape(Rectangle())
+                                                        .frame(width: largeurTimeline, height: pistes[index].height)
+                                                        .onTapGesture { location in
+                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                            let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
+                                                            let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
+                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: yValue))
+                                                            pistes[index].evenements.sort()
+                                                            lastSentEvents.removeAll()
+                                                        }
+                                                        .onContinuousHover { phase in
+                                                            switch phase {
+                                                            case .active(let location):
+                                                                let time = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                                if let curveY = curveYPosition(forTime: time, trackIndex: index) {
+                                                                    isNearCurveControlZone = abs(Double(location.y) - Double(curveY)) < 12
+                                                                } else {
+                                                                    isNearCurveControlZone = false
+                                                                }
+                                                            case .ended:
+                                                                isNearCurveControlZone = false
+                                                            }
+                                                        }
+                                                        // Attached simultaneously (not exclusively) so it never
+                                                        // blocks the plain tap-to-add-point gesture above; it only
+                                                        // actually does anything once Option is held and the drag
+                                                        // exceeds the minimum distance.
+                                                        .simultaneousGesture(
+                                                            DragGesture(minimumDistance: 3)
+                                                                .onChanged { value in
+                                                                    guard NSEvent.modifierFlags.contains(.option) else { return }
+                                                                    // onContinuousHover stops firing once a real drag begins
+                                                                    // (the mouse is "captured" by the gesture), so the
+                                                                    // CursorOverlay's isActive state would otherwise freeze
+                                                                    // or drop — keep reasserting the cursor manually for
+                                                                    // the duration of the drag itself.
+                                                                    cursor(fromSymbol: "point.bottomleft.forward.to.point.topright.filled.scurvepath").set()
+
+                                                                    let sorted = pistes[index].evenements.sorted { $0.time < $1.time }
+                                                                    guard sorted.count > 1 else { return }
+
+                                                                    if curveDragSegmentID == nil {
+                                                                        let startTime = (Double(value.startLocation.x) / Double(largeurTimeline)) * duree
+                                                                        var chosenID = sorted[0].id
+                                                                        for i in 0..<(sorted.count - 1) {
+                                                                            if startTime >= sorted[i].time && startTime <= sorted[i + 1].time {
+                                                                                chosenID = sorted[i].id
+                                                                                break
+                                                                            }
+                                                                        }
+                                                                        curveDragSegmentID = chosenID
+                                                                        let chosenEvent = sorted.first(where: { $0.id == chosenID })
+                                                                        curveDragBaseline = chosenEvent?.segmentCurve ?? 0
+                                                                        curveDragBulgeBaseline = chosenEvent?.segmentBulge ?? 0
+                                                                    }
+
+                                                                    if let segmentID = curveDragSegmentID,
+                                                                       let baseline = curveDragBaseline,
+                                                                       let bulgeBaseline = curveDragBulgeBaseline,
+                                                                       let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == segmentID }) {
+                                                                        let newCurvature = min(max(baseline + Double(value.translation.width) * 0.0075, -6), 6)
+                                                                        let newBulge = min(max(bulgeBaseline - Double(value.translation.height) * 0.0075, -6), 6)
+                                                                        pistes[index].evenements[eventIndex].segmentCurve = newCurvature
+                                                                        pistes[index].evenements[eventIndex].segmentBulge = newBulge
+                                                                    }
+                                                                }
+                                                                .onEnded { _ in
+                                                                    curveDragSegmentID = nil
+                                                                    curveDragBaseline = nil
+                                                                    curveDragBulgeBaseline = nil
+                                                                }
+                                                        )
+
+                                                    // Purely cosmetic cursor layer: uses AppKit's own cursor-rect
+                                                    // system (reliable even during plain hover, unlike NSCursor.set()
+                                                    // calls) to show the bend cursor whenever near the curve with
+                                                    // Option held. allowsHitTesting(false) so it never intercepts
+                                                    // clicks/drags — those stay on the Color.clear view above.
+                                                    CursorOverlay(
+                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor,
+                                                        symbolName: "point.bottomleft.forward.to.point.topright.filled.scurvepath"
+                                                    )
+                                                    .frame(width: largeurTimeline, height: pistes[index].height)
+                                                    .allowsHitTesting(false)
+                                                } else if pistes[index].type == .step {
+                                                    Color.clear
+                                                        .contentShape(Rectangle())
+                                                        .frame(width: largeurTimeline, height: pistes[index].height)
+                                                        .onTapGesture { location in
+                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                            let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
+                                                            let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
+                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: yValue))
+                                                            pistes[index].evenements.sort()
+                                                            lastSentEvents.removeAll()
+                                                        }
+                                                }
+
+                                                if pistes[index].type == .curve && pistes[index].evenements.count > 1 {
+                                                    Path { path in
+                                                        let sortedEvents = pistes[index].evenements.sorted { $0.time < $1.time }
+                                                        let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                        func yPos(for value: Double) -> CGFloat {
+                                                            let normalizedY = amplitudeRange > 0 ? (value - pistes[index].minAmplitude) / amplitudeRange : 0.5
+                                                            // Vertical margin = circle radius, so points at the extreme
+                                                            // values (0 or 1) aren't cut off by the .clipped()
+                                                            return curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY)
+                                                        }
+
+                                                        for (i, event) in sortedEvents.enumerated() {
+                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let point = CGPoint(x: xPos, y: yPos(for: event.y))
+                                                            if i == 0 {
+                                                                path.move(to: point)
+                                                            } else {
+                                                                let previous = sortedEvents[i - 1]
+                                                                if previous.segmentCurve == 0 && previous.segmentBulge == 0 {
+                                                                    path.addLine(to: point)
+                                                                } else {
+                                                                    // Sample the S-curve; x advances linearly with t (time
+                                                                    // isn't warped), only the value (y) follows the curve.
+                                                                    let steps = 24
+                                                                    let previousXPos = CGFloat(previous.time / duree) * largeurTimeline
+                                                                    for step in 1...steps {
+                                                                        let t = Double(step) / Double(steps)
+                                                                        let curvedT = combinedProgress(t, curvature: previous.segmentCurve, bulge: previous.segmentBulge)
+                                                                        let x = previousXPos + (xPos - previousXPos) * CGFloat(t)
+                                                                        let value = previous.y + (event.y - previous.y) * curvedT
+                                                                        path.addLine(to: CGPoint(x: x, y: yPos(for: value)))
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    .stroke(.yellow, lineWidth: 2)
+                                                    .allowsHitTesting(false)
+                                                }
+
+                                                if pistes[index].type == .step && pistes[index].evenements.count > 1 {
+                                                    Path { path in
+                                                        // Staircase (zero-order hold): each value is held until the
+                                                        // next event, without interpolation — no diagonal line.
+                                                        let sortedEvents = pistes[index].evenements.sorted { $0.time < $1.time }
+                                                        let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                        func yPos(for event: TimelineEvent) -> CGFloat {
+                                                            let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
+                                                            return curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY)
+                                                        }
+                                                        for (i, event) in sortedEvents.enumerated() {
+                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let y = yPos(for: event)
+                                                            if i == 0 {
+                                                                path.move(to: CGPoint(x: xPos, y: y))
+                                                            } else {
+                                                                // Horizontal segment (held value) then vertical jump
+                                                                path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
+                                                                path.addLine(to: CGPoint(x: xPos, y: y))
+                                                            }
+                                                        }
+                                                    }
+                                                    .stroke(Color(red: 0.608, green: 0.086, blue: 0.365), lineWidth: 3)
+                                                }
+
+                                                ForEach(pistes[index].evenements) { event in
+                                                    let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                    let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                    let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
+                                                    let pointY = (pistes[index].type == .curve || pistes[index].type == .step) ? curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY) : (index == 0 ? 15 : 15)
+
+                                                    if (pistes[index].type == .bang && index != 0) || pistes[index].type == .message {
+                                                        Rectangle()
+                                                            .fill(pistes[index].couleur)
+                                                            .frame(width: 1, height: 45)
+                                                            .position(x: xPos, y: 22.5)
+                                                            .opacity(0.5)
+                                                    }
+
+                                                    VStack(spacing: 0) {
+                                                        if index == 0 {
+                                                            Text(event.label)
+                                                                .font(.caption2)
+                                                                .foregroundColor(.gray)
+                                                                .offset(y: 3)
+
+                                                            ZStack {
+                                                                Rectangle()
+                                                                    .fill(pistes[index].couleur)
+                                                                    .frame(width: 6, height: 6)
+
+                                                                Text(String(format: "%.2f", event.time) + "s")
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.white)
+                                                                    .offset(y: 12)
+                                                            }
+                                                        } else {
+                                                            if pistes[index].type == .message {
+                                                                Text(event.label)
+                                                                    .font(.caption2)
+                                                                    .fontWeight(.bold)
+                                                                    .foregroundColor(.gray)
+                                                                    .offset(y: 3)
+
+                                                                ZStack {
+                                                                    Text("T")
+                                                                        .font(.system(size: 11, weight: .bold))
+                                                                        .foregroundColor(pistes[index].couleur)
+
+                                                                    if showPointCoordinates {
+                                                                        Text(String(format: "%.2f", event.time) + "s")
+                                                                            .font(.caption2)
+                                                                            .foregroundColor(.black)
+                                                                            .offset(y: 12)
+                                                                    }
+                                                                }
+                                                            } else if pistes[index].type == .bang {
+                                                                Rectangle()
+                                                                    .fill(pistes[index].couleur)
+                                                                    .frame(width: 8, height: 8)
+                                                                    .rotationEffect(.degrees(45))
+
+                                                                if showPointCoordinates {
+                                                                    Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
+                                                                        .font(.caption2)
+                                                                        .foregroundColor(.black)
+                                                                        .offset(y: 12)
+                                                                }
+                                                            } else {
+                                                                // Curve/step point: anchor the label to the marker itself
+                                                                // via an overlay (rather than stacking it in the VStack),
+                                                                // so flipping it above/below doesn't shift where the
+                                                                // marker sits relative to the path.
+                                                                let labelAbove = normalizedY < 0.5
+                                                                Group {
+                                                                    if pistes[index].type == .step {
+                                                                        ZStack {
+                                                                            Rectangle()
+                                                                                .fill(pistes[index].couleur)
+                                                                                .frame(width: 17, height: 3)
+                                                                                .rotationEffect(.degrees(45))
+                                                                            Rectangle()
+                                                                                .fill(pistes[index].couleur)
+                                                                                .frame(width: 17, height: 3)
+                                                                                .rotationEffect(.degrees(-45))
+                                                                        }
+                                                                        .frame(width: 17, height: 17)
+                                                                        .contentShape(Rectangle())
+                                                                    } else {
+                                                                        Circle()
+                                                                            .fill(pistes[index].couleur)
+                                                                            .frame(width: 12, height: 12)
+                                                                    }
+                                                                }
+                                                                .overlay(alignment: labelAbove ? .top : .bottom) {
+                                                                    if showPointCoordinates {
+                                                                        Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
+                                                                            .font(.caption2)
+                                                                            .foregroundColor(.black)
+                                                                            .fixedSize()
+                                                                            .offset(y: labelAbove ? -12 : 12)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    .position(x: xPos, y: pointY)
+                                                    .onHover { hovering in
+                                                        isHoveringPoint = hovering
+                                                        if hovering {
+                                                            isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
+                                                        }
+                                                        updatePointCursor()
+                                                    }
+                                                    .gesture(
+                                                        DragGesture(minimumDistance: 5)
+                                                            .onChanged { value in
+                                                                var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
+                                                                isHoveringPoint = true
+
+                                                                // Cmd + within 7px of a marker's vertical line: snap to it.
+                                                                let dragXPos = (newPosition / duree) * Double(largeurTimeline)
+                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
+                                                                    let closestMarker = pistes[0].evenements.min(by: { markerA, markerB in
+                                                                        let xA = (markerA.time / duree) * Double(largeurTimeline)
+                                                                        let xB = (markerB.time / duree) * Double(largeurTimeline)
+                                                                        return abs(xA - dragXPos) < abs(xB - dragXPos)
+                                                                    })
+                                                                    if let closestMarker = closestMarker {
+                                                                        newPosition = closestMarker.time
+                                                                    }
+                                                                }
+                                                                updatePointCursor()
+
+                                                                if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
+                                                                    pistes[index].evenements[eventIndex].time = min(max(newPosition, 0), duree)
+                                                                    if pistes[index].type == .curve || pistes[index].type == .step {
+                                                                        let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
+                                                                        let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
+                                                                        pistes[index].evenements[eventIndex].y = yValue
+                                                                    }
+                                                                }
+                                                            }
+                                                            .onEnded { _ in
+                                                                pistes[index].evenements.sort()
+                                                                lastSentEvents.removeAll()
+                                                            }
+                                                    )
+                                                    .onTapGesture(count: 1) {
+                                                        if NSEvent.modifierFlags.contains(.shift) {
+                                                            if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
+                                                                pistes[index].evenements.remove(at: eventIndex)
+                                                                lastSentEvents.removeAll()
+                                                            }
+                                                        }
+                                                    }
+                                                    .onTapGesture(count: 2) {
+                                                        pointAEditer = (index, event.id)
+                                                        nouvellePositionString = String(format: "%.2f", event.time)
+                                                        nouvelleYString = String(format: "%.2f", event.y)
+                                                        if index == 0 || pistes[index].type == .message {
+                                                            nouveauLabel = event.label
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                            .clipped()
+                                        }
+                                        .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
+                                        .zIndex(reorderingIndex == index ? 1 : 0)
+                                        .opacity(reorderingIndex == index ? 0.85 : 1.0)
+                                        Rectangle().fill(Color.clear).frame(height: 5)
+                                    }
+                                }
+
+                                // Gray vertical lines for each marker on the "markers" track,
+                                // drawn here (outside the .clipped() area of each individual track)
+                                // so they can span through all the tracks below.
+                                ForEach(pistes[0].evenements) { event in
+                                    let xPos = CGFloat(event.time / duree) * largeurTimeline + 140
+                                    Rectangle()
+                                        .fill(pistes[0].couleur)
+                                        .frame(width: 1, height: CGFloat(totalHeight) - 15)
+                                        .position(x: xPos, y: (15 + CGFloat(totalHeight)) / 2)
+                                        .opacity(0.5)
+                                        .allowsHitTesting(false)
+                                }
+
+                                ZStack(alignment: .topLeading) {
+                                    Rectangle().fill(Color.red).frame(width: 2, height: CGFloat(totalHeight))
+                                    Image(systemName: "triangle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.red)
+                                        .rotationEffect(.degrees(180))
+                                        .offset(x: -6, y: -12)
+                                }
+                                .offset(x: CGFloat(position / duree) * largeurTimeline + 140)
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            position = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                            sendOSCMessagesForPosition(position)
+                                        }
+                                )
+                                .onHover { isHovering in
+                                    if isHovering {
+                                        NSCursor.resizeLeftRight.set()
+                                    } else {
+                                        NSCursor.arrow.set()
+                                    }
+                                }
+                            }
+                            .padding(.top, 14) // room for the playhead triangle, which pokes above y=0
+                        }
+                        .frame(width: outerGeometry.size.width * CGFloat(zoomX))
+                }
+                .onChange(of: zoomX) { oldZoom, newZoom in
+                    recenterOnZoomChange(oldZoom: oldZoom, newZoom: newZoom, outerWidth: outerGeometry.size.width)
+                }
+                .onAppear {
+                    timelineAreaWidth = outerGeometry.size.width
+                }
+                .onChange(of: outerGeometry.size.width) { _, newWidth in
+                    timelineAreaWidth = newWidth
+                    zoomX = min(zoomX, maxZoomX)
+                }
+                .onChange(of: duree) { _, _ in
+                    zoomX = min(zoomX, maxZoomX)
+                }
+            }
+
+        }
+        .frame(minWidth: 1500, minHeight: 500)
+        .background(Color.gray.opacity(0.07))
+        .navigationTitle(savedFileURL?.deletingPathExtension().lastPathComponent ?? "OSCcourier")
+        .onAppear {
+            setupOnAppear()
+        }
+        .onDisappear {
+            tearDownOnDisappear()
+        }
+        .onChange(of: oscReceivePort) { _, newPort in
+            oscManager.startListening(port: newPort)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSave)) { _ in
+            saveProject()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSaveAs)) { _ in
+            saveProjectAs()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierLoad)) { _ in
+            loadProject()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
+            openPDFWindow()
+        }
+        .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Clear", role: .destructive) {
+                for i in pistes.indices {
+                    pistes[i].evenements.removeAll()
+                }
+                lastSentEvents.removeAll()
+            }
+        } message: {
+            Text("This will erase every point on every track. This can't be undone.")
+        }
+        .alert("Overwrite track?", isPresented: Binding<Bool>(
+            get: { pendingAutofillIndex != nil },
+            set: { if !$0 { pendingAutofillIndex = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                pendingAutofillIndex = nil
+            }
+            Button("Continue", role: .destructive) {
+                if let index = pendingAutofillIndex {
+                    proceedWithAutofill(for: index)
+                }
+                pendingAutofillIndex = nil
+            }
+        } message: {
+            Text("This track already has points. Autofill will replace them all.")
+        }
+        .alert("Rename track", isPresented: Binding<Bool>(
+            get: { indexPisteARenommer != nil },
+            set: { if !$0 { indexPisteARenommer = nil } }
+        )) {
+            TextField("New name", text: $nouveauNomPiste)
+            Button("OK") {
+                if let index = indexPisteARenommer {
+                    pistes[index].nom = nouveauNomPiste
+                }
+                indexPisteARenommer = nil
+            }
+            Button("Cancel", role: .cancel) { indexPisteARenommer = nil }
+        }
+        .alert("Edit point", isPresented: Binding<Bool>(
+            get: { pointAEditer != nil },
+            set: { if !$0 { pointAEditer = nil } }
+        )) {
+            TextField("Position (s)", text: $nouvellePositionString)
+            if pistes[pointAEditer?.0 ?? 0].type == .curve || pistes[pointAEditer?.0 ?? 0].type == .step {
+                TextField("Y (0-1)", text: $nouvelleYString)
+            }
+            if pointAEditer?.0 == 0 || pistes[pointAEditer?.0 ?? 0].type == .message {
+                TextField("Label", text: $nouveauLabel)
+            }
+            Button("OK") {
+                commitPointEdit()
+            }
+            Button("Cancel", role: .cancel) { pointAEditer = nil }
+        }
+        .alert("Amplitude", isPresented: Binding<Bool>(
+            get: { amplitudeEditorTrackIndex != nil },
+            set: { if !$0 { amplitudeEditorTrackIndex = nil } }
+        )) {
+            VStack(spacing: 10) {
+                TextField("max", text: $tempMaxAmplitude)
+                TextField("min", text: $tempMinAmplitude)
+            }
+            Button("OK") {
+                commitAmplitudeEdit()
+            }
+            Button("Cancel", role: .cancel) {
+                amplitudeEditorTrackIndex = nil
+            }
+        }
+        .sheet(isPresented: Binding<Bool>(
+            get: { autofillTrackIndex != nil },
+            set: { if !$0 { autofillTrackIndex = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Autofill Rectangle")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                HStack {
+                    Text("T (s.)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $autofillPeriodString)
+                }
+                HStack {
+                    Text("Φ (0-1)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $autofillPhaseString)
+                }
+                HStack {
+                    Text("PW (0-1)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $autofillPulseWidthString)
+                }
+                HStack {
+                    Text("Amp. min/max")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("min.", text: $autofillAmpMinString)
+                    TextField("max.", text: $autofillAmpMaxString)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        autofillTrackIndex = nil
+                    }
+                    Button("OK") {
+                        commitAutofillRectangle()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
+            .frame(width: 280)
+        }
+        .sheet(isPresented: Binding<Bool>(
+            get: { waveTrackIndex != nil },
+            set: { if !$0 { waveTrackIndex = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Autofill Wave")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                Picker("", selection: $waveIsSine) {
+                    Text("Sin").tag(true)
+                    Text("Saw").tag(false)
+                }
+                .pickerStyle(.segmented)
+
+                HStack {
+                    Text("T (s.)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $wavePeriodString)
+                }
+                HStack {
+                    Text("Φ (0-1)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $wavePhaseString)
+                }
+                HStack {
+                    Text("Skew")
+                        .foregroundColor(waveIsSine ? .gray.opacity(0.3) : .gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $waveSkewString)
+                        .disabled(waveIsSine)
+                }
+                HStack {
+                    Text("Amp. min/max")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("min.", text: $waveAmpMinString)
+                    TextField("max.", text: $waveAmpMaxString)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        waveTrackIndex = nil
+                    }
+                    Button("OK") {
+                        commitAutofillWave()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
+            .frame(width: 280)
+        }
+        .sheet(isPresented: Binding<Bool>(
+            get: { bangTrackIndex != nil },
+            set: { if !$0 { bangTrackIndex = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Autofill Bang")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                HStack {
+                    Text("T (s.)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $bangPeriodString)
+                }
+                HStack {
+                    Text("Φ (0-1)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $bangPhaseString)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        bangTrackIndex = nil
+                    }
+                    Button("OK") {
+                        commitAutofillBang()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
+            .frame(width: 280)
+        }
+    }
+}
+
+struct Polygon: Shape {
+    let sides: Int
+    let size: CGFloat
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let radius = size / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let angle = (2 * .pi) / CGFloat(sides)
+        for i in 0..<sides {
+            let point = CGPoint(
+                x: center.x + radius * cos(angle * CGFloat(i) - .pi / 2),
+                y: center.y + radius * sin(angle * CGFloat(i) - .pi / 2)
+            )
+            if i == 0 {
+                path.move(to: point)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
+}
