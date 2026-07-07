@@ -2,6 +2,7 @@ import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
 
+//Deliverer did it
 // A circle with smooth rounded "teeth" around its edge, like a gear or a
 // flower — used to give the RotaryKnob a notched/knurled look.
 struct NotchedKnobShape: Shape {
@@ -32,6 +33,12 @@ struct RotaryKnob: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let onDoubleTap: () -> Void
+    // Drag distance -> value change. Defaults to the value tuned for a 30s
+    // track; callers with a range that scales with something else (like
+    // zoomX, whose usable span grows with the track duration) should pass a
+    // proportionally scaled sensitivity so the knob "feels" the same
+    // regardless of how wide the range currently is.
+    var sensitivity: Double = 0.05
     @State private var initialValue: Double?
     @State private var initialTranslation: CGFloat?
 
@@ -55,7 +62,6 @@ struct RotaryKnob: View {
                         initialTranslation = gesture.translation.height
                     } else {
                         let translationDiff = initialTranslation! - gesture.translation.height
-                        let sensitivity: Double = 0.05
                         let newValue = initialValue! + Double(translationDiff) * sensitivity
                         value = min(max(newValue, range.lowerBound), range.upperBound)
                     }
@@ -442,6 +448,7 @@ struct ContentView: View {
     @StateObject private var oscManager = OSCManager()
     @StateObject private var messageStore = OSCMessageStore()
     @State private var duree: Double = 30.0
+    @State private var dureeText: String = "00:30"
     @State private var position: Double = 0.0
     @State private var enLecture: Bool = false
     @State private var enBoucle: Bool = false
@@ -559,6 +566,27 @@ struct ContentView: View {
         return max(1.0, zoom)
     }
 
+    // maxZoomX computed as if duree were pinned at 30s (same outerWidth) —
+    // used purely as a reference span for calibrating the zoom knob's
+    // sensitivity below, not for the actual zoom range.
+    private var referenceMaxZoomX: Double {
+        let outerWidth = max(timelineAreaWidth, 1)
+        let desiredLargeur = 1000.0 * 30.0
+        return max(1.0, (desiredLargeur + 140) / outerWidth)
+    }
+
+    // The zoom knob was tuned to feel right for a 30s track (sensitivity
+    // 0.05). Since the usable zoom range (1...maxZoomX) grows with `duree`,
+    // a fixed sensitivity would require dragging proportionally further for
+    // longer tracks to reach the same zoom level. Scaling sensitivity by the
+    // ratio of the current range's span to the 30s-reference span keeps the
+    // same drag distance always covering the same *fraction* of the range.
+    private var zoomKnobSensitivity: Double {
+        let referenceSpan = max(referenceMaxZoomX - 1.0, 0.0001)
+        let currentSpan = max(maxZoomX - 1.0, 0.0001)
+        return 0.05 * (currentSpan / referenceSpan)
+    }
+
     // Real total height of the ruler + all tracks (mirrors the `totalHeight` computed
     // inside the inner GeometryReader), plus the top padding reserved for the playhead
     // triangle. Used as the document's actual height so vertical scrolling can reveal
@@ -577,6 +605,54 @@ struct ContentView: View {
             return Int(piste.nom.dropFirst("/track_".count))
         }
         return "/track_\((existingNumbers.max() ?? 0) + 1)"
+    }
+
+    // Formats a duration in seconds as "mm:ss" (playback position/timer keeps
+    // its own separate "mm:ss:cc" formatter below; this one is for the
+    // editable duration field, which only needs whole-second precision).
+    private func formattedDuration(_ seconds: Double) -> String {
+        let totalSeconds = Int(seconds.rounded())
+        let minutes = totalSeconds / 60
+        let secs = totalSeconds % 60
+        return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    // Parses a duration typed as "mm:ss" (or a bare number of seconds, kept
+    // as a fallback for convenience) back into seconds.
+    private func parseDuration(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let parts = trimmed.split(separator: ":")
+        if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) {
+            return minutes * 60 + seconds
+        } else if parts.count == 1, let seconds = Double(parts[0]) {
+            return seconds
+        }
+        return nil
+    }
+
+    // Formats a ruler tick label. Ticks spaced 1s apart or more show plain
+    // "mm:ss"; ticks spaced under 1s apart (zoomed in a lot) additionally
+    // show centiseconds ("mm:ss.cc"), since otherwise consecutive sub-second
+    // ticks would render identically.
+    private func formattedTick(_ seconds: Double, labelInterval: Double) -> String {
+        let totalCentiseconds = Int((seconds * 100).rounded())
+        let minutes = totalCentiseconds / 6000
+        let secs = (totalCentiseconds / 100) % 60
+        let centis = totalCentiseconds % 100
+        if labelInterval < 1 {
+            return String(format: "%02d:%02d.%02d", minutes, secs, centis)
+        } else {
+            return String(format: "%02d:%02d", minutes, secs)
+        }
+    }
+
+    // Formats a duration in seconds as "mm:ss:cc" (minutes:seconds:centiseconds).
+    private func formattedPosition(_ seconds: Double) -> String {
+        let totalCentiseconds = Int((seconds * 100).rounded())
+        let minutes = totalCentiseconds / 6000
+        let secs = (totalCentiseconds / 100) % 60
+        let centis = totalCentiseconds % 100
+        return String(format: "%02d:%02d:%02d", minutes, secs, centis)
     }
 
     private func encodedProjectData() -> Data? {
@@ -626,6 +702,7 @@ struct ContentView: View {
         position = 0
         lastSentEvents.removeAll()
         duree = decoded.duree
+        dureeText = formattedDuration(decoded.duree)
         zoomX = decoded.zoomX
         oscManager.address = decoded.oscAddress
         oscManager.setupOSCConnection()
@@ -1124,6 +1201,8 @@ struct ContentView: View {
             focusedField = nil
         }
 
+        dureeText = formattedDuration(duree)
+
         // Incoming OSC messages control transport from the outside.
         oscManager.onOSCMessageReceived = handleReceivedOSCMessage
         oscManager.startListening(port: oscReceivePort)
@@ -1145,6 +1224,16 @@ struct ContentView: View {
                 advancePlaybackTick()
             }
         }
+    }
+
+    // Parses whatever is currently in the duration text field and applies it
+    // to `duree`, then resyncs the text field to the canonical "mm:ss" form
+    // (so e.g. "1:5" becomes "01:05", and invalid text reverts cleanly).
+    private func commitDureeEdit() {
+        if let parsed = parseDuration(dureeText) {
+            duree = max(parsed, 0.01)
+        }
+        dureeText = formattedDuration(duree)
     }
 
     private func handleReceivedOSCMessage(_ message: String) {
@@ -1282,7 +1371,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX) {
+                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX, sensitivity: zoomKnobSensitivity) {
                     zoomX = 1.0
                 }
                 .overlay(alignment: .bottom) {
@@ -1329,12 +1418,18 @@ struct ContentView: View {
                 .keyboardShortcut("z", modifiers: [])
                 .frame(width: 0, height: 0)
                 .opacity(0)
-                TextField("Duration", value: $duree, formatter: NumberFormatter())
+                TextField("Duration", text: $dureeText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .frame(width: 60, height: 22)
                     .focused($focusedField, equals: .duree)
                     .onSubmit {
+                        commitDureeEdit()
                         if focusedField == .duree { focusedField = nil }
+                    }
+                    .onChange(of: focusedField) { oldValue, newValue in
+                        if oldValue == .duree && newValue != .duree {
+                            commitDureeEdit()
+                        }
                     }
                     .overlay(alignment: .bottom) {
                         Text("duration")
@@ -1342,7 +1437,7 @@ struct ContentView: View {
                             .foregroundColor(.gray.opacity(0.6))
                             .offset(y: 23)
                     }
-                Text("\(position, specifier: "%.2f")s")
+                Text(formattedPosition(position))
                     .font(.system(.body, design: .monospaced))
                     .fontWeight(.bold)
                     .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
@@ -1529,13 +1624,13 @@ struct ContentView: View {
 
                                         ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
                                             VStack(spacing: 0) {
-                                                Text(labelInterval < 1 ? String(format: "%.2f", seconde) : String(Int(seconde.rounded())))
+                                                Text(formattedTick(seconde, labelInterval: labelInterval))
                                                     .font(.caption)
                                                 Rectangle().fill(Color.gray).frame(width: 1, height: 5)
                                             }
-                                            .frame(width: 60) // fixed, so the center stays exact regardless of label text width
+                                            .frame(width: 70) // fixed, so the center stays exact regardless of label text width
                                             .padding(.leading, 140)
-                                            .offset(x: CGFloat(seconde / duree) * largeurTimeline - 30)
+                                            .offset(x: CGFloat(seconde / duree) * largeurTimeline - 35)
                                         }
                                     }
 
