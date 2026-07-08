@@ -523,6 +523,23 @@ extension Notification.Name {
     static let OSCcourierSaveAs = Notification.Name("OSCcourierSaveAs")
     static let OSCcourierLoad = Notification.Name("OSCcourierLoad")
     static let OSCcourierShowHelp = Notification.Name("OSCcourierShowHelp")
+    static let OSCcourierPlayPause = Notification.Name("OSCcourierPlayPause")
+    static let OSCcourierStop = Notification.Name("OSCcourierStop")
+    static let OSCcourierAddBangTrack = Notification.Name("OSCcourierAddBangTrack")
+    static let OSCcourierAddCurveTrack = Notification.Name("OSCcourierAddCurveTrack")
+    static let OSCcourierAddMessageTrack = Notification.Name("OSCcourierAddMessageTrack")
+    static let OSCcourierAddStepTrack = Notification.Name("OSCcourierAddStepTrack")
+    static let OSCcourierClearAll = Notification.Name("OSCcourierClearAll")
+    static let OSCcourierGoToTime = Notification.Name("OSCcourierGoToTime")
+    static let OSCcourierGoToMarker = Notification.Name("OSCcourierGoToMarker")
+    static let OSCcourierGoToPreviousMarker = Notification.Name("OSCcourierGoToPreviousMarker")
+    static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
+    static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
+    static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")
+    static let OSCcourierDefineGrid = Notification.Name("OSCcourierDefineGrid")
+    static let OSCcourierOpenOSCMessagesWindow = Notification.Name("OSCcourierOpenOSCMessagesWindow")
+    static let OSCcourierMuteUnmuteAll = Notification.Name("OSCcourierMuteUnmuteAll")
+    static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
 }
 
 struct ContentView: View {
@@ -532,7 +549,7 @@ struct ContentView: View {
     @State private var dureeText: String = "00:30"
     @State private var position: Double = 0.0
     @State private var enLecture: Bool = false
-    @State private var enBoucle: Bool = false
+    @AppStorage("enBoucle") private var enBoucle: Bool = false
     @State private var timer: Timer?
     // Real wall-clock timestamp of the previous playback tick (monotonic
     // clock, in seconds). Used to advance `position` by the actual elapsed
@@ -583,6 +600,7 @@ struct ContentView: View {
     // the actual autofill popup.
     @State private var pendingAutofillIndex: Int?
     @State private var showClearAllConfirmation = false
+    @State private var showDeleteAllTracksConfirmation = false
     // Modifier-aware cursor over points: shift = delete cursor, cmd = snap cursor.
     // Tracks whether the mouse is currently over any point, and listens for
     // modifier key changes while hovering (since .onHover alone only fires on
@@ -595,6 +613,9 @@ struct ContentView: View {
     @State private var curveDragBaseline: Double?
     @State private var curveDragBulgeBaseline: Double?
     @State private var isNearSnapZone: Bool = false
+    // Tracks proximity to a grid line specifically (not markers) — used to
+    // show the snap cursor for "magnetic grid" auto-snap even without ⌘ held.
+    @State private var isNearGridSnapZone: Bool = false
     @State private var flagsChangedMonitor: Any?
     @State private var tempMinAmplitude: String = "0"
     @State private var tempMaxAmplitude: String = "1"
@@ -644,9 +665,18 @@ struct ContentView: View {
     // recentering below (used for the RotaryKnob) should stand down while this is true.
     @State private var isPinchZooming: Bool = false
     // Toggle for showing/hiding the "time, value" coordinate labels next to points.
-    @State private var showPointCoordinates: Bool = true
+    @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
-    @State private var showGrid: Bool = false
+    @AppStorage("showGrid") private var showGrid: Bool = false
+    // Shared with OSCcourierApp's menu commands via the same @AppStorage keys.
+    @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
+    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
+    // "Go to (mm:ss)" dialog, triggered from the Play menu.
+    @State private var showGoToTimeDialog: Bool = false
+    @State private var goToTimeString: String = "00:00"
+    @State private var showGoToMarkerNameDialog: Bool = false
+    @State private var goToMarkerNameString: String = ""
+    @State private var showGoToMarkerNoMatch: Bool = false
     // Grid line generation: evenly spaced dashed vertical lines across all
     // tracks, same period/phase model as the bang autofill.
     @State private var showGridSettingsPopup: Bool = false
@@ -689,12 +719,18 @@ struct ContentView: View {
         return 0.05 * (currentSpan / referenceSpan)
     }
 
+    // Tracks actually shown in the timeline — all of them, unless the
+    // "/markers" track (always index 0) is hidden via showMarkersTrack.
+    private var visiblePistes: [TimelineTrack] {
+        showMarkersTrack ? pistes : Array(pistes.dropFirst())
+    }
+
     // Real total height of the ruler + all tracks (mirrors the `totalHeight` computed
     // inside the inner GeometryReader), plus the top padding reserved for the playhead
     // triangle. Used as the document's actual height so vertical scrolling can reveal
     // tracks that would otherwise be clipped below the visible viewport.
     private var totalTracksHeight: CGFloat {
-        24 + pistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(pistes.count * 5) + 14
+        24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5) + 14
     }
 
     // Shared naming counter across all track types (bang or curve), so a new
@@ -1073,9 +1109,10 @@ struct ContentView: View {
     // Called by the pencil button. Warns first if the track already has
     // points (since autofill replaces them entirely), otherwise opens the
     // relevant popup directly.
-    // Builds an NSCursor from an SF Symbol image.
-    private func cursor(fromSymbol name: String) -> NSCursor {
+    // Builds an NSCursor from an SF Symbol image, tinted the given color.
+    private func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            .applying(.init(paletteColors: [color]))
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) ?? NSImage()
         return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
@@ -1127,9 +1164,10 @@ struct ContentView: View {
     }
 
     // Applies the right cursor for the current hover + modifier-key state:
-    // shift = delete-point cursor, cmd = snap-to-marker cursor (only once
-    // actually within the snap zone), otherwise the default arrow (or
-    // nothing, if not hovering a point at all).
+    // shift = delete-point cursor, ⌘ = snap-to-marker/grid cursor (only once
+    // actually within the snap zone), magnetic grid = same snap cursor even
+    // without ⌘ when near a grid line specifically, otherwise the default
+    // arrow (or nothing, if not hovering a point at all).
     private func updatePointCursor() {
         guard isHoveringPoint else {
             NSCursor.arrow.set()
@@ -1138,7 +1176,9 @@ struct ContentView: View {
         if NSEvent.modifierFlags.contains(.shift) {
             cursor(fromSymbol: "eraser.badge.xmark").set()
         } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left").set()
+            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
+        } else if magneticGridSnap && isNearGridSnapZone {
+            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
         } else {
             NSCursor.arrow.set()
         }
@@ -1170,7 +1210,116 @@ struct ContentView: View {
         showGridSettingsPopup = false
     }
 
+    private func openGridSettingsPopup() {
+        gridPeriodString = String(format: "%.2f", gridPeriod)
+        gridPhaseString = String(format: "%.2f", gridPhase)
+        showGridSettingsPopup = true
+    }
+
+    // Scrolls the timeline horizontally so the playhead is centered in the
+    // viewport, regardless of the current zoom level. Used after any "go to"
+    // jump (time, next marker, marker by name) so the result is always
+    // actually visible, not just updated off-screen.
+    private func centerOnPlayhead() {
+        let outerWidth = max(timelineAreaWidth, 1)
+        let largeurTimeline = outerWidth * CGFloat(zoomX) - 140
+        guard largeurTimeline > 0 else { return }
+        let playheadX = 140 + CGFloat(position / duree) * largeurTimeline
+        scrollOffsetX = max(0, playheadX - outerWidth / 2)
+    }
+
+    // Jumps the playhead to the next marker strictly after the current
+    // position; wraps around to the earliest marker if there is none, or
+    // does nothing if there are no markers at all.
+    private func goToNextMarker() {
+        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
+        guard !sorted.isEmpty else { return }
+        let target = sorted.first(where: { $0.time > position + 0.001 })?.time ?? sorted[0].time
+        position = target
+        sendOSCMessagesForPosition(position)
+        centerOnPlayhead()
+    }
+
+    // Jumps the playhead to the previous marker strictly before the current
+    // position; wraps around to the latest marker if there is none, or does
+    // nothing if there are no markers at all.
+    private func goToPreviousMarker() {
+        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
+        guard !sorted.isEmpty else { return }
+        let target = sorted.last(where: { $0.time < position - 0.001 })?.time ?? sorted[sorted.count - 1].time
+        position = target
+        sendOSCMessagesForPosition(position)
+        centerOnPlayhead()
+    }
+
+    // Jumps the playhead to the marker whose label matches `name`.
+    // Tries an exact case-insensitive match first, then falls back to a
+    // case-insensitive substring match (so a partial name, or one with a
+    // stray extra space, still finds something reasonable). Shows a
+    // "No match" alert if nothing matches either way.
+    private func goToMarkerByName(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showGoToMarkerNoMatch = true
+            return
+        }
+        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
+        let exactMatch = sorted.first(where: { $0.label.caseInsensitiveCompare(trimmed) == .orderedSame })
+        let partialMatch = sorted.first(where: { $0.label.range(of: trimmed, options: .caseInsensitive) != nil })
+        guard let match = exactMatch ?? partialMatch else {
+            showGoToMarkerNoMatch = true
+            return
+        }
+        position = match.time
+        sendOSCMessagesForPosition(position)
+        centerOnPlayhead()
+    }
+
+    // Parses a "mm:ss" (or bare seconds) string and jumps the playhead
+    // there, clamped to [0, duree]. Reuses the same parser as the duration
+    // field.
+    private func goToTime(_ text: String) {
+        guard let parsed = parseDuration(text) else { return }
+        position = min(max(parsed, 0), duree)
+        sendOSCMessagesForPosition(position)
+        centerOnPlayhead()
+    }
+
+    // Fold/unfold all tracks at once: if any track is currently unfolded,
+    // fold everything; otherwise (everything already folded) unfold
+    // everything. Mirrors the common "expand/collapse all" convention.
+    private func toggleFoldAll() {
+        let shouldFold = pistes.contains { !$0.isFolded }
+        for i in pistes.indices {
+            pistes[i].isFolded = shouldFold
+        }
+    }
+
+    // Mute/unmute all tracks at once: if every track is already muted,
+    // unmute everything; otherwise mute everything.
+    private func muteUnmuteAll() {
+        let shouldMute = !pistes.allSatisfy { $0.isMuted }
+        for i in pistes.indices {
+            pistes[i].isMuted = shouldMute
+        }
+    }
+
+    // Removes every track except the pinned "/markers" track at index 0.
+    private func deleteAllTracks() {
+        guard !tracksLocked else { return }
+        pistes = [pistes[0]]
+        lastSentEvents.removeAll()
+    }
+
+    // Centralizes track creation (used by both the toolbar buttons and the
+    // Tracks menu commands) so the lock guard only needs to live in one place.
+    private func addTrack(couleur: Color, type: TrackType, height: CGFloat) {
+        guard !tracksLocked else { return }
+        pistes.append(TimelineTrack(nom: nextTrackName, couleur: couleur, evenements: [], type: type, height: height))
+    }
+
     private func openAutofillPopup(for index: Int) {
+        guard !tracksLocked else { return }
         if pistes[index].evenements.isEmpty {
             proceedWithAutofill(for: index)
         } else {
@@ -1536,11 +1685,11 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        let baseContent = VStack(spacing: 0) {
             HStack {
-                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX, sensitivity: zoomKnobSensitivity) {
+                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX, onDoubleTap: {
                     zoomX = 1.0
-                }
+                }, sensitivity: zoomKnobSensitivity)
                 .overlay(alignment: .bottom) {
                     Text("zoom")
                         .font(.caption2)
@@ -1557,7 +1706,6 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.space, modifiers: [])
                 Button(action: { enLecture = false; position = 0.0; lastSentEvents.removeAll() }) {
                     Image(systemName: "stop.fill")
                         .font(.title2)
@@ -1567,7 +1715,6 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: [])
                 Button(action: { enBoucle.toggle() }) {
                     Image(systemName: "arrow.clockwise")
                         .font(.title2)
@@ -1577,14 +1724,6 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut("c", modifiers: [])
-                // Hidden button: "z" resets zoom (double-tapping the knob does the same thing).
-                Button(action: { zoomX = 1.0 }) {
-                    EmptyView()
-                }
-                .keyboardShortcut("z", modifiers: [])
-                .frame(width: 0, height: 0)
-                .opacity(0)
                 TextField("Duration", text: $dureeText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .frame(width: 60, height: 22)
@@ -1638,7 +1777,7 @@ struct ContentView: View {
                 }
                 HStack(spacing: 0) {
                     Button(action: {
-                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: .blue, evenements: [], type: .bang, height: 45))
+                        addTrack(couleur: .blue, type: .bang, height: 45)
                     }) {
                         Image("button_bangTrack")
                             .resizable()
@@ -1654,7 +1793,7 @@ struct ContentView: View {
                     }
 
                     Button(action: {
-                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: .yellow, evenements: [], type: .curve, height: 60))
+                        addTrack(couleur: .yellow, type: .curve, height: 60)
                     }) {
                         Image("button_curveTrack")
                             .resizable()
@@ -1670,7 +1809,7 @@ struct ContentView: View {
                     }
 
                     Button(action: {
-                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: Color(red: 0.6549019607843137, green: 0.6784313725490196, blue: 0.0), evenements: [], type: .message, height: 45))
+                        addTrack(couleur: Color(red: 0.6549019607843137, green: 0.6784313725490196, blue: 0.0), type: .message, height: 45)
                     }) {
                         Image("button_messageTrack")
                             .resizable()
@@ -1686,7 +1825,7 @@ struct ContentView: View {
                     }
 
                     Button(action: {
-                        pistes.append(TimelineTrack(nom: nextTrackName, couleur: Color(red: 0.608, green: 0.086, blue: 0.365), evenements: [], type: .step, height: 60))
+                        addTrack(couleur: Color(red: 0.608, green: 0.086, blue: 0.365), type: .step, height: 60)
                     }) {
                         Image("button_stepTrack")
                             .resizable()
@@ -1725,9 +1864,7 @@ struct ContentView: View {
                     // the toggle state at all.
                     .onTapGesture {
                         if NSEvent.modifierFlags.contains(.option) {
-                            gridPeriodString = String(format: "%.2f", gridPeriod)
-                            gridPhaseString = String(format: "%.2f", gridPhase)
-                            showGridSettingsPopup = true
+                            openGridSettingsPopup()
                         } else {
                             showGrid.toggle()
                         }
@@ -1787,7 +1924,7 @@ struct ContentView: View {
                 ) {
                         GeometryReader { geometry in
                             let largeurTimeline = geometry.size.width - 140
-                            let totalHeight = 24 + pistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(pistes.count * 5)
+                            let totalHeight = 24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
 
                             ZStack(alignment: .topLeading) {
                                 VStack(spacing: 0) {
@@ -1802,6 +1939,14 @@ struct ContentView: View {
                                                 position = min(max(positionCliquee, 0), duree)
                                                 sendOSCMessagesForPosition(position)
                                             }
+                                        Button(action: { tracksLocked.toggle() }) {
+                                            Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
+                                                .font(.system(size: 18))
+                                                .foregroundColor(tracksLocked ? .red : .gray)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.leading, 10)
+                                        .help(tracksLocked ? "Tracks are locked" : "Tracks are unlocked")
                                         // Dynamic tick interval: depends on pixels per second (so it already
                                         // accounts for zoom, via largeurTimeline), not just the total duration —
                                         // otherwise, zoomed in a lot on a long track, the interval would represent
@@ -1834,6 +1979,7 @@ struct ContentView: View {
                                     }
 
                                     ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
+                                        if index != 0 || showMarkersTrack {
                                         HStack(spacing: 0) {
                                             ZStack(alignment: .topLeading) {
                                                 Rectangle()
@@ -1852,6 +1998,7 @@ struct ContentView: View {
                                                         .padding(.leading, 10)
                                                         .offset(y: 5)
                                                         .onTapGesture(count: 2) {
+                                                            guard !tracksLocked else { return }
                                                             let piste = pistes[index]
                                                             indexPisteARenommer = index
                                                             nouveauNomPiste = piste.nom
@@ -1868,6 +2015,7 @@ struct ContentView: View {
                                                         .gesture(
                                                             DragGesture(minimumDistance: 3, coordinateSpace: .global)
                                                                 .onChanged { value in
+                                                                    guard !tracksLocked else { return }
                                                                     if reorderingIndex == nil {
                                                                         reorderingIndex = index
                                                                         reorderBaselineOffset = 0
@@ -1975,7 +2123,7 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
+                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
                                                             Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
                                                         }
                                                         .buttonStyle(.borderless)
@@ -2017,13 +2165,13 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
+                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
                                                             Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
                                                         }
                                                         .buttonStyle(.borderless)
                                                         .help("Clear all points on this track")
 
-                                                        Button(action: { pistes.remove(at: index); lastSentEvents.removeAll() }) {
+                                                        Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); lastSentEvents.removeAll() }) {
                                                             Image(systemName: "minus.circle.fill").foregroundColor(.red)
                                                         }
                                                         .buttonStyle(.borderless)
@@ -2093,6 +2241,7 @@ struct ContentView: View {
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                                         .onTapGesture { location in
+                                                            guard !tracksLocked else { return }
                                                             let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
                                                             let defaultLabel = pistes[index].type == .message ? "key" : "M"
                                                             pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: defaultLabel, y: 0.5))
@@ -2104,6 +2253,7 @@ struct ContentView: View {
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: pistes[index].height)
                                                         .onTapGesture { location in
+                                                            guard !tracksLocked else { return }
                                                             let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
                                                             let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                                                             let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
@@ -2190,6 +2340,7 @@ struct ContentView: View {
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: pistes[index].height)
                                                         .onTapGesture { location in
+                                                            guard !tracksLocked else { return }
                                                             let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
                                                             let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                                                             let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
@@ -2370,12 +2521,14 @@ struct ContentView: View {
                                                         isHoveringPoint = hovering
                                                         if hovering {
                                                             isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
+                                                            isNearGridSnapZone = nearestGridTime(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline)) != nil
                                                         }
                                                         updatePointCursor()
                                                     }
                                                     .gesture(
                                                         DragGesture(minimumDistance: 5)
                                                             .onChanged { value in
+                                                                guard !tracksLocked else { return }
                                                                 var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                 isHoveringPoint = true
 
@@ -2384,6 +2537,7 @@ struct ContentView: View {
                                                                 // the nearest grid line alone (never a marker).
                                                                 let dragXPos = (newPosition / duree) * Double(largeurTimeline)
                                                                 isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
                                                                 if NSEvent.modifierFlags.contains(.command),
                                                                    let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
                                                                     newPosition = snapTime
@@ -2408,6 +2562,7 @@ struct ContentView: View {
                                                             }
                                                     )
                                                     .onTapGesture(count: 1) {
+                                                        guard !tracksLocked else { return }
                                                         if NSEvent.modifierFlags.contains(.shift) {
                                                             if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
                                                                 pistes[index].evenements.remove(at: eventIndex)
@@ -2416,6 +2571,7 @@ struct ContentView: View {
                                                         }
                                                     }
                                                     .onTapGesture(count: 2) {
+                                                        guard !tracksLocked else { return }
                                                         pointAEditer = (index, event.id)
                                                         nouvellePositionString = String(format: "%.2f", event.time)
                                                         nouvelleYString = String(format: "%.2f", event.y)
@@ -2433,6 +2589,7 @@ struct ContentView: View {
                                         .zIndex(reorderingIndex == index ? 1 : 0)
                                         .opacity(reorderingIndex == index ? 0.85 : 1.0)
                                         Rectangle().fill(Color.clear).frame(height: 5)
+                                        } // end if index != 0 || showMarkersTrack
                                     }
                                 }
 
@@ -2520,6 +2677,8 @@ struct ContentView: View {
         .onChange(of: oscReceivePort) { _, newPort in
             oscManager.startListening(port: newPort)
         }
+
+        let withReceives1 = baseContent
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSave)) { _ in
             saveProject()
         }
@@ -2532,9 +2691,75 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
             openPDFWindow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPlayPause)) { _ in
+            enLecture.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierStop)) { _ in
+            enLecture = false
+            position = 0.0
+            lastSentEvents.removeAll()
+        }
+
+        let withReceives2 = withReceives1
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierAddBangTrack)) { _ in
+            addTrack(couleur: .blue, type: .bang, height: 45)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierAddCurveTrack)) { _ in
+            addTrack(couleur: .yellow, type: .curve, height: 60)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierAddMessageTrack)) { _ in
+            addTrack(couleur: Color(red: 0.6549019607843137, green: 0.6784313725490196, blue: 0.0), type: .message, height: 45)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierAddStepTrack)) { _ in
+            addTrack(couleur: Color(red: 0.608, green: 0.086, blue: 0.365), type: .step, height: 60)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearAll)) { _ in
+            showClearAllConfirmation = true
+        }
+
+        let withReceives3 = withReceives2
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToTime)) { _ in
+            goToTimeString = formattedDuration(position)
+            showGoToTimeDialog = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarker)) { _ in
+            goToNextMarker()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToPreviousMarker)) { _ in
+            goToPreviousMarker()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarkerByName)) { _ in
+            goToMarkerNameString = ""
+            showGoToMarkerNameDialog = true
+        }
+
+        let withReceives3b = withReceives3
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetZoom)) { _ in
+            zoomX = 1.0
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierToggleFoldAll)) { _ in
+            toggleFoldAll()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDefineGrid)) { _ in
+            openGridSettingsPopup()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierOpenOSCMessagesWindow)) { _ in
+            openOSCMessagesWindow()
+        }
+
+        let withReceives = withReceives3b
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierMuteUnmuteAll)) { _ in
+            muteUnmuteAll()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteAllTracks)) { _ in
+            showDeleteAllTracksConfirmation = true
+        }
+
+        let withAlerts = withReceives
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Clear", role: .destructive) {
+                guard !tracksLocked else { return }
                 for i in pistes.indices {
                     pistes[i].evenements.removeAll()
                 }
@@ -2543,6 +2768,39 @@ struct ContentView: View {
         } message: {
             Text("This will erase every point on every track. This can't be undone.")
         }
+        .alert("Delete all tracks?", isPresented: $showDeleteAllTracksConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteAllTracks()
+            }
+        } message: {
+            Text("This will delete every track except /markers. This can't be undone.")
+        }
+        .alert("Go to time", isPresented: $showGoToTimeDialog) {
+            TextField("mm:ss", text: $goToTimeString)
+            Button("Cancel", role: .cancel) { }
+            Button("Go") {
+                goToTime(goToTimeString)
+            }
+        } message: {
+            Text("Enter a time as mm:ss.")
+        }
+        .alert("Go to marker", isPresented: $showGoToMarkerNameDialog) {
+            TextField("Marker name", text: $goToMarkerNameString)
+            Button("Cancel", role: .cancel) { }
+            Button("Go") {
+                goToMarkerByName(goToMarkerNameString)
+            }
+        } message: {
+            Text("Enter the name of a marker to jump to.")
+        }
+        .alert("No match", isPresented: $showGoToMarkerNoMatch) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("No marker with that name was found.")
+        }
+
+        let withAlerts2 = withAlerts
         .alert("Overwrite track?", isPresented: Binding<Bool>(
             get: { pendingAutofillIndex != nil },
             set: { if !$0 { pendingAutofillIndex = nil } }
@@ -2603,197 +2861,221 @@ struct ContentView: View {
                 amplitudeEditorTrackIndex = nil
             }
         }
+
+        return withAlerts2
         .sheet(isPresented: Binding<Bool>(
             get: { autofillTrackIndex != nil },
             set: { if !$0 { autofillTrackIndex = nil } }
         )) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Autofill Rectangle")
-                    .font(.headline)
-                    .padding(.bottom, 4)
-
-                HStack {
-                    Text("T (s.)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $autofillPeriodString)
-                }
-                HStack {
-                    Text("Φ (0-1)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $autofillPhaseString)
-                }
-                HStack {
-                    Text("PW (0-1)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $autofillPulseWidthString)
-                }
-                HStack {
-                    Text("Amp. min/max")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("min.", text: $autofillAmpMinString)
-                    TextField("max.", text: $autofillAmpMaxString)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) {
-                        autofillTrackIndex = nil
-                    }
-                    Button("OK") {
-                        commitAutofillRectangle()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                .padding(.top, 8)
-            }
-            .padding(20)
-            .frame(width: 280)
+            autofillRectangleSheet
         }
         .sheet(isPresented: Binding<Bool>(
             get: { waveTrackIndex != nil },
             set: { if !$0 { waveTrackIndex = nil } }
         )) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Autofill Wave")
-                    .font(.headline)
-                    .padding(.bottom, 4)
-
-                Picker("", selection: $waveIsSine) {
-                    Text("Sin").tag(true)
-                    Text("Saw").tag(false)
-                }
-                .pickerStyle(.segmented)
-
-                HStack {
-                    Text("T (s.)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $wavePeriodString)
-                }
-                HStack {
-                    Text("Φ (0-1)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $wavePhaseString)
-                }
-                HStack {
-                    Text("Skew")
-                        .foregroundColor(waveIsSine ? .gray.opacity(0.3) : .gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $waveSkewString)
-                        .disabled(waveIsSine)
-                }
-                HStack {
-                    Text("Amp. min/max")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("min.", text: $waveAmpMinString)
-                    TextField("max.", text: $waveAmpMaxString)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) {
-                        waveTrackIndex = nil
-                    }
-                    Button("OK") {
-                        commitAutofillWave()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                .padding(.top, 8)
-            }
-            .padding(20)
-            .frame(width: 280)
+            autofillWaveSheet
         }
         .sheet(isPresented: Binding<Bool>(
             get: { bangTrackIndex != nil },
             set: { if !$0 { bangTrackIndex = nil } }
         )) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Autofill Bang")
-                    .font(.headline)
-                    .padding(.bottom, 4)
-
-                HStack {
-                    Text("T (s.)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $bangPeriodString)
-                }
-                HStack {
-                    Text("Φ (0-1)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $bangPhaseString)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) {
-                        bangTrackIndex = nil
-                    }
-                    Button("OK") {
-                        commitAutofillBang()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                .padding(.top, 8)
-            }
-            .padding(20)
-            .frame(width: 280)
+            autofillBangSheet
         }
         .sheet(isPresented: $showGridSettingsPopup) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Grid")
-                    .font(.headline)
-                    .padding(.bottom, 4)
-
-                HStack {
-                    Text("T (s.)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $gridPeriodString)
-                }
-                HStack {
-                    Text("Φ (0-1)")
-                        .foregroundColor(.gray.opacity(0.7))
-                        .frame(width: 80, alignment: .trailing)
-                    TextField("", text: $gridPhaseString)
-                }
-
-                Divider()
-                    .padding(.vertical, 2)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Snap to grid")
-                        .foregroundColor(.gray.opacity(0.7))
-                    Picker("", selection: $magneticGridSnap) {
-                        Text("⌘ + clic").tag(false)
-                        Text("Magnetic grid").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) {
-                        showGridSettingsPopup = false
-                    }
-                    Button("OK") {
-                        commitGridSettings()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                .padding(.top, 8)
-            }
-            .padding(20)
-            .frame(width: 280)
+            gridSettingsSheet
         }
+    }
+
+    // Extracted out of `body` (rather than inline sheet closures) so the
+    // Swift type-checker doesn't have to solve the whole giant `body`
+    // expression as one unit — a large body with many chained modifiers and
+    // deeply nested inline view trees can time out the type-checker;
+    // pulling each sheet's content into its own typed computed property
+    // gives it a much smaller, independent expression to check.
+    private var autofillRectangleSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Autofill Rectangle")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            HStack {
+                Text("T (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $autofillPeriodString)
+            }
+            HStack {
+                Text("Φ (0-1)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $autofillPhaseString)
+            }
+            HStack {
+                Text("PW (0-1)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $autofillPulseWidthString)
+            }
+            HStack {
+                Text("Amp. min/max")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("min.", text: $autofillAmpMinString)
+                TextField("max.", text: $autofillAmpMaxString)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    autofillTrackIndex = nil
+                }
+                Button("OK") {
+                    commitAutofillRectangle()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
+    }
+
+    private var autofillWaveSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Autofill Wave")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Picker("", selection: $waveIsSine) {
+                Text("Sin").tag(true)
+                Text("Saw").tag(false)
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Text("T (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $wavePeriodString)
+            }
+            HStack {
+                Text("Φ (0-1)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $wavePhaseString)
+            }
+            HStack {
+                Text("Skew")
+                    .foregroundColor(waveIsSine ? .gray.opacity(0.3) : .gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $waveSkewString)
+                    .disabled(waveIsSine)
+            }
+            HStack {
+                Text("Amp. min/max")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("min.", text: $waveAmpMinString)
+                TextField("max.", text: $waveAmpMaxString)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    waveTrackIndex = nil
+                }
+                Button("OK") {
+                    commitAutofillWave()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
+    }
+
+    private var autofillBangSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Autofill Bang")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            HStack {
+                Text("T (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $bangPeriodString)
+            }
+            HStack {
+                Text("Φ (0-1)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $bangPhaseString)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    bangTrackIndex = nil
+                }
+                Button("OK") {
+                    commitAutofillBang()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
+    }
+
+    private var gridSettingsSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Grid")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            HStack {
+                Text("T (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $gridPeriodString)
+            }
+            HStack {
+                Text("Φ (0-1)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $gridPhaseString)
+            }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Snap to grid")
+                    .foregroundColor(.gray.opacity(0.7))
+                Picker("", selection: $magneticGridSnap) {
+                    Text("⌘ + clic").tag(false)
+                    Text("Magnetic grid").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    showGridSettingsPopup = false
+                }
+                Button("OK") {
+                    commitGridSettings()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
     }
 }
 
