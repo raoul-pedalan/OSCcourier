@@ -628,6 +628,13 @@ struct ContentView: View {
     @State private var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
     @State private var showGrid: Bool = false
+    // Grid line generation: evenly spaced dashed vertical lines across all
+    // tracks, same period/phase model as the bang autofill.
+    @State private var showGridSettingsPopup: Bool = false
+    @State private var gridPeriodString: String = "1.0"
+    @State private var gridPhaseString: String = "0.0"
+    @State private var gridPeriod: Double = 1.0
+    @State private var gridPhase: Double = 0.0
     // Width of the timeline viewport (updated from the outer GeometryReader), used to
     // compute how much zoom is needed to reach the 1s = 1000px target regardless of `duree`.
     @State private var timelineAreaWidth: CGFloat = 1500
@@ -826,6 +833,11 @@ struct ContentView: View {
     // Shared with SettingsView via the same @AppStorage key.
     @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
     @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
+    // Grid snap mode: false = grid lines only snap like markers do, via
+    // ⌘+drag; true = "magnetic grid", points snap to the nearest grid line
+    // automatically while dragging, no ⌘ needed. Markers themselves always
+    // require ⌘ either way — this setting only affects grid-line snapping.
+    @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
 
     private func sendOSCMessage(_ message: String) {
         let fullMessage = oscAddressPrefix + message
@@ -1050,17 +1062,49 @@ struct ContentView: View {
         return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 
-    // Is xPos (in timeline pixels) within the 7px snap zone of the nearest marker line?
-    private func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
-        guard !pistes[0].evenements.isEmpty, duree > 0 else { return false }
-        let closestMarker = pistes[0].evenements.min(by: { markerA, markerB in
-            let xA = (markerA.time / duree) * largeurTimeline
-            let xB = (markerB.time / duree) * largeurTimeline
+    // All snap-target times currently available: marker positions, plus grid
+    // lines when the grid is visible.
+    private func snapCandidateTimes() -> [Double] {
+        var times = pistes[0].evenements.map { $0.time }
+        if showGrid {
+            times.append(contentsOf: gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree))
+        }
+        return times
+    }
+
+    // Finds the closest time to xPos among a given set of candidates, if any
+    // falls within the 7px snap zone — nil otherwise.
+    private func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double) -> Double? {
+        guard !candidates.isEmpty, duree > 0 else { return nil }
+        let closest = candidates.min(by: { a, b in
+            let xA = (a / duree) * largeurTimeline
+            let xB = (b / duree) * largeurTimeline
             return abs(xA - xPos) < abs(xB - xPos)
         })
-        guard let closestMarker = closestMarker else { return false }
-        let markerXPos = (closestMarker.time / duree) * largeurTimeline
-        return abs(markerXPos - xPos) < 7
+        guard let closest = closest else { return nil }
+        let closestXPos = (closest / duree) * largeurTimeline
+        return abs(closestXPos - xPos) < 7 ? closest : nil
+    }
+
+    // The closest snap-target time to xPos (in timeline pixels), if any
+    // falls within the 7px snap zone — nil otherwise. Combines markers and
+    // grid lines (used for the ⌘-driven snap, and the hover snap-cursor
+    // indicator, which treat both the same way).
+    private func nearestSnapTime(xPos: Double, largeurTimeline: Double) -> Double? {
+        nearestTime(among: snapCandidateTimes(), xPos: xPos, largeurTimeline: largeurTimeline)
+    }
+
+    // Grid lines only (no markers) — used for "magnetic grid" auto-snap,
+    // which should never pull a point onto a marker without ⌘.
+    private func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
+        guard showGrid else { return nil }
+        return nearestTime(among: gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree), xPos: xPos, largeurTimeline: largeurTimeline)
+    }
+
+    // Is xPos (in timeline pixels) within the 7px snap zone of the nearest
+    // marker line or grid line?
+    private func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
+        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline) != nil
     }
 
     // Applies the right cursor for the current hover + modifier-key state:
@@ -1081,6 +1125,31 @@ struct ContentView: View {
         }
     }
 
+
+    // Generates evenly spaced grid line times across [0, duree] — same
+    // period/phase model as bangEvents, but returning bare times (no labels
+    // needed since grid lines are purely visual, not OSC-emitting events).
+    private func gridLineTimes(period: Double, phase: Double, duree: Double) -> [Double] {
+        guard period > 0 else { return [] }
+        let phaseOffset = phase * period
+        var times: [Double] = []
+        var n = 0
+        while true {
+            let time = Double(n) * period + phaseOffset
+            if time > duree { break }
+            if time >= 0 { times.append(time) }
+            n += 1
+        }
+        return times
+    }
+
+    private func commitGridSettings() {
+        if let period = Double(gridPeriodString), let phase = Double(gridPhaseString) {
+            gridPeriod = period
+            gridPhase = phase
+        }
+        showGridSettingsPopup = false
+    }
 
     private func openAutofillPopup(for index: Int) {
         if pistes[index].evenements.isEmpty {
@@ -1622,15 +1691,28 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                Button(action: { showGrid.toggle() }) {
-                    Image(systemName: "grid")
-                        .font(.body)
-                        .foregroundColor(.black)
-                        .frame(width: 44, height: 28)
-                        .background(showGrid ? Color.yellow : Color.gray.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
+                Image(systemName: "grid")
+                    .font(.body)
+                    .foregroundColor(.black)
+                    .frame(width: 44, height: 28)
+                    .background(showGrid ? Color.yellow : Color.gray.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+                    // Option+click opens the grid settings without touching
+                    // showGrid; a plain click toggles the grid on/off. Single
+                    // onTapGesture checking the modifier at click time (same
+                    // pattern used elsewhere, e.g. shift-click to delete a
+                    // point), rather than double-click, which doesn't affect
+                    // the toggle state at all.
+                    .onTapGesture {
+                        if NSEvent.modifierFlags.contains(.option) {
+                            gridPeriodString = String(format: "%.2f", gridPeriod)
+                            gridPhaseString = String(format: "%.2f", gridPhase)
+                            showGridSettingsPopup = true
+                        } else {
+                            showGrid.toggle()
+                        }
+                    }
                 Button(action: {
                     showClearAllConfirmation = true
                 }) {
@@ -2261,18 +2343,17 @@ struct ContentView: View {
                                                                 var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                 isHoveringPoint = true
 
-                                                                // Cmd + within 7px of a marker's vertical line: snap to it.
+                                                                // Cmd + within 7px of a marker or grid line: snap to it.
+                                                                // Without Cmd, if "magnetic grid" is on, still snap onto
+                                                                // the nearest grid line alone (never a marker).
                                                                 let dragXPos = (newPosition / duree) * Double(largeurTimeline)
                                                                 isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
-                                                                if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-                                                                    let closestMarker = pistes[0].evenements.min(by: { markerA, markerB in
-                                                                        let xA = (markerA.time / duree) * Double(largeurTimeline)
-                                                                        let xB = (markerB.time / duree) * Double(largeurTimeline)
-                                                                        return abs(xA - dragXPos) < abs(xB - dragXPos)
-                                                                    })
-                                                                    if let closestMarker = closestMarker {
-                                                                        newPosition = closestMarker.time
-                                                                    }
+                                                                if NSEvent.modifierFlags.contains(.command),
+                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                    newPosition = snapTime
+                                                                } else if magneticGridSnap,
+                                                                          let gridSnapTime = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                    newPosition = gridSnapTime
                                                                 }
                                                                 updatePointCursor()
 
@@ -2329,6 +2410,21 @@ struct ContentView: View {
                                         .position(x: xPos, y: (15 + CGFloat(totalHeight)) / 2)
                                         .opacity(0.5)
                                         .allowsHitTesting(false)
+                                }
+
+                                // Grid overlay: evenly spaced dashed vertical lines across all
+                                // tracks (period/phase set via double-clicking the grid button),
+                                // same span as the marker lines above but dashed and purely visual.
+                                if showGrid {
+                                    ForEach(gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree), id: \.self) { time in
+                                        let xPos = CGFloat(time / duree) * largeurTimeline + 140
+                                        Path { path in
+                                            path.move(to: CGPoint(x: xPos, y: 15))
+                                            path.addLine(to: CGPoint(x: xPos, y: CGFloat(totalHeight)))
+                                        }
+                                        .stroke(Color.gray.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [1, 3]))
+                                        .allowsHitTesting(false)
+                                    }
                                 }
 
                                 ZStack(alignment: .topLeading) {
@@ -2606,6 +2702,53 @@ struct ContentView: View {
                     }
                     Button("OK") {
                         commitAutofillBang()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
+            .frame(width: 280)
+        }
+        .sheet(isPresented: $showGridSettingsPopup) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Grid")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+
+                HStack {
+                    Text("T (s.)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $gridPeriodString)
+                }
+                HStack {
+                    Text("Φ (0-1)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("", text: $gridPhaseString)
+                }
+
+                Divider()
+                    .padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Snap to grid")
+                        .foregroundColor(.gray.opacity(0.7))
+                    Picker("", selection: $magneticGridSnap) {
+                        Text("⌘ + clic").tag(false)
+                        Text("Magnetic grid").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        showGridSettingsPopup = false
+                    }
+                    Button("OK") {
+                        commitGridSettings()
                     }
                     .keyboardShortcut(.defaultAction)
                 }
