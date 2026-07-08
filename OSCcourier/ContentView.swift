@@ -2,7 +2,7 @@ import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
 
-//Deliverer did it
+//Deliverer
 // A circle with smooth rounded "teeth" around its edge, like a gear or a
 // flower — used to give the RotaryKnob a notched/knurled look.
 struct NotchedKnobShape: Shape {
@@ -296,6 +296,22 @@ struct CursorOverlay: NSViewRepresentable {
     }
 }
 
+// NSScrollView subclass that intercepts Cmd+scroll (mouse wheel or two-finger
+// trackpad scroll) via a callback, instead of letting it pan the content —
+// used to zoom anchored on the cursor, mirroring the existing pinch-to-zoom
+// anchoring logic in TimelineScrollView's Coordinator.
+class CommandScrollZoomScrollView: NSScrollView {
+    var onCommandScroll: ((NSEvent) -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            onCommandScroll?(event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+}
+
 struct TimelineScrollView<Content: View>: NSViewRepresentable {
     @Binding var offsetX: CGFloat
     @Binding var zoomX: Double
@@ -304,6 +320,10 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
     var duree: Double
     var contentWidth: CGFloat
     var contentHeight: CGFloat
+    // Same per-pixel sensitivity used by the RotaryKnob (already scaled to
+    // feel consistent regardless of track duration), reused here so Cmd+scroll
+    // zooms at a comparable rate.
+    var zoomSensitivity: Double = 0.05
     @ViewBuilder var content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -311,7 +331,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = CommandScrollZoomScrollView()
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -319,6 +339,9 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         scrollView.horizontalScrollElasticity = .allowed
         scrollView.verticalScrollElasticity = .allowed
         scrollView.allowsMagnification = false // we drive zoomX ourselves, not NSScrollView's own magnification
+        scrollView.onCommandScroll = { [weak coordinator = context.coordinator] event in
+            coordinator?.handleCommandScroll(event, in: scrollView)
+        }
 
         let hosting = NSHostingView(rootView: content())
         hosting.frame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
@@ -348,6 +371,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         context.coordinator.zoomRange = zoomRange
         context.coordinator.duree = duree
         context.coordinator.currentContentWidth = contentWidth
+        context.coordinator.zoomSensitivity = zoomSensitivity
 
         let newFrame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
         if context.coordinator.hostingView?.frame != newFrame {
@@ -373,10 +397,15 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         var zoomRange: ClosedRange<Double>
         var duree: Double = 30
         var currentContentWidth: CGFloat = 0
+        var zoomSensitivity: Double = 0.05
         weak var hostingView: NSHostingView<Content>?
         weak var scrollView: NSScrollView?
         var lastKnownOffset: CGFloat = 0
         private var zoomAtGestureStart: Double = 1.0
+        // Debounces isPinchZoomingBinding back to false after Cmd+scroll
+        // activity stops, since discrete mouse-wheel events (unlike a real
+        // pinch gesture) don't carry an explicit .ended phase to rely on.
+        private var commandScrollResetWorkItem: DispatchWorkItem?
 
         init(offsetX: Binding<CGFloat>, zoomX: Binding<Double>, isPinchZooming: Binding<Bool>, zoomRange: ClosedRange<Double>) {
             self.offsetXBinding = offsetX
@@ -431,6 +460,51 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
             default:
                 break
             }
+        }
+
+        // Cmd+scroll (mouse wheel or two-finger trackpad scroll): zooms
+        // anchored on the cursor position, same math as handleMagnification
+        // above but driven by scrollingDeltaY instead of a pinch gesture.
+        func handleCommandScroll(_ event: NSEvent, in scrollView: NSScrollView) {
+            let currentZoom = zoomXBinding.wrappedValue
+            let outerWidth = currentContentWidth / CGFloat(currentZoom)
+            let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
+            guard largeurAvant > 0 else { return }
+
+            // Where is the mouse right now, in viewport-local coordinates?
+            let locationInView = scrollView.convert(event.locationInWindow, from: nil)
+            let locationX = locationInView.x
+
+            // Which timeline instant is currently under the mouse?
+            let absoluteContentXBefore = offsetXBinding.wrappedValue + locationX
+            let anchorTime = min(max(Double((absoluteContentXBefore - 140) / largeurAvant) * duree, 0), duree)
+
+            let delta = Double(event.scrollingDeltaY)
+            let proposed = currentZoom + delta * zoomSensitivity
+            let newZoom = min(max(proposed, zoomRange.lowerBound), zoomRange.upperBound)
+            guard newZoom != currentZoom else { return }
+
+            // Suppress the SwiftUI-side playhead-anchored recentering
+            // (onChange(of: zoomX) in ContentView) for the duration of this
+            // gesture, same as during a real pinch — we're doing our own
+            // cursor-anchored recentering right here instead.
+            isPinchZoomingBinding.wrappedValue = true
+            commandScrollResetWorkItem?.cancel()
+            let resetItem = DispatchWorkItem { [weak self] in
+                self?.isPinchZoomingBinding.wrappedValue = false
+            }
+            commandScrollResetWorkItem = resetItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: resetItem)
+
+            zoomXBinding.wrappedValue = newZoom
+
+            // Recompute the offset so that same instant stays under the mouse
+            let largeurApres = outerWidth * CGFloat(newZoom) - 140
+            guard largeurApres > 0 else { return }
+            let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
+            let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
+            let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
+            offsetXBinding.wrappedValue = newOffsetX
         }
     }
 }
@@ -552,6 +626,8 @@ struct ContentView: View {
     @State private var isPinchZooming: Bool = false
     // Toggle for showing/hiding the "time, value" coordinate labels next to points.
     @State private var showPointCoordinates: Bool = true
+    // Toggle for showing/hiding the timeline grid overlay.
+    @State private var showGrid: Bool = false
     // Width of the timeline viewport (updated from the outer GeometryReader), used to
     // compute how much zoom is needed to reach the 1s = 1000px target regardless of `duree`.
     @State private var timelineAreaWidth: CGFloat = 1500
@@ -1264,23 +1340,26 @@ struct ContentView: View {
         }
     }
 
-    // Recenters the horizontal scroll so the same instant that was at the
-    // center of the screen before a zoom change stays there afterward (used
-    // by the RotaryKnob; pinch-zoom centers on the mouse instead, handled
-    // separately in TimelineScrollView's Coordinator).
+    // Recenters the horizontal scroll so the playhead stays at the same
+    // on-screen (viewport-relative) position before and after a zoom
+    // change — i.e. the zoom appears to happen "around" the playhead.
+    // (Pinch-zoom anchors on the mouse position instead, handled separately
+    // in TimelineScrollView's Coordinator.)
     private func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
         guard !isPinchZooming else { return }
         let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
         guard largeurAvant > 0 else { return }
 
-        let centreVisibleX = scrollOffsetX + outerWidth / 2
-        let centreContenuX = centreVisibleX - 140
-        let centerTime = min(max(Double(centreContenuX / largeurAvant) * duree, 0), duree)
+        let anchorTime = min(max(position, 0), duree)
+        let absoluteContentXBefore = 140 + CGFloat(anchorTime / duree) * largeurAvant
+        let locationXInViewport = absoluteContentXBefore - scrollOffsetX
 
         let largeurApres = outerWidth * CGFloat(newZoom) - 140
         guard largeurApres > 0 else { return }
-        let nouvelleCentreContenuX = CGFloat(centerTime / duree) * largeurApres + 140
-        scrollOffsetX = max(0, nouvelleCentreContenuX - outerWidth / 2)
+        let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
+        let maxX = max(0, outerWidth * CGFloat(newZoom) - outerWidth)
+        let newOffsetX = max(0, min(absoluteContentXAfter - locationXInViewport, maxX))
+        scrollOffsetX = newOffsetX
     }
 
     private func commitPointEdit() {
@@ -1543,6 +1622,15 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
+                Button(action: { showGrid.toggle() }) {
+                    Image(systemName: "grid")
+                        .font(.body)
+                        .foregroundColor(.black)
+                        .frame(width: 44, height: 28)
+                        .background(showGrid ? Color.yellow : Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
                 Button(action: {
                     showClearAllConfirmation = true
                 }) {
@@ -1593,7 +1681,8 @@ struct ContentView: View {
                     zoomRange: 1.0...maxZoomX,
                     duree: duree,
                     contentWidth: outerGeometry.size.width * CGFloat(zoomX),
-                    contentHeight: max(outerGeometry.size.height, totalTracksHeight)
+                    contentHeight: max(outerGeometry.size.height, totalTracksHeight),
+                    zoomSensitivity: zoomKnobSensitivity
                 ) {
                         GeometryReader { geometry in
                             let largeurTimeline = geometry.size.width - 140
@@ -1603,6 +1692,15 @@ struct ContentView: View {
                                 VStack(spacing: 0) {
                                     ZStack(alignment: .leading) {
                                         Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
+                                        Color.clear
+                                            .contentShape(Rectangle())
+                                            .frame(height: 24)
+                                            .onTapGesture { location in
+                                                guard location.x > 140 else { return }
+                                                let positionCliquee = (Double(location.x - 140) / Double(largeurTimeline)) * duree
+                                                position = min(max(positionCliquee, 0), duree)
+                                                sendOSCMessagesForPosition(position)
+                                            }
                                         // Dynamic tick interval: depends on pixels per second (so it already
                                         // accounts for zoom, via largeurTimeline), not just the total duration —
                                         // otherwise, zoomed in a lot on a long track, the interval would represent
