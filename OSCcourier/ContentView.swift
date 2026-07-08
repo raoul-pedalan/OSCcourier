@@ -149,8 +149,11 @@ struct TimelineTrack: Identifiable, Codable {
     var minAmplitude: Double = 0.0
     var maxAmplitude: Double = 1.0
     var height: CGFloat = 60
+    // When true, the track's header is collapsed to just its name, the
+    // fold triangle, and the reorder handle — its points/curves are hidden.
+    var isFolded: Bool = false
 
-    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60) {
+    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false) {
         self.id = id
         self.nom = nom
         self.couleur = couleur
@@ -160,10 +163,11 @@ struct TimelineTrack: Identifiable, Codable {
         self.minAmplitude = minAmplitude
         self.maxAmplitude = maxAmplitude
         self.height = height
+        self.isFolded = isFolded
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height
+        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +181,8 @@ struct TimelineTrack: Identifiable, Codable {
         minAmplitude = try container.decode(Double.self, forKey: .minAmplitude)
         maxAmplitude = try container.decode(Double.self, forKey: .maxAmplitude)
         height = CGFloat(try container.decode(Double.self, forKey: .height))
+        // Absent from older save files — default to unfolded rather than failing to decode.
+        isFolded = try container.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -190,6 +196,7 @@ struct TimelineTrack: Identifiable, Codable {
         try container.encode(minAmplitude, forKey: .minAmplitude)
         try container.encode(maxAmplitude, forKey: .maxAmplitude)
         try container.encode(Double(height), forKey: .height)
+        try container.encode(isFolded, forKey: .isFolded)
     }
 }
 
@@ -618,6 +625,18 @@ struct ContentView: View {
     // all stay consistent with each other.
     private let curveMargin: CGFloat = 6
 
+    // Height a folded track's row is reduced to: just enough for the name,
+    // fold triangle, and reorder handle.
+    private let foldedTrackHeight: CGFloat = 24
+
+    // The actual row height to use for a given track: folded tracks always
+    // collapse to foldedTrackHeight, regardless of type; otherwise bang/message
+    // tracks are a fixed 45, and curve/step tracks use their own `height`.
+    private func rowHeight(for piste: TimelineTrack) -> CGFloat {
+        if piste.isFolded { return foldedTrackHeight }
+        return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
+    }
+
     // MARK: - Zoom-centering state
     @State private var scrollOffsetX: CGFloat = 0
     // True while a pinch gesture is in progress: TimelineScrollView's Coordinator
@@ -675,7 +694,7 @@ struct ContentView: View {
     // triangle. Used as the document's actual height so vertical scrolling can reveal
     // tracks that would otherwise be clipped below the visible viewport.
     private var totalTracksHeight: CGFloat {
-        24 + pistes.reduce(CGFloat(0)) { $0 + (($1.type == .bang || $1.type == .message) ? 45 : $1.height) } + CGFloat(pistes.count * 5) + 14
+        24 + pistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(pistes.count * 5) + 14
     }
 
     // Shared naming counter across all track types (bang or curve), so a new
@@ -1768,7 +1787,7 @@ struct ContentView: View {
                 ) {
                         GeometryReader { geometry in
                             let largeurTimeline = geometry.size.width - 140
-                            let totalHeight = 24 + pistes.reduce(CGFloat(0)) { $0 + (($1.type == .bang || $1.type == .message) ? 45 : $1.height) } + CGFloat(pistes.count * 5)
+                            let totalHeight = 24 + pistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(pistes.count * 5)
 
                             ZStack(alignment: .topLeading) {
                                 VStack(spacing: 0) {
@@ -1857,14 +1876,14 @@ struct ContentView: View {
                                                                     let effectiveTranslation = value.translation.height - reorderBaselineOffset
 
                                                                     if effectiveTranslation > 0, currentIndex < pistes.count - 1 {
-                                                                        let belowHeight = ((pistes[currentIndex + 1].type == .bang || pistes[currentIndex + 1].type == .message) ? 45 : pistes[currentIndex + 1].height) + 5
+                                                                        let belowHeight = rowHeight(for: pistes[currentIndex + 1]) + 5
                                                                         if effectiveTranslation > belowHeight / 2 {
                                                                             pistes.swapAt(currentIndex, currentIndex + 1)
                                                                             reorderBaselineOffset += belowHeight
                                                                             reorderingIndex = currentIndex + 1
                                                                         }
                                                                     } else if effectiveTranslation < 0, currentIndex > 1 {
-                                                                        let aboveHeight = ((pistes[currentIndex - 1].type == .bang || pistes[currentIndex - 1].type == .message) ? 45 : pistes[currentIndex - 1].height) + 5
+                                                                        let aboveHeight = rowHeight(for: pistes[currentIndex - 1]) + 5
                                                                         if effectiveTranslation < -aboveHeight / 2 {
                                                                             pistes.swapAt(currentIndex, currentIndex - 1)
                                                                             reorderBaselineOffset -= aboveHeight
@@ -1890,7 +1909,21 @@ struct ContentView: View {
                                                         .help("Drag to reorder this track")
                                                 }
 
-                                                if pistes[index].type == .curve || pistes[index].type == .step {
+                                                // Fold/unfold: collapses the track's header down to just its
+                                                // name, this triangle, and the reorder handle, and hides its
+                                                // points/curves in the timeline area.
+                                                Button(action: {
+                                                    pistes[index].isFolded.toggle()
+                                                }) {
+                                                    Image(systemName: pistes[index].isFolded ? "arrowtriangle.right.fill" : "arrowtriangle.down.fill")
+                                                        .font(.system(size: 9))
+                                                        .foregroundColor(.black.opacity(0.5))
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .offset(x: 100, y: 6)
+                                                .help(pistes[index].isFolded ? "Unfold track" : "Fold track")
+
+                                                if !pistes[index].isFolded && (pistes[index].type == .curve || pistes[index].type == .step) {
                                                     let trackHeight = pistes[index].height
                                                     let topY = curveMargin
                                                     let midY = trackHeight / 2
@@ -1932,6 +1965,7 @@ struct ContentView: View {
                                                     .offset(x: 144)
                                                 }
 
+                                                if !pistes[index].isFolded {
                                                 if index == 0 {
                                                     HStack(spacing: 5) {
                                                         Button(action: { pistes[index].isMuted.toggle() }) {
@@ -1996,7 +2030,7 @@ struct ContentView: View {
                                                         .help("Delete this track")
                                                     }
                                                     .padding(.trailing, 20)
-                                                    .padding(.bottom, pistes[index].type == .bang ? 6 : 10)
+                                                    .padding(.bottom, (pistes[index].type == .bang || pistes[index].type == .message) ? 6 : 10)
                                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
 
                                                     Button(action: {
@@ -2007,7 +2041,7 @@ struct ContentView: View {
                                                     .buttonStyle(.borderless)
                                                     .help("Autofill: generate a pattern for this track")
                                                     .padding(.leading, 10)
-                                                    .padding(.bottom, pistes[index].type == .bang ? 6 : 10)
+                                                    .padding(.bottom, (pistes[index].type == .bang || pistes[index].type == .message) ? 6 : 10)
                                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                                                 }
 
@@ -2044,18 +2078,20 @@ struct ContentView: View {
                                                             }
                                                     }
                                                 }
+                                                } // end if !pistes[index].isFolded
                                             }
-                                            .frame(width: 140, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                            .frame(width: 140, height: rowHeight(for: pistes[index]))
 
                                             ZStack(alignment: .leading) {
                                                 Rectangle()
                                                     .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(0.3) : Color.clear)
-                                                    .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                                    .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
 
+                                                if !pistes[index].isFolded {
                                                 if pistes[index].type == .bang || pistes[index].type == .message {
                                                     Color.clear
                                                         .contentShape(Rectangle())
-                                                        .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                                        .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                                         .onTapGesture { location in
                                                             let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
                                                             let defaultLabel = pistes[index].type == .message ? "key" : "M"
@@ -2388,8 +2424,9 @@ struct ContentView: View {
                                                         }
                                                     }
                                                 }
+                                                } // end if !pistes[index].isFolded
                                             }
-                                            .frame(width: largeurTimeline, height: (pistes[index].type == .bang || pistes[index].type == .message) ? 45 : pistes[index].height)
+                                            .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                             .clipped()
                                         }
                                         .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
