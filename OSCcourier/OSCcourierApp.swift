@@ -28,6 +28,7 @@ struct OSCcourierApp: App {
     @AppStorage("showGrid") private var showGrid: Bool = false
     @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
     @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
+    @AppStorage("showCommandBar") private var showCommandBar: Bool = true
     @AppStorage("tracksLocked") private var tracksLocked: Bool = false
     @AppStorage("enBoucle") private var enBoucle: Bool = false
 
@@ -107,6 +108,10 @@ struct OSCcourierApp: App {
             // menu even if the title matches an existing one, which is what
             // caused the duplicate "View" menu before.
             CommandGroup(after: .toolbar) {
+                Divider()
+                Toggle("Command Bar", isOn: $showCommandBar)
+                    .keyboardShortcut("b", modifiers: .command)
+
                 Divider()
                 Button("Reset Horizontal Zoom") {
                     NotificationCenter.default.post(name: .OSCcourierResetZoom, object: nil)

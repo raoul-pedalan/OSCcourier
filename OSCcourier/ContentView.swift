@@ -616,7 +616,16 @@ struct ContentView: View {
     // Tracks proximity to a grid line specifically (not markers) — used to
     // show the snap cursor for "magnetic grid" auto-snap even without ⌘ held.
     @State private var isNearGridSnapZone: Bool = false
+    // Whether the closest ⌘-snap target (marker or grid line combined) is
+    // specifically the grid line — used only to color the snap cursor.
+    @State private var isNearestSnapGrid: Bool = false
     @State private var flagsChangedMonitor: Any?
+    // Tracks whether the window is currently full screen, so the top
+    // padding reserved to clear the title bar can be dropped once that
+    // title bar itself is hidden (full screen has no title bar to avoid).
+    @State private var isFullScreen: Bool = false
+    @State private var fullScreenEnterObserver: Any?
+    @State private var fullScreenExitObserver: Any?
     @State private var tempMinAmplitude: String = "0"
     @State private var tempMaxAmplitude: String = "1"
     @State private var messagesWindowController: NSWindowController?
@@ -668,6 +677,9 @@ struct ContentView: View {
     @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
     @AppStorage("showGrid") private var showGrid: Bool = false
+    // Toggles between the full command bar (toolbar with all controls) and
+    // a compact, full-width control line (position + play/loop indicators).
+    @AppStorage("showCommandBar") private var showCommandBar: Bool = true
     // Shared with OSCcourierApp's menu commands via the same @AppStorage keys.
     @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
     @AppStorage("tracksLocked") private var tracksLocked: Bool = false
@@ -1150,11 +1162,31 @@ struct ContentView: View {
         nearestTime(among: snapCandidateTimes(), xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
+    // Markers only (no grid lines) — the counterpart to nearestGridTime,
+    // used to tell which of the two a combined ⌘-snap actually landed on.
+    private func nearestMarkerTime(xPos: Double, largeurTimeline: Double) -> Double? {
+        nearestTime(among: pistes[0].evenements.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
+    }
+
     // Grid lines only (no markers) — used for "magnetic grid" auto-snap,
     // which should never pull a point onto a marker without ⌘.
     private func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
         guard showGrid else { return nil }
         return nearestTime(among: gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree), xPos: xPos, largeurTimeline: largeurTimeline)
+    }
+
+    // When both a marker and a grid line are within the snap zone, which one
+    // is actually closer to xPos? Used purely to pick the cursor color
+    // (marker snap stays black, grid snap turns gray) — the actual snapping
+    // logic elsewhere already picks the true closest via nearestSnapTime.
+    private func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double) -> Bool {
+        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline)
+        let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
+        guard let gridTime else { return false }
+        guard let markerTime else { return true }
+        let markerX = (markerTime / duree) * largeurTimeline
+        let gridX = (gridTime / duree) * largeurTimeline
+        return abs(gridX - xPos) < abs(markerX - xPos)
     }
 
     // Is xPos (in timeline pixels) within the 7px snap zone of the nearest
@@ -1165,9 +1197,11 @@ struct ContentView: View {
 
     // Applies the right cursor for the current hover + modifier-key state:
     // shift = delete-point cursor, ⌘ = snap-to-marker/grid cursor (only once
-    // actually within the snap zone), magnetic grid = same snap cursor even
-    // without ⌘ when near a grid line specifically, otherwise the default
-    // arrow (or nothing, if not hovering a point at all).
+    // actually within the snap zone) — black if the snap target is a marker,
+    // gray if it's a grid line. Magnetic grid = same gray snap cursor even
+    // without ⌘ when near a grid line specifically (it only ever targets
+    // grid lines, never markers). Otherwise the default arrow (or nothing,
+    // if not hovering a point at all).
     private func updatePointCursor() {
         guard isHoveringPoint else {
             NSCursor.arrow.set()
@@ -1176,7 +1210,8 @@ struct ContentView: View {
         if NSEvent.modifierFlags.contains(.shift) {
             cursor(fromSymbol: "eraser.badge.xmark").set()
         } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
+            let color: NSColor = isNearestSnapGrid ? .gray : .black
+            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: color).set()
         } else if magneticGridSnap && isNearGridSnapZone {
             cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
         } else {
@@ -1531,6 +1566,17 @@ struct ContentView: View {
             }
         }
 
+        if fullScreenEnterObserver == nil {
+            fullScreenEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: nil, queue: .main) { _ in
+                isFullScreen = true
+            }
+        }
+        if fullScreenExitObserver == nil {
+            fullScreenExitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main) { _ in
+                isFullScreen = false
+            }
+        }
+
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
             DispatchQueue.main.async {
@@ -1574,6 +1620,14 @@ struct ContentView: View {
         if let monitor = flagsChangedMonitor {
             NSEvent.removeMonitor(monitor)
             flagsChangedMonitor = nil
+        }
+        if let observer = fullScreenEnterObserver {
+            NotificationCenter.default.removeObserver(observer)
+            fullScreenEnterObserver = nil
+        }
+        if let observer = fullScreenExitObserver {
+            NotificationCenter.default.removeObserver(observer)
+            fullScreenExitObserver = nil
         }
     }
 
@@ -1684,8 +1738,48 @@ struct ContentView: View {
         bangTrackIndex = nil
     }
 
+    // Compact alternative to the full toolbar (toggled via the View menu,
+    // ⌘B): a full-width bar acting as an extended version of the position
+    // display — same black/blue styling, but stretched across the window
+    // with the position centered, a play/pause indicator ~50px to its left,
+    // and a loop indicator on the right.
+    // "Paused" vs "stopped" aren't separately tracked in the app's state
+    // (both are just enLecture == false); we approximate "stopped" as
+    // enLecture == false with position back at 0 (which Stop always does,
+    // unlike Pause), and show nothing in that case per the spec ("rien si
+    // stop").
+    private var compactControlBar: some View {
+        ZStack {
+            Rectangle().fill(Color.black)
+            Text(formattedPosition(position))
+                .font(.system(size: 20, design: .monospaced))
+                .fontWeight(.bold)
+                .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
+            Group {
+                if enLecture {
+                    Image(systemName: "play.fill")
+                        .foregroundColor(Color(red: 0.5, green: 1.0, blue: 0.2))
+                } else if position > 0.001 {
+                    Image(systemName: "pause.fill")
+                        .foregroundColor(.gray)
+                }
+            }
+            .font(.body)
+            .offset(x: -100)
+            if enBoucle {
+                Image(systemName: "arrow.clockwise")
+                    .foregroundColor(.yellow)
+                    .font(.body)
+                    .offset(x: 100)
+            }
+        }
+        .frame(height: 32)
+        .padding(.top, isFullScreen ? 0 : 30)
+    }
+
     var body: some View {
         let baseContent = VStack(spacing: 0) {
+            if showCommandBar {
             HStack {
                 RotaryKnob(value: $zoomX, range: 1.0...maxZoomX, onDoubleTap: {
                     zoomX = 1.0
@@ -1908,8 +2002,11 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
             .padding(.horizontal)
-            .padding(.top, 30)
-            .frame(height: 100)
+            .padding(.top, isFullScreen ? 0 : 30)
+            .frame(height: isFullScreen ? 70 : 100)
+            } else {
+                compactControlBar
+            }
 
             GeometryReader { outerGeometry in
                 TimelineScrollView(
@@ -2522,6 +2619,7 @@ struct ContentView: View {
                                                         if hovering {
                                                             isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
                                                             isNearGridSnapZone = nearestGridTime(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline)) != nil
+                                                            isNearestSnapGrid = isNearestSnapAGridLine(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
                                                         }
                                                         updatePointCursor()
                                                     }
@@ -2538,6 +2636,7 @@ struct ContentView: View {
                                                                 let dragXPos = (newPosition / duree) * Double(largeurTimeline)
                                                                 isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
                                                                 isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
+                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
                                                                 if NSEvent.modifierFlags.contains(.command),
                                                                    let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
                                                                     newPosition = snapTime
