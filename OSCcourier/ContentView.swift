@@ -667,6 +667,72 @@ struct ContentView: View {
         return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
     }
 
+    // A lightweight, non-interactive "ghost" preview of a folded track's
+    // content — no point markers, no coordinate labels, no gestures, just a
+    // faint trace so the track's shape/pattern stays recognizable while
+    // collapsed. Curve/step segments are drawn as straight lines here
+    // (ignoring segmentCurve/segmentBulge) since the folded row is too thin
+    // for the curvature to read anyway.
+    @ViewBuilder
+    private func foldedGhostTrace(for piste: TimelineTrack, largeurTimeline: CGFloat) -> some View {
+        let h = foldedTrackHeight
+        let margin: CGFloat = 3
+        switch piste.type {
+        case .bang, .message:
+            ForEach(piste.evenements) { event in
+                let xPos = CGFloat(event.time / duree) * largeurTimeline
+                Rectangle()
+                    .fill(piste.couleur.opacity(0.7))
+                    .frame(width: 1, height: h * 0.6)
+                    .position(x: xPos, y: h / 2)
+            }
+            .allowsHitTesting(false)
+        case .curve:
+            if piste.evenements.count > 1 {
+                Path { path in
+                    let sorted = piste.evenements.sorted { $0.time < $1.time }
+                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
+                    func yPos(for value: Double) -> CGFloat {
+                        let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
+                        return margin + (h - 2 * margin) * (1 - normalizedY)
+                    }
+                    for (i, event) in sorted.enumerated() {
+                        let xPos = CGFloat(event.time / duree) * largeurTimeline
+                        let point = CGPoint(x: xPos, y: yPos(for: event.y))
+                        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                    }
+                }
+                .stroke(piste.couleur.opacity(0.7), lineWidth: 1)
+                .allowsHitTesting(false)
+            }
+        case .step:
+            if piste.evenements.count > 1 {
+                Path { path in
+                    let sorted = piste.evenements.sorted { $0.time < $1.time }
+                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
+                    func yPos(for event: TimelineEvent) -> CGFloat {
+                        let normalizedY = amplitudeRange > 0 ? (event.y - piste.minAmplitude) / amplitudeRange : 0.5
+                        return margin + (h - 2 * margin) * (1 - normalizedY)
+                    }
+                    for (i, event) in sorted.enumerated() {
+                        let xPos = CGFloat(event.time / duree) * largeurTimeline
+                        let y = yPos(for: event)
+                        if i == 0 {
+                            path.move(to: CGPoint(x: xPos, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
+                            path.addLine(to: CGPoint(x: xPos, y: y))
+                        }
+                    }
+                }
+                .stroke(piste.couleur.opacity(0.7), lineWidth: 1.5)
+                .allowsHitTesting(false)
+            }
+        case .normal:
+            EmptyView()
+        }
+    }
+
     // MARK: - Zoom-centering state
     @State private var scrollOffsetX: CGFloat = 0
     // True while a pinch gesture is in progress: TimelineScrollView's Coordinator
@@ -2680,6 +2746,9 @@ struct ContentView: View {
                                                     }
                                                 }
                                                 } // end if !pistes[index].isFolded
+                                                else {
+                                                    foldedGhostTrace(for: pistes[index], largeurTimeline: largeurTimeline)
+                                                }
                                             }
                                             .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                             .clipped()
