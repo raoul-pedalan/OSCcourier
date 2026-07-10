@@ -662,6 +662,10 @@ struct ContentView: View {
     // timer applies that rate continuously while the drag is held.
     @State private var durationDragCurrentDeltaX: CGFloat = 0
     @State private var durationDragTimer: Timer?
+    // Brief flash indicator for the compact command bar's "OSC" label,
+    // lit up for a short moment each time an OSC message actually goes out.
+    @State private var isOSCFlashing: Bool = false
+    @State private var oscFlashTimer: Timer?
     // How fast duree changes per second, per pixel of horizontal offset
     // from the drag's start point.
     // Non-linear speed curve: rate = sign(dx) * |dx|^exponent * scale.
@@ -1014,6 +1018,21 @@ struct ContentView: View {
         let fullMessage = oscAddressPrefix + message
         oscManager.sendMessage(fullMessage)
         messageStore.addMessage(fullMessage)
+        flashOSCIndicator()
+    }
+
+    private func flashOSCIndicator() {
+        isOSCFlashing = true
+        oscFlashTimer?.invalidate()
+        let t = Timer(timeInterval: 0.15, repeats: false) { _ in
+            DispatchQueue.main.async {
+                isOSCFlashing = false
+            }
+        }
+        // .common so the flash still resets promptly even if the user is
+        // mid-drag on something else when messages are sent.
+        RunLoop.main.add(t, forMode: .common)
+        oscFlashTimer = t
     }
 
     private func openOSCMessagesWindow() {
@@ -1235,11 +1254,13 @@ struct ContentView: View {
     }
 
     // All snap-target times currently available: marker positions, plus grid
-    // lines when the grid is visible.
-    private func snapCandidateTimes() -> [Double] {
+    // lines when the grid is visible. Uses the same thinned-out set that's
+    // actually rendered (visibleGridLineTimes), so snapping never lands on
+    // a grid line that isn't visible on screen.
+    private func snapCandidateTimes(largeurTimeline: Double) -> [Double] {
         var times = pistes[0].evenements.map { $0.time }
         if showGrid {
-            times.append(contentsOf: gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree))
+            times.append(contentsOf: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)))
         }
         return times
     }
@@ -1263,7 +1284,7 @@ struct ContentView: View {
     // grid lines (used for the ⌘-driven snap, and the hover snap-cursor
     // indicator, which treat both the same way).
     private func nearestSnapTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: snapCandidateTimes(), xPos: xPos, largeurTimeline: largeurTimeline)
+        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline), xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
     // Markers only (no grid lines) — the counterpart to nearestGridTime,
@@ -1273,10 +1294,12 @@ struct ContentView: View {
     }
 
     // Grid lines only (no markers) — used for "magnetic grid" auto-snap,
-    // which should never pull a point onto a marker without ⌘.
+    // which should never pull a point onto a marker without ⌘. Matches the
+    // thinned-out set actually rendered on screen (visibleGridLineTimes),
+    // so you can never snap to a line you can't see.
     private func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
         guard showGrid else { return nil }
-        return nearestTime(among: gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree), xPos: xPos, largeurTimeline: largeurTimeline)
+        return nearestTime(among: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
     // When both a marker and a grid line are within the snap zone, which one
@@ -1339,6 +1362,31 @@ struct ContentView: View {
             n += 1
         }
         return times
+    }
+
+    // For DISPLAY only (never for snapping, which stays at full granularity):
+    // thins out the grid lines when their pixel spacing would be too dense
+    // to read — e.g. a 1s grid period over a 5-minute track at fit-to-window
+    // zoom would otherwise pack hundreds of dashed lines into a tiny space.
+    // Keeps every Nth line (N = smallest power-of-two-ish multiplier that
+    // brings the spacing above a legible minimum) instead of changing the
+    // actual period itself.
+    private func visibleGridLineTimes(largeurTimeline: CGFloat) -> [Double] {
+        let allTimes = gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree)
+        guard duree > 0, gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
+        let pixelsPerLine = largeurTimeline * CGFloat(gridPeriod / duree)
+        let minSpacing: CGFloat = 16
+        guard pixelsPerLine < minSpacing else { return allTimes }
+        // How many consecutive lines to fold into one to reach minSpacing —
+        // rounded up to a "nice" step (1, 2, 5, 10, 20, 50...) so the
+        // remaining visible lines still land on clean multiples of the
+        // original period rather than an arbitrary skip count.
+        let rawSkip = Double(minSpacing / pixelsPerLine)
+        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+        let skip = niceSteps.first(where: { $0 >= rawSkip }) ?? (niceSteps.last ?? 1000)
+        return allTimes.enumerated().compactMap { index, time in
+            index % Int(skip) == 0 ? time : nil
+        }
     }
 
     private func commitGridSettings() {
@@ -1750,6 +1798,8 @@ struct ContentView: View {
             fullScreenExitObserver = nil
         }
         stopDurationDragTimer()
+        oscFlashTimer?.invalidate()
+        oscFlashTimer = nil
     }
 
     // Recenters the horizontal scroll so the playhead stays at the same
@@ -1938,6 +1988,19 @@ struct ContentView: View {
                     .font(.body)
                     .offset(x: 100)
             }
+            Text("Duration \(formattedDuration(duree))")
+                .font(.caption2)
+                .foregroundColor(.gray)
+                .offset(x: -220)
+            HStack(spacing: 4) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 6))
+                Text("OSC")
+                    .font(.caption2)
+                    .fontWeight(.bold)
+            }
+            .foregroundColor(isOSCFlashing ? .yellow : .clear)
+            .offset(x: 220)
         }
         .frame(height: 32)
         .padding(.top, isFullScreen ? 0 : 30)
@@ -2852,10 +2915,12 @@ struct ContentView: View {
                                                                     .fill(pistes[index].couleur)
                                                                     .frame(width: 6, height: 6)
 
-                                                                Text(String(format: "%.2f", event.time) + "s")
-                                                                    .font(.caption2)
-                                                                    .foregroundColor(.white)
-                                                                    .offset(y: 12)
+                                                                if showPointCoordinates {
+                                                                    Text(String(format: "%.2f", event.time) + "s")
+                                                                        .font(.caption2)
+                                                                        .foregroundColor(.white)
+                                                                        .offset(y: 12)
+                                                                }
                                                             }
                                                         } else {
                                                             if pistes[index].type == .message {
@@ -3026,7 +3091,7 @@ struct ContentView: View {
                                 // tracks (period/phase set via double-clicking the grid button),
                                 // same span as the marker lines above but dashed and purely visual.
                                 if showGrid {
-                                    ForEach(gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree), id: \.self) { time in
+                                    ForEach(visibleGridLineTimes(largeurTimeline: largeurTimeline), id: \.self) { time in
                                         let xPos = CGFloat(time / duree) * largeurTimeline + 140
                                         Path { path in
                                             path.move(to: CGPoint(x: xPos, y: 15))
@@ -3484,7 +3549,7 @@ struct ContentView: View {
                 .padding(.bottom, 4)
 
             HStack {
-                Text("T (s.)")
+                Text("T mini (s.)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
                 TextField("", text: $gridPeriodString)
@@ -3504,7 +3569,7 @@ struct ContentView: View {
                     .foregroundColor(.gray.opacity(0.7))
                 Picker("", selection: $magneticGridSnap) {
                     Text("⌘ + clic").tag(false)
-                    Text("Magnetic grid").tag(true)
+                    Text("Magnetic").tag(true)
                 }
                 .pickerStyle(.segmented)
             }
@@ -3618,3 +3683,4 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
