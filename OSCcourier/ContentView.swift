@@ -152,8 +152,12 @@ struct TimelineTrack: Identifiable, Codable {
     // When true, the track's header is collapsed to just its name, the
     // fold triangle, and the reorder handle — its points/curves are hidden.
     var isFolded: Bool = false
+    // Step tracks only: when true, the track is in "Gate" mode (boolean
+    // 0/1 values, min/max locked to 0...1, no range editing) instead of
+    // "Float" mode (arbitrary min/max range). Unused by curve tracks.
+    var isGate: Bool = false
 
-    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false) {
+    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false) {
         self.id = id
         self.nom = nom
         self.couleur = couleur
@@ -164,10 +168,11 @@ struct TimelineTrack: Identifiable, Codable {
         self.maxAmplitude = maxAmplitude
         self.height = height
         self.isFolded = isFolded
+        self.isGate = isGate
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded
+        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate
     }
 
     init(from decoder: Decoder) throws {
@@ -183,6 +188,7 @@ struct TimelineTrack: Identifiable, Codable {
         height = CGFloat(try container.decode(Double.self, forKey: .height))
         // Absent from older save files — default to unfolded rather than failing to decode.
         isFolded = try container.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
+        isGate = try container.decodeIfPresent(Bool.self, forKey: .isGate) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -197,6 +203,7 @@ struct TimelineTrack: Identifiable, Codable {
         try container.encode(maxAmplitude, forKey: .maxAmplitude)
         try container.encode(Double(height), forKey: .height)
         try container.encode(isFolded, forKey: .isFolded)
+        try container.encode(isGate, forKey: .isGate)
     }
 }
 
@@ -628,6 +635,8 @@ struct ContentView: View {
     @State private var fullScreenExitObserver: Any?
     @State private var tempMinAmplitude: String = "0"
     @State private var tempMaxAmplitude: String = "1"
+    @State private var tempIsGate: Bool = false
+    @State private var pendingGateSwitchIndex: Int? = nil
     @State private var messagesWindowController: NSWindowController?
     @State private var pdfWindowController: NSWindowController?
     // Remembers the file chosen on the first Save, so subsequent saves
@@ -665,6 +674,16 @@ struct ContentView: View {
     private func rowHeight(for piste: TimelineTrack) -> CGFloat {
         if piste.isFolded { return foldedTrackHeight }
         return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
+    }
+
+    // In "Gate" mode, a step track's points are strictly boolean: snaps any
+    // continuous y to whichever of the track's min/max it's closer to,
+    // instead of leaving it at an arbitrary in-between value. No-op for
+    // Float mode or non-step tracks.
+    private func gateSnappedY(_ y: Double, forTrackIndex index: Int) -> Double {
+        guard pistes[index].type == .step, pistes[index].isGate else { return y }
+        let midpoint = (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2
+        return y >= midpoint ? pistes[index].maxAmplitude : pistes[index].minAmplitude
     }
 
     // A lightweight, non-interactive "ghost" preview of a folded track's
@@ -1726,7 +1745,7 @@ struct ContentView: View {
             pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), duree)
             if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(nouvelleYString) {
                 let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = constrainedY
+                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrackIndex: trackIndex)
             }
             if trackIndex == 0 || pistes[trackIndex].type == .message {
                 pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
@@ -1737,12 +1756,43 @@ struct ContentView: View {
         pointAEditer = nil
     }
 
+    // Actually performs the Float -> Gate switch: forces the 0...1 range and
+    // snaps every existing point to strict boolean 0/1. Split out from
+    // commitAmplitudeEdit so it can be deferred behind a confirmation when
+    // there are existing points to redistribute.
+    private func applyGateModeSwitch(forTrackIndex index: Int) {
+        pistes[index].isGate = true
+        pistes[index].minAmplitude = 0
+        pistes[index].maxAmplitude = 1
+        for i in pistes[index].evenements.indices {
+            pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
+        }
+        lastSentEvents.removeAll()
+    }
+
     private func commitAmplitudeEdit() {
-        if let index = amplitudeEditorTrackIndex,
-           let minVal = Double(tempMinAmplitude),
-           let maxVal = Double(tempMaxAmplitude) {
-            pistes[index].minAmplitude = minVal
-            pistes[index].maxAmplitude = maxVal
+        guard let index = amplitudeEditorTrackIndex else {
+            amplitudeEditorTrackIndex = nil
+            return
+        }
+        if pistes[index].type == .step && tempIsGate {
+            // Switching FROM Float TO Gate with existing points would
+            // silently redistribute all their values to 0/1 — warn first
+            // instead, and only apply once the user confirms.
+            if !pistes[index].isGate && !pistes[index].evenements.isEmpty {
+                pendingGateSwitchIndex = index
+                amplitudeEditorTrackIndex = nil
+                return
+            }
+            applyGateModeSwitch(forTrackIndex: index)
+        } else {
+            if pistes[index].type == .step {
+                pistes[index].isGate = false
+            }
+            if let minVal = Double(tempMinAmplitude), let maxVal = Double(tempMaxAmplitude) {
+                pistes[index].minAmplitude = minVal
+                pistes[index].maxAmplitude = maxVal
+            }
         }
         amplitudeEditorTrackIndex = nil
     }
@@ -2241,39 +2291,67 @@ struct ContentView: View {
                                                     let bottomY = trackHeight - curveMargin
                                                     let tickWidth: CGFloat = 6
 
-                                                    ZStack(alignment: .topLeading) {
-                                                        HStack(spacing: 3) {
-                                                            Rectangle()
-                                                                .fill(Color.gray.opacity(0.5))
-                                                                .frame(width: tickWidth, height: 1)
-                                                            Text(String(format: "%.2f", pistes[index].maxAmplitude))
-                                                                .font(.caption2)
-                                                                .foregroundColor(.gray.opacity(0.5))
-                                                        }
-                                                        .offset(y: topY - 6)
+                                                    if pistes[index].type == .step && pistes[index].isGate {
+                                                        // Gate mode is strictly boolean — no middle value, so just
+                                                        // show TRUE (top) / FALSE (bottom) instead of 3 numeric ticks.
+                                                        ZStack(alignment: .topLeading) {
+                                                            HStack(spacing: 3) {
+                                                                Rectangle()
+                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .frame(width: tickWidth, height: 1)
+                                                                Text("OPEN")
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray.opacity(0.5))
+                                                            }
+                                                            .offset(y: topY - 6)
 
-                                                        HStack(spacing: 3) {
-                                                            Rectangle()
-                                                                .fill(Color.gray.opacity(0.5))
-                                                                .frame(width: tickWidth, height: 1)
-                                                            Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
-                                                                .font(.caption2)
-                                                                .foregroundColor(.gray.opacity(0.5))
+                                                            HStack(spacing: 3) {
+                                                                Rectangle()
+                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .frame(width: tickWidth, height: 1)
+                                                                Text("CLOSED")
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray.opacity(0.5))
+                                                            }
+                                                            .offset(y: bottomY - 6)
                                                         }
-                                                        .offset(y: midY - 6)
+                                                        .frame(width: 60, height: trackHeight, alignment: .topLeading)
+                                                        .offset(x: 144)
+                                                    } else {
+                                                        ZStack(alignment: .topLeading) {
+                                                            HStack(spacing: 3) {
+                                                                Rectangle()
+                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .frame(width: tickWidth, height: 1)
+                                                                Text(String(format: "%.2f", pistes[index].maxAmplitude))
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray.opacity(0.5))
+                                                            }
+                                                            .offset(y: topY - 6)
 
-                                                        HStack(spacing: 3) {
-                                                            Rectangle()
-                                                                .fill(Color.gray.opacity(0.5))
-                                                                .frame(width: tickWidth, height: 1)
-                                                            Text(String(format: "%.2f", pistes[index].minAmplitude))
-                                                                .font(.caption2)
-                                                                .foregroundColor(.gray.opacity(0.5))
+                                                            HStack(spacing: 3) {
+                                                                Rectangle()
+                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .frame(width: tickWidth, height: 1)
+                                                                Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray.opacity(0.5))
+                                                            }
+                                                            .offset(y: midY - 6)
+
+                                                            HStack(spacing: 3) {
+                                                                Rectangle()
+                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .frame(width: tickWidth, height: 1)
+                                                                Text(String(format: "%.2f", pistes[index].minAmplitude))
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray.opacity(0.5))
+                                                            }
+                                                            .offset(y: bottomY - 6)
                                                         }
-                                                        .offset(y: bottomY - 6)
+                                                        .frame(width: 60, height: trackHeight, alignment: .topLeading)
+                                                        .offset(x: 144)
                                                     }
-                                                    .frame(width: 60, height: trackHeight, alignment: .topLeading)
-                                                    .offset(x: 144)
                                                 }
 
                                                 if !pistes[index].isFolded {
@@ -2314,6 +2392,7 @@ struct ContentView: View {
                                                                 amplitudeEditorTrackIndex = index
                                                                 tempMinAmplitude = String(format: "%.2f", pistes[index].minAmplitude)
                                                                 tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
+                                                                tempIsGate = pistes[index].isGate
                                                             }) {
                                                                 Image(systemName: "slider.horizontal.3")
                                                             }
@@ -2507,7 +2586,7 @@ struct ContentView: View {
                                                             let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
                                                             let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                                                             let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: yValue))
+                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: gateSnappedY(yValue, forTrackIndex: index)))
                                                             pistes[index].evenements.sort()
                                                             lastSentEvents.removeAll()
                                                         }
@@ -2717,7 +2796,7 @@ struct ContentView: View {
                                                                     if pistes[index].type == .curve || pistes[index].type == .step {
                                                                         let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
                                                                         let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                                        pistes[index].evenements[eventIndex].y = yValue
+                                                                        pistes[index].evenements[eventIndex].y = gateSnappedY(yValue, forTrackIndex: index)
                                                                     }
                                                                 }
                                                             }
@@ -2985,6 +3064,22 @@ struct ContentView: View {
         } message: {
             Text("This track already has points. Autofill will replace them all.")
         }
+        .alert("Switch to Gate?", isPresented: Binding<Bool>(
+            get: { pendingGateSwitchIndex != nil },
+            set: { if !$0 { pendingGateSwitchIndex = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                pendingGateSwitchIndex = nil
+            }
+            Button("Continue", role: .destructive) {
+                if let index = pendingGateSwitchIndex {
+                    applyGateModeSwitch(forTrackIndex: index)
+                }
+                pendingGateSwitchIndex = nil
+            }
+        } message: {
+            Text("This track already has points. Switching to Gate will redistribute all their values to 0 or 1.")
+        }
         .alert("Rename track", isPresented: Binding<Bool>(
             get: { indexPisteARenommer != nil },
             set: { if !$0 { indexPisteARenommer = nil } }
@@ -3014,23 +3109,13 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { pointAEditer = nil }
         }
-        .alert("Amplitude", isPresented: Binding<Bool>(
+        return withAlerts2
+        .sheet(isPresented: Binding<Bool>(
             get: { amplitudeEditorTrackIndex != nil },
             set: { if !$0 { amplitudeEditorTrackIndex = nil } }
         )) {
-            VStack(spacing: 10) {
-                TextField("max", text: $tempMaxAmplitude)
-                TextField("min", text: $tempMinAmplitude)
-            }
-            Button("OK") {
-                commitAmplitudeEdit()
-            }
-            Button("Cancel", role: .cancel) {
-                amplitudeEditorTrackIndex = nil
-            }
+            rangeEditorSheet
         }
-
-        return withAlerts2
         .sheet(isPresented: Binding<Bool>(
             get: { autofillTrackIndex != nil },
             set: { if !$0 { autofillTrackIndex = nil } }
@@ -3110,7 +3195,7 @@ struct ContentView: View {
 
     private var autofillWaveSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Autofill Wave")
+            Text("Autofill Curve")
                 .font(.headline)
                 .padding(.bottom, 4)
 
@@ -3140,11 +3225,15 @@ struct ContentView: View {
                     .disabled(waveIsSine)
             }
             HStack {
-                Text("Amp. min/max")
+                Text("Range")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("min.", text: $waveAmpMinString)
-                TextField("max.", text: $waveAmpMaxString)
+                Text("min")
+                    .foregroundColor(.gray.opacity(0.7))
+                TextField("", text: $waveAmpMinString)
+                Text("max")
+                    .foregroundColor(.gray.opacity(0.7))
+                TextField("", text: $waveAmpMaxString)
             }
 
             HStack {
@@ -3237,6 +3326,56 @@ struct ContentView: View {
                 }
                 Button("OK") {
                     commitGridSettings()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
+    }
+
+    // Range editor for curve/step tracks. Curve tracks only ever show the
+    // min/max fields (Float behavior). Step tracks additionally get a
+    // Float/Gate toggle: Gate locks the range to 0...1 (boolean on/off) and
+    // hides the min/max fields entirely, since there's nothing to configure.
+    private var rangeEditorSheet: some View {
+        let isStepTrack = amplitudeEditorTrackIndex.map { pistes[$0].type == .step } ?? false
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Range")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            if isStepTrack {
+                Picker("", selection: $tempIsGate) {
+                    Text("Float").tag(false)
+                    Text("Gate").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if !isStepTrack || !tempIsGate {
+                HStack {
+                    Text("max")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 40, alignment: .trailing)
+                    TextField("max", text: $tempMaxAmplitude)
+                }
+                HStack {
+                    Text("min")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 40, alignment: .trailing)
+                    TextField("min", text: $tempMinAmplitude)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    amplitudeEditorTrackIndex = nil
+                }
+                Button("OK") {
+                    commitAmplitudeEdit()
                 }
                 .keyboardShortcut(.defaultAction)
             }
