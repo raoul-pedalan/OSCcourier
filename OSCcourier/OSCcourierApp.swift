@@ -76,7 +76,7 @@ struct OSCcourierApp: App {
                 .keyboardShortcut(.return, modifiers: [])
 
                 Toggle("Loop", isOn: $enBoucle)
-                    .keyboardShortcut("l", modifiers: [])
+                    .keyboardShortcut("c", modifiers: [])
 
                 Divider()
 

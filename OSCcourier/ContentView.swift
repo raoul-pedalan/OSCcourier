@@ -602,6 +602,9 @@ struct ContentView: View {
     @State private var bangTrackIndex: Int?
     @State private var bangPeriodString: String = "1.0"
     @State private var bangPhaseString: String = "0.0"
+    // Message tracks only: prefix used for generated labels ("prefix_1",
+    // "prefix_2", ...), replacing the previously hardcoded "key".
+    @State private var bangLabelPrefixString: String = "key"
     // Set when the pencil button is pressed on a track that already has
     // points, to show an "Overwrite track?" confirmation before opening
     // the actual autofill popup.
@@ -650,6 +653,22 @@ struct ContentView: View {
     @FocusState private var focusedField: ToolbarField?
     @State private var draggedTrackIndex: Int?
     @State private var dragStartHeight: CGFloat = 0
+    // Duration trim handle, pinned to the right edge of the window: drag
+    // horizontally to grow/shrink the track's total duration.
+    @State private var isDraggingDurationHandle: Bool = false
+    // Velocity-based drag: the horizontal offset from where the drag
+    // started controls the *rate* of change (seconds of duree per second
+    // held), rather than directly mapping to a duree delta. A repeating
+    // timer applies that rate continuously while the drag is held.
+    @State private var durationDragCurrentDeltaX: CGFloat = 0
+    @State private var durationDragTimer: Timer?
+    // How fast duree changes per second, per pixel of horizontal offset
+    // from the drag's start point.
+    // Non-linear speed curve: rate = sign(dx) * |dx|^exponent * scale.
+    // exponent > 1 makes small offsets noticeably slower (more precise) and
+    // large offsets noticeably faster than a plain linear mapping would.
+    private let durationDragVelocityExponent: Double = 1.8
+    private let durationDragVelocityScale: Double = 0.00126
     // Track reordering (drag handle in the header). "markers" (index 0) stays pinned.
     @State private var reorderingIndex: Int?
     @State private var reorderDragTranslation: CGFloat = 0
@@ -1468,6 +1487,7 @@ struct ContentView: View {
             bangTrackIndex = index
             bangPeriodString = "1.0"
             bangPhaseString = "0.0"
+            bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
         case .normal:
             break
         }
@@ -1547,17 +1567,27 @@ struct ContentView: View {
 
         let prev = position
         position += delta
+        var justLooped = false
         if position >= duree {
             position = 0.0
             if !enBoucle { enLecture = false }
             lastSentEvents.removeAll()
+            justLooped = true
         }
+        // Right on the tick where playback wraps back to 0, `prev` still
+        // holds the old (near-`duree`) position — comparing it directly
+        // against early event times would make the crossing check
+        // (prev < event.time <= position) fail for anything near the
+        // start, since prev is much larger than those times. Substitute a
+        // value below 0 for that one tick so events from the very start of
+        // the loop are correctly treated as freshly crossed.
+        let effectivePrev = justLooped ? -1.0 : prev
 
         for piste in pistes {
             guard piste.type == .bang, !piste.isMuted else { continue }
             let tol = 0.001
             for event in piste.evenements {
-                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
                 let key = piste.nom + "-" + String(event.time)
                 guard !lastSentEvents.contains(key) else { continue }
                 lastSentEvents.insert(key)
@@ -1574,7 +1604,7 @@ struct ContentView: View {
             guard piste.type == .message, !piste.isMuted else { continue }
             let tol = 0.001
             for event in piste.evenements {
-                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
                 let key = piste.nom + "-message-" + String(event.time)
                 guard !lastSentEvents.contains(key) else { continue }
                 lastSentEvents.insert(key)
@@ -1611,7 +1641,7 @@ struct ContentView: View {
             // (like every 50ms tick) would just flood the system uselessly.
             let tol = 0.001
             for event in piste.evenements {
-                guard prev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
                 let key = piste.nom + "-step-" + String(event.time)
                 guard !lastSentEvents.contains(key) else { continue }
                 lastSentEvents.insert(key)
@@ -1663,11 +1693,16 @@ struct ContentView: View {
         }
 
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        let playbackTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
             DispatchQueue.main.async {
                 advancePlaybackTick()
             }
         }
+        // .common (not just .default) so playback keeps ticking even while
+        // some other drag (a point, a track resize, the duration handle...)
+        // is actively being tracked elsewhere in the app.
+        RunLoop.main.add(playbackTimer, forMode: .common)
+        timer = playbackTimer
     }
 
     // Parses whatever is currently in the duration text field and applies it
@@ -1714,6 +1749,7 @@ struct ContentView: View {
             NotificationCenter.default.removeObserver(observer)
             fullScreenExitObserver = nil
         }
+        stopDurationDragTimer()
     }
 
     // Recenters the horizontal scroll so the playhead stays at the same
@@ -1842,12 +1878,22 @@ struct ContentView: View {
         if let index = bangTrackIndex,
            let period = Double(bangPeriodString),
            let phase = Double(bangPhaseString) {
+            let isMarkersTrack = index == 0
             let isMessageTrack = pistes[index].type == .message
+            let trimmedPrefix = bangLabelPrefixString.trimmingCharacters(in: .whitespaces)
+            let numberedLabelPrefix: String?
+            if isMarkersTrack {
+                numberedLabelPrefix = trimmedPrefix.isEmpty ? "M" : trimmedPrefix
+            } else if isMessageTrack {
+                numberedLabelPrefix = trimmedPrefix.isEmpty ? "key" : trimmedPrefix
+            } else {
+                numberedLabelPrefix = nil
+            }
             pistes[index].evenements = bangEvents(
                 period: period,
                 phase: phase,
                 duree: duree,
-                numberedLabelPrefix: isMessageTrack ? "key" : nil
+                numberedLabelPrefix: numberedLabelPrefix
             )
             lastSentEvents.removeAll()
         }
@@ -1871,6 +1917,10 @@ struct ContentView: View {
                 .font(.system(size: 20, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    showCommandBar = true
+                }
             Group {
                 if enLecture {
                     Image(systemName: "play.fill")
@@ -1891,6 +1941,118 @@ struct ContentView: View {
         }
         .frame(height: 32)
         .padding(.top, isFullScreen ? 0 : 30)
+    }
+
+    // A reserved margin strip pinned to the right edge of the window,
+    // spanning the full height (ruler + tracks): background matching the
+    // app's outer background, a thin vertical divider at its left edge, and
+    // a triangle handle at the top. Dragging the whole strip horizontally
+    // trims the track's total duration (right = longer, left = shorter),
+    // independent of scroll position or zoom.
+    // Starts the repeating timer that continuously applies the duration
+    // drag's current rate of change (see durationDragCurrentDeltaX) for as
+    // long as the drag is held — this is what makes it velocity-based
+    // rather than a one-shot position mapping.
+    private func startDurationDragTimer() {
+        durationDragTimer?.invalidate()
+        let tickInterval = 0.02
+        let newTimer = Timer(timeInterval: tickInterval, repeats: true) { _ in
+            DispatchQueue.main.async {
+                let dx = Double(durationDragCurrentDeltaX)
+                let magnitude = pow(abs(dx), durationDragVelocityExponent) * durationDragVelocityScale
+                let ratePerSecond = dx < 0 ? -magnitude : magnitude
+                let rawDuree = duree + ratePerSecond * tickInterval
+                let quantized = (rawDuree * 100).rounded() / 100
+                duree = max(0.1, quantized)
+                dureeText = formattedDuration(duree)
+            }
+        }
+        // Timer.scheduledTimer only runs in the .default run loop mode,
+        // which AppKit suspends while actively tracking a mouse drag (the
+        // run loop switches to .eventTracking mode during that time) — so
+        // the timer would silently never fire while the drag is held.
+        // Adding it in .common mode instead keeps it running throughout.
+        RunLoop.main.add(newTimer, forMode: .common)
+        durationDragTimer = newTimer
+    }
+
+    private func stopDurationDragTimer() {
+        durationDragTimer?.invalidate()
+        durationDragTimer = nil
+    }
+
+    private var durationDragHandle: some View {
+        ZStack(alignment: .top) {
+            Rectangle()
+                .fill(Color.gray.opacity(0.07))
+            Rectangle()
+                .fill(Color.gray.opacity(0.4))
+                .frame(width: 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "arrowtriangle.left.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.gray.opacity(0.7))
+                .offset(x: -3, y: -4)
+                .padding(.top, 6)
+        }
+        .overlay(alignment: .topTrailing) {
+            if isDraggingDurationHandle {
+                durationTooltip
+                    .fixedSize()
+                    .padding(.trailing, 3)
+                    .offset(y: 22)
+            }
+        }
+        .frame(width: 18)
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard !tracksLocked else { return }
+                    if !isDraggingDurationHandle {
+                        isDraggingDurationHandle = true
+                        startDurationDragTimer()
+                    }
+                    durationDragCurrentDeltaX = value.translation.width
+                }
+                .onEnded { _ in
+                    stopDurationDragTimer()
+                    isDraggingDurationHandle = false
+                    durationDragCurrentDeltaX = 0
+                }
+        )
+        .onHover { hovering in
+            if hovering {
+                NSCursor.resizeLeftRight.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .help("Drag to change duration")
+    }
+
+    // Small callout bubble shown while dragging the duration handle,
+    // pointing up at it from below, displaying the exact duration
+    // (mm:ss:cc) as it's being adjusted live. Anchored by its trailing edge
+    // (not centered) so the body always extends leftward into the window
+    // instead of overflowing past the right edge, since the handle itself
+    // sits right at that edge.
+    private var durationTooltip: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            UpPointingTriangle()
+                .fill(Color.black.opacity(0.85))
+                .frame(width: 10, height: 6)
+                .padding(.trailing, 8)
+            Text(formattedPosition(duree))
+                .font(.system(.caption, design: .monospaced))
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.85))
+                .cornerRadius(6)
+        }
     }
 
     var body: some View {
@@ -1960,6 +2122,10 @@ struct ContentView: View {
                     .frame(width: 120, height: 22)
                     .background(Color.black)
                     .cornerRadius(5)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        showCommandBar = false
+                    }
                     .overlay(alignment: .bottom) {
                         Text("position")
                             .font(.caption2)
@@ -2143,6 +2309,9 @@ struct ContentView: View {
                                 VStack(spacing: 0) {
                                     ZStack(alignment: .leading) {
                                         Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
+                                        if tracksLocked {
+                                            Rectangle().fill(Color.black).frame(width: 140, height: 24)
+                                        }
                                         Color.clear
                                             .contentShape(Rectangle())
                                             .frame(height: 24)
@@ -2910,6 +3079,9 @@ struct ContentView: View {
                     zoomX = min(zoomX, maxZoomX)
                 }
             }
+            .overlay(alignment: .trailing) {
+                durationDragHandle
+            }
 
         }
         .frame(minWidth: 1500, minHeight: 500)
@@ -3146,7 +3318,8 @@ struct ContentView: View {
     // pulling each sheet's content into its own typed computed property
     // gives it a much smaller, independent expression to check.
     private var autofillRectangleSheet: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let isGateTrack = autofillTrackIndex.map { pistes[$0].isGate } ?? false
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Rectangle")
                 .font(.headline)
                 .padding(.bottom, 4)
@@ -3170,11 +3343,17 @@ struct ContentView: View {
                 TextField("", text: $autofillPulseWidthString)
             }
             HStack {
-                Text("Amp. min/max")
+                Text("Range")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("min.", text: $autofillAmpMinString)
-                TextField("max.", text: $autofillAmpMaxString)
+                Text("min")
+                    .foregroundColor(.gray.opacity(0.7))
+                TextField("", text: $autofillAmpMinString)
+                    .disabled(isGateTrack)
+                Text("max")
+                    .foregroundColor(.gray.opacity(0.7))
+                TextField("", text: $autofillAmpMaxString)
+                    .disabled(isGateTrack)
             }
 
             HStack {
@@ -3253,8 +3432,11 @@ struct ContentView: View {
     }
 
     private var autofillBangSheet: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Autofill Bang")
+        let isMarkersTrack = bangTrackIndex == 0
+        let isMessageTrack = bangTrackIndex.map { pistes[$0].type == .message } ?? false
+        let title = isMarkersTrack ? "Autofill Markers" : (isMessageTrack ? "Autofill Message" : "Autofill Bang")
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(title)
                 .font(.headline)
                 .padding(.bottom, 4)
 
@@ -3269,6 +3451,14 @@ struct ContentView: View {
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
                 TextField("", text: $bangPhaseString)
+            }
+            if isMarkersTrack || isMessageTrack {
+                HStack {
+                    Text("Prefix")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 80, alignment: .trailing)
+                    TextField(isMarkersTrack ? "M" : "key", text: $bangLabelPrefixString)
+                }
             }
 
             HStack {
@@ -3383,6 +3573,19 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(width: 280)
+    }
+}
+
+// Small upward-pointing triangle used as the "tail" of the duration tooltip
+// bubble, so the bubble visually points up at the drag handle above it.
+struct UpPointingTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 
