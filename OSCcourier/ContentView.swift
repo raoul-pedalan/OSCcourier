@@ -641,6 +641,10 @@ struct ContentView: View {
     @State private var tempIsGate: Bool = false
     @State private var pendingGateSwitchIndex: Int? = nil
     @State private var messagesWindowController: NSWindowController?
+    // Explicit visibility tracking for the OSC messages window's Open/Close
+    // toggle — more reliable than reading NSWindow.isVisible directly.
+    @State private var isOSCWindowVisible: Bool = false
+    @State private var oscWindowCloseDelegate: OSCWindowCloseDelegate?
     @State private var pdfWindowController: NSWindowController?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
@@ -785,6 +789,7 @@ struct ContentView: View {
     @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
     @AppStorage("showGrid") private var showGrid: Bool = false
+    @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
     // Toggles between the full command bar (toolbar with all controls) and
     // a compact, full-width control line (position + play/loop indicators).
     @AppStorage("showCommandBar") private var showCommandBar: Bool = true
@@ -1014,10 +1019,10 @@ struct ContentView: View {
     // require ⌘ either way — this setting only affects grid-line snapping.
     @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
 
-    private func sendOSCMessage(_ message: String) {
+    private func sendOSCMessage(_ message: String, color: Color = .primary) {
         let fullMessage = oscAddressPrefix + message
         oscManager.sendMessage(fullMessage)
-        messageStore.addMessage(fullMessage)
+        messageStore.addMessage(fullMessage, color: color)
         flashOSCIndicator()
     }
 
@@ -1035,9 +1040,28 @@ struct ContentView: View {
         oscFlashTimer = t
     }
 
+    // Maps our AppearanceMode setting to the actual NSAppearance the
+    // window's native chrome (title bar, etc.) should use — nil for Auto
+    // lets AppKit follow the system appearance on its own.
+    private func nsAppearance(for mode: AppearanceMode) -> NSAppearance? {
+        switch mode {
+        case .auto: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+
     private func openOSCMessagesWindow() {
-        if messagesWindowController != nil {
-            messagesWindowController?.showWindow(nil)
+        let mode = AppearanceMode(rawValue: appearanceModeRaw) ?? .auto
+        if let controller = messagesWindowController {
+            controller.window?.appearance = nsAppearance(for: mode)
+            if isOSCWindowVisible {
+                controller.window?.close()
+                isOSCWindowVisible = false
+            } else {
+                controller.showWindow(nil)
+                isOSCWindowVisible = true
+            }
             return
         }
 
@@ -1056,6 +1080,18 @@ struct ContentView: View {
         window.setContentSize(NSSize(width: 220, height: 300))
         window.contentView = hostingView
         window.minSize = NSSize(width: 50, height: 300)
+        window.appearance = nsAppearance(for: mode)
+        // Without this, closing a manually-created NSWindow (not from a
+        // nib) can release it out from under us, leaving our controller
+        // holding a stale reference on the next toggle.
+        window.isReleasedWhenClosed = false
+
+        let delegate = OSCWindowCloseDelegate()
+        delegate.onClose = {
+            isOSCWindowVisible = false
+        }
+        window.delegate = delegate
+        oscWindowCloseDelegate = delegate
 
         // Top-right of the screen, with a small margin from the edges —
         // applied after setFrameAutosaveName so it always ends up there,
@@ -1071,6 +1107,7 @@ struct ContentView: View {
 
         messagesWindowController = NSWindowController(window: window)
         messagesWindowController?.showWindow(nil)
+        isOSCWindowVisible = true
     }
 
     // Generates a rectangular/pulse-train pattern of step events across [0, duree].
@@ -1549,9 +1586,9 @@ struct ContentView: View {
                     if abs(pos - event.time) < tol {
                         if piste.nom == "/markers" {
                             let label = event.label.isEmpty ? "marker" : event.label
-                            sendOSCMessage(piste.nom + " " + label)
+                            sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
                         } else {
-                            sendOSCMessage(piste.nom + " bang")
+                            sendOSCMessage(piste.nom + " bang", color: piste.couleur)
                         }
                     }
                 }
@@ -1559,27 +1596,25 @@ struct ContentView: View {
                 let tol = 0.01
                 for event in piste.evenements {
                     if abs(pos - event.time) < tol {
-                        sendOSCMessage(piste.nom + " " + event.label)
+                        sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
                     }
                 }
             } else if piste.type == .curve {
+                // Only speaks where the curve is actually drawn — strictly
+                // between its first and last point. Before the first point
+                // or after the last one, the track stays silent instead of
+                // continuously repeating the nearest endpoint's value.
                 let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
                 if sortedEvents.isEmpty { continue }
 
                 let lastEventBefore = sortedEvents.last(where: { $0.time <= pos })
                 let nextEvent = sortedEvents.first(where: { $0.time > pos })
 
-                if let lastEventBefore = lastEventBefore {
-                    if let nextEvent = nextEvent {
-                        let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                        let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                        let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                        sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY))
-                    } else {
-                        sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
-                    }
-                } else if let firstEvent = sortedEvents.first {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+                if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent {
+                    let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
+                    let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
+                    let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
                 }
             } else if piste.type == .step {
                 // Zero-order hold: send the last event's value as-is, never interpolated.
@@ -1587,9 +1622,9 @@ struct ContentView: View {
                 if sortedEvents.isEmpty { continue }
 
                 if let lastEventBefore = sortedEvents.last(where: { $0.time <= pos }) {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y), color: piste.couleur)
                 } else if let firstEvent = sortedEvents.first {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y), color: piste.couleur)
                 }
             }
         }
@@ -1641,9 +1676,9 @@ struct ContentView: View {
                 lastSentEvents.insert(key)
                 if piste.nom == "/markers" {
                     let label = event.label.isEmpty ? "marker" : event.label
-                    sendOSCMessage(piste.nom + " " + label)
+                    sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
                 } else {
-                    sendOSCMessage(piste.nom + " bang")
+                    sendOSCMessage(piste.nom + " bang", color: piste.couleur)
                 }
             }
         }
@@ -1656,29 +1691,25 @@ struct ContentView: View {
                 let key = piste.nom + "-message-" + String(event.time)
                 guard !lastSentEvents.contains(key) else { continue }
                 lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + event.label)
+                sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
             }
         }
 
         for piste in pistes {
             guard piste.type == .curve, !piste.isMuted else { continue }
+            // Only speaks where the curve is actually drawn — see the same
+            // comment in sendOSCMessagesForPosition.
             let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
             if sortedEvents.isEmpty { continue }
 
             let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
             let nextEvent = sortedEvents.first(where: { $0.time > position })
 
-            if let lastEventBefore = lastEventBefore {
-                if let nextEvent = nextEvent {
-                    let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                    let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                    let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY))
-                } else {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y))
-                }
-            } else if let firstEvent = sortedEvents.first {
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y))
+            if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent {
+                let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
+                let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
+                let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
+                sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
             }
         }
 
@@ -1693,7 +1724,7 @@ struct ContentView: View {
                 let key = piste.nom + "-step-" + String(event.time)
                 guard !lastSentEvents.contains(key) else { continue }
                 lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y))
+                sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y), color: piste.couleur)
             }
         }
     }
@@ -1960,6 +1991,19 @@ struct ContentView: View {
     // enLecture == false with position back at 0 (which Stop always does,
     // unlike Pause), and show nothing in that case per the spec ("rien si
     // stop").
+    // Two-tone "Duration mm:ss" label for the compact command bar, built via
+    // AttributedString rather than concatenating separate Text views with
+    // `+` (deprecated since macOS 26 in favor of string interpolation /
+    // AttributedString for per-segment styling).
+    private var durationLabelText: Text {
+        var attributed = AttributedString("Duration ")
+        attributed.foregroundColor = .gray
+        var value = AttributedString(formattedDuration(duree))
+        value.foregroundColor = Color(red: 0.3, green: 0.6, blue: 1.0)
+        attributed.append(value)
+        return Text(attributed)
+    }
+
     private var compactControlBar: some View {
         ZStack {
             Rectangle().fill(Color.black)
@@ -1988,9 +2032,8 @@ struct ContentView: View {
                     .font(.body)
                     .offset(x: 100)
             }
-            Text("Duration \(formattedDuration(duree))")
+            durationLabelText
                 .font(.caption2)
-                .foregroundColor(.gray)
                 .offset(x: -220)
             HStack(spacing: 4) {
                 Image(systemName: "circle.fill")
@@ -2893,7 +2936,7 @@ struct ContentView: View {
                                                     let xPos = CGFloat(event.time / duree) * largeurTimeline
                                                     let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
                                                     let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
-                                                    let pointY = (pistes[index].type == .curve || pistes[index].type == .step) ? curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY) : (index == 0 ? 15 : 15)
+                                                    let pointY = (pistes[index].type == .curve || pistes[index].type == .step) ? curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY) : (index == 0 ? 22 : 15)
 
                                                     if (pistes[index].type == .bang && index != 0) || pistes[index].type == .message {
                                                         Rectangle()
@@ -2905,11 +2948,6 @@ struct ContentView: View {
 
                                                     VStack(spacing: 0) {
                                                         if index == 0 {
-                                                            Text(event.label)
-                                                                .font(.caption2)
-                                                                .foregroundColor(.gray)
-                                                                .offset(y: 3)
-
                                                             ZStack {
                                                                 Rectangle()
                                                                     .fill(pistes[index].couleur)
@@ -2922,6 +2960,19 @@ struct ContentView: View {
                                                                         .offset(y: 12)
                                                                 }
                                                             }
+                                                            .overlay(alignment: .top) {
+                                                                Text(event.label)
+                                                                    .font(.caption2)
+                                                                    .foregroundColor(.gray)
+                                                                    .fixedSize()
+                                                                    .offset(y: showPointCoordinates ? -12 : -16)
+                                                            }
+                                                            // Label-to-square gap stays fixed (via the overlay above);
+                                                            // this shifts the whole rigid group down a bit when the
+                                                            // coordinate text is hidden, so it stays roughly centered
+                                                            // in the track rather than sitting high with empty space
+                                                            // below it.
+                                                            .offset(y: showPointCoordinates ? 0 : 6)
                                                         } else {
                                                             if pistes[index].type == .message {
                                                                 Text(event.label)
@@ -2962,18 +3013,25 @@ struct ContentView: View {
                                                                 let labelAbove = normalizedY < 0.5
                                                                 Group {
                                                                     if pistes[index].type == .step {
-                                                                        ZStack {
+                                                                        if pistes[index].isGate {
                                                                             Rectangle()
-                                                                                .fill(pistes[index].couleur)
-                                                                                .frame(width: 17, height: 3)
-                                                                                .rotationEffect(.degrees(45))
-                                                                            Rectangle()
-                                                                                .fill(pistes[index].couleur)
-                                                                                .frame(width: 17, height: 3)
-                                                                                .rotationEffect(.degrees(-45))
+                                                                                .stroke(pistes[index].couleur, lineWidth: 2.5)
+                                                                                .frame(width: 10, height: 10)
+                                                                                .contentShape(Rectangle())
+                                                                        } else {
+                                                                            ZStack {
+                                                                                Rectangle()
+                                                                                    .fill(pistes[index].couleur)
+                                                                                    .frame(width: 17, height: 3)
+                                                                                    .rotationEffect(.degrees(45))
+                                                                                Rectangle()
+                                                                                    .fill(pistes[index].couleur)
+                                                                                    .frame(width: 17, height: 3)
+                                                                                    .rotationEffect(.degrees(-45))
+                                                                            }
+                                                                            .frame(width: 17, height: 17)
+                                                                            .contentShape(Rectangle())
                                                                         }
-                                                                        .frame(width: 17, height: 17)
-                                                                        .contentShape(Rectangle())
                                                                     } else {
                                                                         Circle()
                                                                             .fill(pistes[index].couleur)
@@ -3160,6 +3218,10 @@ struct ContentView: View {
         }
         .onChange(of: oscReceivePort) { _, newPort in
             oscManager.startListening(port: newPort)
+        }
+        .onChange(of: appearanceModeRaw) { _, newValue in
+            let mode = AppearanceMode(rawValue: newValue) ?? .auto
+            messagesWindowController?.window?.appearance = nsAppearance(for: mode)
         }
 
         let withReceives1 = baseContent
@@ -3654,6 +3716,17 @@ struct UpPointingTriangle: Shape {
     }
 }
 
+// Tracks whether the outgoing-OSC-messages window is actually still open,
+// independent of NSWindow.isVisible (which can lag/misreport around
+// close()/showWindow() calls) — explicit state set via this delegate is
+// more reliable for the Open/Close toggle behavior.
+class OSCWindowCloseDelegate: NSObject, NSWindowDelegate {
+    var onClose: (() -> Void)?
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+}
+
 struct Polygon: Shape {
     let sides: Int
     let size: CGFloat
@@ -3683,4 +3756,3 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
-

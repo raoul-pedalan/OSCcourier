@@ -7,6 +7,31 @@
 
 import SwiftUI
 
+// Shared appearance setting: "Auto" follows the system, "Light"/"Dark" force
+// a specific scheme. Backed by a plain String @AppStorage (rather than a
+// Bool) since it now has 3 states, and used both for the main window
+// (OSCcourierApp) and the outgoing-OSC-messages window (ContentView), so
+// both stay in sync via the same UserDefaults key.
+enum AppearanceMode: String, CaseIterable {
+    case auto, light, dark
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .auto: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
 // Disables macOS's automatic window-tabbing feature (which is what injects
 // "Show Tab Bar" / "Show All Tabs" into the View menu on its own — this is
 // AppKit-level behavior, not something controllable via SwiftUI's Commands
@@ -20,9 +45,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct OSCcourierApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    // Shared with SettingsView via the same @AppStorage key, and persisted
-    // across launches automatically (backed by UserDefaults).
-    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
+    // Shared with SettingsView and ContentView via the same @AppStorage key.
+    @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
     // Shared with ContentView via the same @AppStorage keys, so the menu's
     // Toggle checkmarks stay in sync with the actual toolbar/track state.
     @AppStorage("showGrid") private var showGrid: Bool = false
@@ -36,7 +60,7 @@ struct OSCcourierApp: App {
         WindowGroup {
             ContentView()
                 .edgesIgnoringSafeArea(.top)
-                .preferredColorScheme(isDarkMode ? .dark : .light)
+                .preferredColorScheme((AppearanceMode(rawValue: appearanceModeRaw) ?? .auto).colorScheme)
         }
         .windowStyle(.titleBar)
         .commands {
@@ -145,7 +169,7 @@ struct OSCcourierApp: App {
                 Button("Open Outgoing OSC Message Window") {
                     NotificationCenter.default.post(name: .OSCcourierOpenOSCMessagesWindow, object: nil)
                 }
-                .keyboardShortcut(.downArrow, modifiers: .command)
+                .keyboardShortcut("m", modifiers: [])
             }
 
             CommandMenu("Tracks") {
@@ -199,13 +223,19 @@ struct OSCcourierApp: App {
 }
 
 struct SettingsView: View {
-    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
+    @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
     @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
     @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
 
     var body: some View {
         Form {
-            Toggle("Dark theme", isOn: $isDarkMode)
+            Picker("Appearance", selection: $appearanceModeRaw) {
+                ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.bottom, 12)
 
             Divider()
                 .padding(.horizontal, -20)
@@ -214,6 +244,6 @@ struct SettingsView: View {
             TextField("OSC receive port", value: $oscReceivePort, formatter: NumberFormatter())
         }
         .padding(20)
-        .frame(width: 300)
+        .frame(width: 380)
     }
 }
