@@ -103,14 +103,20 @@ struct TimelineEvent: Identifiable, Comparable, Codable {
     // segmentCurve's S-shape) — a plain concave/convex bow in one direction
     // only. Controlled by vertical drag on the segment.
     var segmentBulge: Double = 0
+    // Whether the segment starting at this point (curve tracks only) is
+    // drawn/played at all. Shift-clicking a segment's line toggles this,
+    // punching a silent "hole" in the curve — both endpoints stay exactly
+    // where they are, but nothing is drawn or sent between them.
+    var segmentEnabled: Bool = true
 
-    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0) {
+    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0, segmentEnabled: Bool = true) {
         self.id = id
         self.time = time
         self.label = label
         self.y = y
         self.segmentCurve = segmentCurve
         self.segmentBulge = segmentBulge
+        self.segmentEnabled = segmentEnabled
     }
 
     static func < (lhs: TimelineEvent, rhs: TimelineEvent) -> Bool {
@@ -249,24 +255,37 @@ struct CursorOverlay: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TrackingView, context: Context) {
+        let activeChanged = nsView.isActive != isActive
+        let symbolChanged = nsView.symbolName != symbolName
         nsView.symbolName = symbolName
-        let changed = nsView.isActive != isActive
         nsView.isActive = isActive
-        // cursorUpdate/mouseEntered only fire on actual mouse movement, so if
-        // isActive just flipped (e.g. Option pressed/released while the mouse
-        // sits still), force the cursor to update right now if the mouse
-        // happens to already be within this view.
-        guard changed, let window = nsView.window, window.isKeyWindow else { return }
+        // cursorUpdate/mouseEntered only fire on actual mouse movement (or on
+        // a tracking-area boundary crossing), so if isActive just flipped
+        // (e.g. Option pressed/released with the mouse sitting still) — or
+        // the symbol changed while already active (e.g. sliding from a live
+        // segment straight into a hole without leaving the zone) — force
+        // the cursor to update right now if the mouse happens to already be
+        // within this view.
+        guard (activeChanged || symbolChanged), let window = nsView.window, window.isKeyWindow else { return }
         let mouseLocation = nsView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard nsView.bounds.contains(mouseLocation) else { return }
         if isActive {
-            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(config) ?? NSImage()
-            NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8)).set()
+            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
         } else {
             NSCursor.arrow.set()
         }
+    }
+
+    // Builds a cursor-sized NSImage for a system symbol name, falling back
+    // to a known-valid symbol (rather than a blank NSImage) if the name
+    // doesn't resolve — an invalid name would otherwise silently produce an
+    // invisible cursor, which is very hard to notice while testing.
+    static func symbolImage(named symbolName: String) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
+            ?? NSImage()
+        return base.withSymbolConfiguration(config) ?? base
     }
 
     class TrackingView: NSView {
@@ -290,14 +309,14 @@ struct CursorOverlay: NSViewRepresentable {
         }
 
         override func cursorUpdate(with event: NSEvent) {
-            guard isActive else {
-                NSCursor.arrow.set()
-                return
-            }
-            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(config) ?? NSImage()
-            NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8)).set()
+            // When inactive, deliberately do NOTHING — don't force the
+            // arrow. This overlay sits stacked over the whole curve area,
+            // so an inactive overlay resetting to arrow on every
+            // cursorUpdate/mouseEntered was silently clobbering cursors
+            // set by other mechanisms underneath (e.g. the Shift
+            // erase/reconnect cursor applied from onContinuousHover).
+            guard isActive else { return }
+            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
         }
 
         override func mouseEntered(with event: NSEvent) {
@@ -305,7 +324,12 @@ struct CursorOverlay: NSViewRepresentable {
         }
 
         override func mouseExited(with event: NSEvent) {
-            NSCursor.arrow.set()
+            // Only reset if this overlay was the one that set a custom
+            // cursor (i.e. it's currently active) — an inactive overlay
+            // has no business resetting anything on the way out either.
+            if isActive {
+                NSCursor.arrow.set()
+            }
         }
     }
 }
@@ -617,6 +641,13 @@ struct ContentView: View {
     // enter/exit, not when a modifier key is pressed mid-hover).
     @State private var isHoveringPoint: Bool = false
     // Option-drag on a curve segment (Logic Pro automation-curve style).
+    // Whether the cursor is currently within the erase/bend zone (12px) of
+    // this hovered curve track's line. Boolean on purpose: it only changes
+    // on zone transitions (rare), unlike storing the raw hover position in
+    // @State, which changed every single pixel of mouse movement and forced
+    // a full body re-render per pixel — constantly rebuilding the hover
+    // stream and tracking areas, which is what silently broke both the
+    // Option and Shift hover cursors.
     @State private var isNearCurveControlZone: Bool = false
     @State private var isOptionHeldForCursor: Bool = false
     @State private var curveDragSegmentID: UUID?
@@ -789,7 +820,7 @@ struct ContentView: View {
     @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
     @AppStorage("showGrid") private var showGrid: Bool = false
-    @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
+    @AppStorage("oscMessagesPerSecond") private var oscMessagesPerSecond: Int = 20
     // Toggles between the full command bar (toolbar with all controls) and
     // a compact, full-width control line (position + play/loop indicators).
     @AppStorage("showCommandBar") private var showCommandBar: Bool = true
@@ -1040,21 +1071,11 @@ struct ContentView: View {
         oscFlashTimer = t
     }
 
-    // Maps our AppearanceMode setting to the actual NSAppearance the
-    // window's native chrome (title bar, etc.) should use — nil for Auto
-    // lets AppKit follow the system appearance on its own.
-    private func nsAppearance(for mode: AppearanceMode) -> NSAppearance? {
-        switch mode {
-        case .auto: return nil
-        case .light: return NSAppearance(named: .aqua)
-        case .dark: return NSAppearance(named: .darkAqua)
-        }
-    }
-
     private func openOSCMessagesWindow() {
-        let mode = AppearanceMode(rawValue: appearanceModeRaw) ?? .auto
+        // No per-window appearance handling here anymore: NSApp.appearance
+        // (set app-wide from the Appearance setting) already covers every
+        // window, including this one and its title bar.
         if let controller = messagesWindowController {
-            controller.window?.appearance = nsAppearance(for: mode)
             if isOSCWindowVisible {
                 controller.window?.close()
                 isOSCWindowVisible = false
@@ -1080,7 +1101,6 @@ struct ContentView: View {
         window.setContentSize(NSSize(width: 220, height: 300))
         window.contentView = hostingView
         window.minSize = NSSize(width: 50, height: 300)
-        window.appearance = nsAppearance(for: mode)
         // Without this, closing a manually-created NSWindow (not from a
         // nib) can release it out from under us, leaving our controller
         // holding a stale reference on the next toggle.
@@ -1201,6 +1221,55 @@ struct ContentView: View {
         return nil
     }
 
+    // Whether the segment containing `time` is currently a hole
+    // (segmentEnabled == false). Used to pick the erase vs. reconnect
+    // cursor symbol while hovering. Defaults to true (no hole) if there's
+    // no such segment.
+    private func isSegmentEnabled(forTime time: Double, trackIndex: Int) -> Bool {
+        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
+        guard sorted.count > 1 else { return true }
+        for i in 0..<(sorted.count - 1) {
+            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
+            return sorted[i].segmentEnabled
+        }
+        return true
+    }
+
+    // Directly applies the Shift segment-erase/reconnect cursor for a given
+    // mouse location, imperatively — called from the curve area's
+    // onContinuousHover on every real mouse movement. No @State involved,
+    // so it works regardless of SwiftUI's render cycle.
+    private func applyShiftSegmentCursor(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
+        let time = (Double(location.x) / Double(largeurTimeline)) * duree
+        if let curveY = curveYPosition(forTime: time, trackIndex: trackIndex),
+           abs(Double(location.y) - Double(curveY)) < 12 {
+            if isSegmentEnabled(forTime: time, trackIndex: trackIndex) {
+                cursor(fromSymbol: "eraser.fill").set()
+            } else {
+                cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
+            }
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+
+    // Toggles segmentEnabled on whichever segment (curve tracks only)
+    // contains `time`, punching or filling a silent "hole" in the curve.
+    // Both endpoints stay untouched — only the interpolation/OSC output
+    // between them is switched on or off.
+    private func toggleSegmentEnabled(forTime time: Double, trackIndex: Int) {
+        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
+        guard sorted.count > 1 else { return }
+        for i in 0..<(sorted.count - 1) {
+            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
+            if let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == sorted[i].id }) {
+                pistes[trackIndex].evenements[eventIndex].segmentEnabled.toggle()
+                lastSentEvents.removeAll()
+            }
+            return
+        }
+    }
+
     private func waveEvents(isSine: Bool, period: Double, phase: Double, skew: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
         guard period > 0 else { return [] }
         let phaseOffset = phase * period
@@ -1285,8 +1354,15 @@ struct ContentView: View {
     private func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
             .applying(.init(paletteColors: [color]))
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) ?? NSImage()
+        // Falls back to a known-valid symbol (rather than an empty NSImage)
+        // if `name` doesn't resolve — an invalid SF Symbol name would
+        // otherwise silently produce an invisible cursor, which is exactly
+        // the kind of bug that's very hard to notice/debug from testing
+        // alone.
+        let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
+            ?? NSImage()
+        let image = baseImage.withSymbolConfiguration(config) ?? baseImage
         return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 
@@ -1359,13 +1435,13 @@ struct ContentView: View {
         nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline) != nil
     }
 
-    // Applies the right cursor for the current hover + modifier-key state:
-    // shift = delete-point cursor, ⌘ = snap-to-marker/grid cursor (only once
-    // actually within the snap zone) — black if the snap target is a marker,
-    // gray if it's a grid line. Magnetic grid = same gray snap cursor even
-    // without ⌘ when near a grid line specifically (it only ever targets
-    // grid lines, never markers). Otherwise the default arrow (or nothing,
-    // if not hovering a point at all).
+    // Applies the right cursor for the current hover + modifier-key state
+    // while hovering an actual point. Curve-segment hover (Option-bend,
+    // Shift-erase/reconnect) is handled separately by CursorOverlay
+    // instances, which use AppKit's cursor-rect/tracking-area system —
+    // more reliable than ad-hoc NSCursor.set() calls during plain hover
+    // (macOS silently overrides those outside an active drag), which is
+    // why that logic doesn't live here.
     private func updatePointCursor() {
         guard isHoveringPoint else {
             NSCursor.arrow.set()
@@ -1610,7 +1686,7 @@ struct ContentView: View {
                 let lastEventBefore = sortedEvents.last(where: { $0.time <= pos })
                 let nextEvent = sortedEvents.first(where: { $0.time > pos })
 
-                if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent {
+                if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
                     let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
                     let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
                     let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
@@ -1705,7 +1781,7 @@ struct ContentView: View {
             let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
             let nextEvent = sortedEvents.first(where: { $0.time > position })
 
-            if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent {
+            if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
                 let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
                 let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
                 let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
@@ -1771,8 +1847,18 @@ struct ContentView: View {
             }
         }
 
+        startPlaybackTimer()
+    }
+
+    // (Re)creates the playback timer at the interval implied by the current
+    // oscMessagesPerSecond setting (interval = 1 / rate). Called on setup and
+    // again whenever the rate changes mid-session, so the new rate takes
+    // effect immediately without needing to stop/restart playback.
+    private func startPlaybackTimer() {
         timer?.invalidate()
-        let playbackTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let rate = max(1, oscMessagesPerSecond)
+        let interval = 1.0 / Double(rate)
+        let playbackTimer = Timer(timeInterval: interval, repeats: true) { _ in
             DispatchQueue.main.async {
                 advancePlaybackTick()
             }
@@ -2771,7 +2857,17 @@ struct ContentView: View {
                                                         .frame(width: largeurTimeline, height: pistes[index].height)
                                                         .onTapGesture { location in
                                                             guard !tracksLocked else { return }
-                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                            let time = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                            // Shift + click near the drawn (or hypothetical, if
+                                                            // already a hole) curve line toggles that segment's
+                                                            // hole instead of adding a new point.
+                                                            if NSEvent.modifierFlags.contains(.shift),
+                                                               let curveY = curveYPosition(forTime: time, trackIndex: index),
+                                                               abs(Double(location.y) - Double(curveY)) < 12 {
+                                                                toggleSegmentEnabled(forTime: time, trackIndex: index)
+                                                                return
+                                                            }
+                                                            let positionCliquee = time
                                                             let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                                                             let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
                                                             pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: yValue))
@@ -2781,14 +2877,39 @@ struct ContentView: View {
                                                         .onContinuousHover { phase in
                                                             switch phase {
                                                             case .active(let location):
+                                                                // Compute everything locally; only write @State when the
+                                                                // value actually changes, so plain mouse movement doesn't
+                                                                // trigger a body re-render per pixel (which is what broke
+                                                                // the hover stream in a previous iteration).
                                                                 let time = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                                let nearZone: Bool
                                                                 if let curveY = curveYPosition(forTime: time, trackIndex: index) {
-                                                                    isNearCurveControlZone = abs(Double(location.y) - Double(curveY)) < 12
+                                                                    nearZone = abs(Double(location.y) - Double(curveY)) < 12
                                                                 } else {
-                                                                    isNearCurveControlZone = false
+                                                                    nearZone = false
+                                                                }
+                                                                if isNearCurveControlZone != nearZone {
+                                                                    isNearCurveControlZone = nearZone
+                                                                }
+                                                                // Receiving this hover means the mouse is on the curve
+                                                                // area itself, NOT on a point (points are separate
+                                                                // subviews stacked above; they intercept hover) — so
+                                                                // isHoveringPoint is stale if still true. That stale
+                                                                // true was making updatePointCursor() impose the
+                                                                // delete-point cursor (eraser.badge.xmark) here.
+                                                                if isHoveringPoint {
+                                                                    isHoveringPoint = false
+                                                                }
+                                                                // Direct, imperative cursor control tied to actual
+                                                                // mouse movement — no @State involved, so it works
+                                                                // regardless of SwiftUI's render cycle.
+                                                                if NSEvent.modifierFlags.contains(.shift) {
+                                                                    applyShiftSegmentCursor(at: location, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                 }
                                                             case .ended:
-                                                                isNearCurveControlZone = false
+                                                                if isNearCurveControlZone {
+                                                                    isNearCurveControlZone = false
+                                                                }
                                                             }
                                                         }
                                                         // Attached simultaneously (not exclusively) so it never
@@ -2885,7 +3006,11 @@ struct ContentView: View {
                                                                 path.move(to: point)
                                                             } else {
                                                                 let previous = sortedEvents[i - 1]
-                                                                if previous.segmentCurve == 0 && previous.segmentBulge == 0 {
+                                                                if !previous.segmentEnabled {
+                                                                    // Disabled segment: break the path instead of
+                                                                    // drawing a line, leaving a visible gap.
+                                                                    path.move(to: point)
+                                                                } else if previous.segmentCurve == 0 && previous.segmentBulge == 0 {
                                                                     path.addLine(to: point)
                                                                 } else {
                                                                     // Sample the S-curve; x advances linearly with t (time
@@ -3053,6 +3178,12 @@ struct ContentView: View {
                                                     .position(x: xPos, y: pointY)
                                                     .onHover { hovering in
                                                         isHoveringPoint = hovering
+                                                        // A point is a separate subview stacked above the curve
+                                                        // line; moving onto it should stop the curve area from
+                                                        // being considered "hovered" for cursor purposes.
+                                                        if isNearCurveControlZone {
+                                                            isNearCurveControlZone = false
+                                                        }
                                                         if hovering {
                                                             isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
                                                             isNearGridSnapZone = nearestGridTime(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline)) != nil
@@ -3127,6 +3258,16 @@ struct ContentView: View {
                                         .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
                                         .zIndex(reorderingIndex == index ? 1 : 0)
                                         .opacity(reorderingIndex == index ? 0.85 : 1.0)
+                                        .onHover { hovering in
+                                            // Belt-and-suspenders: if the mouse leaves this entire track
+                                            // row (e.g. straight onto a different track) without passing
+                                            // back through the curve area's own hover handler, make sure
+                                            // the segment-erase cursor state doesn't stay stuck on.
+                                            if !hovering && isNearCurveControlZone {
+                                                isNearCurveControlZone = false
+                                                updatePointCursor()
+                                            }
+                                        }
                                         Rectangle().fill(Color.clear).frame(height: 5)
                                         } // end if index != 0 || showMarkersTrack
                                     }
@@ -3219,9 +3360,21 @@ struct ContentView: View {
         .onChange(of: oscReceivePort) { _, newPort in
             oscManager.startListening(port: newPort)
         }
-        .onChange(of: appearanceModeRaw) { _, newValue in
-            let mode = AppearanceMode(rawValue: newValue) ?? .auto
-            messagesWindowController?.window?.appearance = nsAppearance(for: mode)
+        .onChange(of: oscMessagesPerSecond) { _, _ in
+            // Only rebuild the timer if it's currently running — otherwise
+            // the new rate is picked up next time playback starts anyway.
+            if enLecture {
+                startPlaybackTimer()
+            }
+        }
+        .onChange(of: enLecture) { _, isPlaying in
+            // Rebuild the timer each time playback (re)starts, so it always
+            // uses the current oscMessagesPerSecond value — the setting may
+            // have been changed while stopped, in which case setupOnAppear's
+            // one-time timer would still be running at the old rate.
+            if isPlaying {
+                startPlaybackTimer()
+            }
         }
 
         let withReceives1 = baseContent

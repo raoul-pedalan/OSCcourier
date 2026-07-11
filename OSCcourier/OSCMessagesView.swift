@@ -3,26 +3,11 @@ import SwiftUI
 
 struct OSCMessagesView: View {
     @ObservedObject var messageStore: OSCMessageStore
-    // Same @AppStorage key as OSCcourierApp/SettingsView — reading it here
-    // directly means this view re-renders automatically whenever the
-    // setting changes, even while this window is already open, without
-    // ContentView needing to manually push an update into it.
-    @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
-
-    var body: some View {
-        // .preferredColorScheme only affects the environment seen by child
-        // views, not the view it's attached to — so the actual content
-        // lives in a separate child view below, which is the one that
-        // reads @Environment(\.colorScheme) to pick its colors. Reading it
-        // right here instead would still reflect the *inherited* (system)
-        // scheme, not the one being forced.
-        OSCMessagesContent(messageStore: messageStore)
-            .preferredColorScheme((AppearanceMode(rawValue: appearanceModeRaw) ?? .auto).colorScheme)
-    }
-}
-
-private struct OSCMessagesContent: View {
-    @ObservedObject var messageStore: OSCMessageStore
+    // Appearance is applied app-wide via NSApp.appearance (see
+    // AppearanceMode.apply in OSCcourierApp), so this view doesn't set any
+    // .preferredColorScheme of its own — it just reads the resolved scheme
+    // and picks colors from it. That's what keeps SwiftUI views and
+    // AppKit-backed chrome (title bar) from disagreeing.
     @Environment(\.colorScheme) private var colorScheme
 
     private var backgroundColor: Color {
