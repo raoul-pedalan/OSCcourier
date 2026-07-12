@@ -266,7 +266,7 @@ struct SettingsView: View {
     // rather than letting SwiftUI size things intrinsically — that's what
     // keeps rows from shifting when a field gains focus, when the numeric
     // value changes width (9 -> 100), or when a control swaps for another.
-    private let labelWidth: CGFloat = 185
+    private let labelWidth: CGFloat = 195
     private let controlWidth: CGFloat = 220
 
     // Double-clicking the numeric value swaps it for an editable field.
@@ -355,6 +355,11 @@ struct SettingsView: View {
                     .monospacedDigit()
                     .opacity(isEditingRate ? 0 : 1)
                 TextField("", text: $rateEditText)
+                    // .plain (not .roundedBorder): the native bordered style
+                    // has its own intrinsic padding/size, which would resize
+                    // this slot on entering edit mode. The focus ring below is
+                    // drawn as an overlay instead — overlays sit outside the
+                    // layout flow, so it's purely visual and shifts nothing.
                     .textFieldStyle(.plain)
                     .multilineTextAlignment(.trailing)
                     .monospacedDigit()
@@ -368,8 +373,15 @@ struct SettingsView: View {
                     }
             }
             .frame(width: 30, alignment: .trailing)
+            .overlay {
+                if isEditingRate {
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.accentColor, lineWidth: 2)
+                        .padding(-3)
+                }
+            }
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
+            .onTapGesture {
                 rateEditText = "\(oscMessagesPerSecond)"
                 isEditingRate = true
                 rateFieldFocused = true
