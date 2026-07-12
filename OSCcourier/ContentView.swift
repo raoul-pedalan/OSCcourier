@@ -726,6 +726,11 @@ struct ContentView: View {
     // fold triangle, and reorder handle.
     private let foldedTrackHeight: CGFloat = 24
 
+    // Width of the duration trim handle strip pinned to the window's right
+    // edge. Shared so the timeline drawing width can reserve exactly this
+    // much, keeping the end of the tracks aligned with the handle's bar.
+    private let durationHandleWidth: CGFloat = 18
+
     // The actual row height to use for a given track: folded tracks always
     // collapse to foldedTrackHeight, regardless of type; otherwise bang/message
     // tracks are a fixed 45, and curve/step tracks use their own `height`.
@@ -1522,6 +1527,9 @@ struct ContentView: View {
     // actually visible, not just updated off-screen.
     private func centerOnPlayhead() {
         let outerWidth = max(timelineAreaWidth, 1)
+        // timelineAreaWidth already excludes the duration handle (the whole
+        // timeline area is padded by its width), so no extra subtraction here
+        // — this must mirror the largeurTimeline used for drawing exactly.
         let largeurTimeline = outerWidth * CGFloat(zoomX) - 140
         guard largeurTimeline > 0 else { return }
         let playheadX = 140 + CGFloat(position / duree) * largeurTimeline
@@ -2195,7 +2203,7 @@ struct ContentView: View {
                     .offset(y: 22)
             }
         }
-        .frame(width: 18)
+        .frame(width: durationHandleWidth)
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
         .gesture(
@@ -2494,6 +2502,13 @@ struct ContentView: View {
                     zoomSensitivity: zoomKnobSensitivity
                 ) {
                         GeometryReader { geometry in
+                            // NOTE: do NOT subtract durationHandleWidth here. The playhead,
+                            // grid and marker lines are drawn in the outer coordinate space
+                            // (offset by +140) while the points live inside each track's own
+                            // space — both derive from this same largeurTimeline, so shrinking
+                            // it here desynchronised them (playhead/grid drifted left of the
+                            // points). The handle's 18px are reserved on the container
+                            // instead, further down, which keeps a single consistent scale.
                             let largeurTimeline = geometry.size.width - 140
                             let totalHeight = 24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
 
@@ -2540,16 +2555,36 @@ struct ContentView: View {
                                         let visibleEndSeconde = min(duree, Double((scrollOffsetX + outerWidth + buffer - 140) / largeurTimeline) * duree)
                                         let firstTick = max(0, (visibleStartSeconde / labelInterval).rounded(.down) * labelInterval)
 
-                                        ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
-                                            VStack(spacing: 0) {
-                                                Text(formattedTick(seconde, labelInterval: labelInterval))
-                                                    .font(.caption)
-                                                Rectangle().fill(Color.gray).frame(width: 1, height: 5)
+                                        // The ticks are masked so that anything drawn left of the
+                                        // header margin is hidden. A label is centered on its
+                                        // graduation, so the first one ("00:00.00" at t=0) is
+                                        // wider than the space available to its left and would
+                                        // otherwise spill over the track headers. The tick marks
+                                        // and the playhead don't move at all — this only hides
+                                        // the overflow.
+                                        ZStack(alignment: .leading) {
+                                            ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
+                                                VStack(spacing: 0) {
+                                                    Text(formattedTick(seconde, labelInterval: labelInterval))
+                                                        .font(.caption)
+                                                    Rectangle().fill(Color.gray).frame(width: 1, height: 5)
+                                                }
+                                                .frame(width: 70) // fixed, so the center stays exact regardless of label text width
+                                                .padding(.leading, 140)
+                                                .offset(x: CGFloat(seconde / duree) * largeurTimeline - 35)
                                             }
-                                            .frame(width: 70) // fixed, so the center stays exact regardless of label text width
-                                            .padding(.leading, 140)
-                                            .offset(x: CGFloat(seconde / duree) * largeurTimeline - 35)
                                         }
+                                        // Pinned to the full available width so the mask below lines
+                                        // up with real coordinates — otherwise the ZStack would size
+                                        // itself to its content and the mask's 140px would land
+                                        // somewhere else entirely.
+                                        .frame(width: geometry.size.width, alignment: .leading)
+                                        .mask(
+                                            HStack(spacing: 0) {
+                                                Color.clear.frame(width: 140)
+                                                Color.black
+                                            }
+                                        )
                                     }
 
                                     ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
@@ -3343,6 +3378,13 @@ struct ContentView: View {
                     zoomX = min(zoomX, maxZoomX)
                 }
             }
+            // Shrinks the whole timeline area (and with it geometry.size.width,
+            // hence largeurTimeline) by the handle's width, so the end of the
+            // tracks lands exactly under the handle's vertical bar. Applied
+            // here rather than inside largeurTimeline's own formula so that
+            // EVERY coordinate space shrinks together — that's what keeps the
+            // playhead/grid/marker lines aligned with the points.
+            .padding(.trailing, durationHandleWidth)
             .overlay(alignment: .trailing) {
                 durationDragHandle
             }
