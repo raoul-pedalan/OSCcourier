@@ -2834,9 +2834,15 @@ struct ContentView: View {
                                                 if pistes[index].type == .curve || pistes[index].type == .step {
                                                     VStack(spacing: 0) {
                                                         Spacer()
-                                                        Rectangle()
-                                                            .fill(pistes[index].type == .step ? Color(red: 0.8862745098039215, green: 0.2627450980392157, blue: 0.19215686274509805) : Color(red: 0.8, green: 0.5, blue: 0.0))
+                                                        DiagonalStripes(stripeWidth: 2, spacing: 2)
+                                                            .stroke(pistes[index].couleur, lineWidth: 2)
+                                                            .background(
+                                                                // Track color darkened ~50%: the color itself with a
+                                                                // half-opaque black laid over it.
+                                                                pistes[index].couleur.overlay(Color.white.opacity(0.5))
+                                                            )
                                                             .frame(width: 140, height: 4)
+                                                            .clipped()
                                                             .contentShape(Rectangle())
                                                             .gesture(
                                                                 DragGesture(coordinateSpace: .global)
@@ -3919,6 +3925,30 @@ class OSCWindowCloseDelegate: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     func windowWillClose(_ notification: Notification) {
         onClose?()
+    }
+}
+
+// Diagonal hazard-stripe pattern, used for the track resize handles at the
+// bottom of curve/step headers. Draws a set of parallel 45° lines; stroking
+// this shape over a colored background gives the classic striped look.
+// The path is drawn wider than the frame (and clipped) so the slanted lines
+// reach the edges cleanly instead of leaving triangular gaps at the corners.
+struct DiagonalStripes: Shape {
+    var stripeWidth: CGFloat = 4
+    var spacing: CGFloat = 4
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let step = stripeWidth + spacing
+        // Start far enough left that the slanted lines still cover the top-left
+        // corner, and run past the right edge for the same reason.
+        var x = -rect.height
+        while x < rect.width + rect.height {
+            path.move(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+            x += step
+        }
+        return path
     }
 }
 
