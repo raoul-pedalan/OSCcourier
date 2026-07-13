@@ -87,7 +87,7 @@ struct RotaryKnob: View {
     }
 }
 
-struct TimelineEvent: Identifiable, Comparable, Codable {
+struct TimelineEvent: Identifiable, Comparable, Codable, Equatable {
     let id: UUID
     var time: Double
     var label: String
@@ -108,8 +108,12 @@ struct TimelineEvent: Identifiable, Comparable, Codable {
     // punching a silent "hole" in the curve — both endpoints stay exactly
     // where they are, but nothing is drawn or sent between them.
     var segmentEnabled: Bool = true
+    // Free-form multi-line note attached to this point. Purely informational:
+    // never sent over OSC, never drawn on the timeline — it only shows up in
+    // the point's edit sheet (double-click).
+    var comment: String = ""
 
-    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0, segmentEnabled: Bool = true) {
+    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0, segmentEnabled: Bool = true, comment: String = "") {
         self.id = id
         self.time = time
         self.label = label
@@ -117,10 +121,29 @@ struct TimelineEvent: Identifiable, Comparable, Codable {
         self.segmentCurve = segmentCurve
         self.segmentBulge = segmentBulge
         self.segmentEnabled = segmentEnabled
+        self.comment = comment
     }
 
     static func < (lhs: TimelineEvent, rhs: TimelineEvent) -> Bool {
         lhs.time < rhs.time
+    }
+
+    // Custom decoding so projects saved before these fields existed still load:
+    // any key that's absent falls back to its default rather than throwing.
+    enum CodingKeys: String, CodingKey {
+        case id, time, label, y, segmentCurve, segmentBulge, segmentEnabled, comment
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        time = try c.decode(Double.self, forKey: .time)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0.5
+        segmentCurve = try c.decodeIfPresent(Double.self, forKey: .segmentCurve) ?? 0
+        segmentBulge = try c.decodeIfPresent(Double.self, forKey: .segmentBulge) ?? 0
+        segmentEnabled = try c.decodeIfPresent(Bool.self, forKey: .segmentEnabled) ?? true
+        comment = try c.decodeIfPresent(String.self, forKey: .comment) ?? ""
     }
 }
 
@@ -145,7 +168,7 @@ struct CodableColor: Codable {
     }
 }
 
-struct TimelineTrack: Identifiable, Codable {
+struct TimelineTrack: Identifiable, Codable, Equatable {
     let id: UUID
     var nom: String
     var couleur: Color
@@ -566,6 +589,8 @@ extension Notification.Name {
     static let OSCcourierGoToPreviousMarker = Notification.Name("OSCcourierGoToPreviousMarker")
     static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
     static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
+    static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
+    static let OSCcourierShowPointsList = Notification.Name("OSCcourierShowPointsList")
     static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")
     static let OSCcourierDefineGrid = Notification.Name("OSCcourierDefineGrid")
     static let OSCcourierOpenOSCMessagesWindow = Notification.Name("OSCcourierOpenOSCMessagesWindow")
@@ -576,8 +601,9 @@ extension Notification.Name {
 struct ContentView: View {
     @StateObject private var oscManager = OSCManager()
     @StateObject private var messageStore = OSCMessageStore()
+    @StateObject private var pointsListStore = PointsListStore()
     @State private var duree: Double = 30.0
-    @State private var dureeText: String = "00:30"
+    @State private var dureeText: String = "00:30.00"
     @State private var position: Double = 0.0
     @State private var enLecture: Bool = false
     @AppStorage("enBoucle") private var enBoucle: Bool = false
@@ -602,6 +628,7 @@ struct ContentView: View {
     @State private var pointAEditer: (trackIndex: Int, eventId: UUID)?
     @State private var nouvellePositionString = ""
     @State private var nouveauLabel = "M"
+    @State private var nouveauComment = ""
     @State private var nouvelleYString = "0.5"
     @State private var amplitudeEditorTrackIndex: Int?
     // Autofill Rectangle popup (step tracks): generates a rectangular/pulse
@@ -676,6 +703,10 @@ struct ContentView: View {
     // toggle — more reliable than reading NSWindow.isVisible directly.
     @State private var isOSCWindowVisible: Bool = false
     @State private var oscWindowCloseDelegate: OSCWindowCloseDelegate?
+    // Points list window (same open/close toggle pattern as the OSC one).
+    @State private var pointsListWindowController: NSWindowController?
+    @State private var isPointsListWindowVisible: Bool = false
+    @State private var pointsListCloseDelegate: OSCWindowCloseDelegate?
     @State private var pdfWindowController: NSWindowController?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
@@ -909,15 +940,20 @@ struct ContentView: View {
     // Formats a duration in seconds as "mm:ss" (playback position/timer keeps
     // its own separate "mm:ss:cc" formatter below; this one is for the
     // editable duration field, which only needs whole-second precision).
+    // "mm:ss.cc" — centiseconds included because the duration trim handle
+    // adjusts by 0.01s steps: rounding the display to whole seconds made the
+    // field look frozen while trimming, and misreported the actual duration.
     private func formattedDuration(_ seconds: Double) -> String {
-        let totalSeconds = Int(seconds.rounded())
-        let minutes = totalSeconds / 60
-        let secs = totalSeconds % 60
-        return String(format: "%02d:%02d", minutes, secs)
+        let totalCentiseconds = Int((seconds * 100).rounded())
+        let minutes = totalCentiseconds / 6000
+        let secs = (totalCentiseconds / 100) % 60
+        let centis = totalCentiseconds % 100
+        return String(format: "%02d:%02d.%02d", minutes, secs, centis)
     }
 
-    // Parses a duration typed as "mm:ss" (or a bare number of seconds, kept
-    // as a fallback for convenience) back into seconds.
+    // Parses a duration back into seconds. Deliberately permissive, so typing
+    // a duration stays simple even though the display is precise: "30",
+    // "30.5", "00:30" and "00:30.47" are all accepted.
     private func parseDuration(_ text: String) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         let parts = trimmed.split(separator: ":")
@@ -1074,6 +1110,114 @@ struct ContentView: View {
         // mid-drag on something else when messages are sent.
         RunLoop.main.add(t, forMode: .common)
         oscFlashTimer = t
+    }
+
+    // Rebuilds the points list snapshot into the shared store. Called whenever
+    // the tracks change, so the (observing) list window stays live.
+    private func refreshPointsList() {
+        var rows: [PointListRow] = []
+        for (trackIndex, piste) in pistes.enumerated() {
+            // Only markers and message tracks carry a meaningful label. Bang
+            // and curve/step points don't — any label they hold is leftover
+            // default state, so showing it (e.g. a stray "M") is just noise.
+            let hasLabel = trackIndex == 0 || piste.type == .message
+            for event in piste.evenements {
+                let value: String
+                switch piste.type {
+                case .curve, .step:
+                    value = String(format: "%.2f", event.y)
+                default:
+                    value = ""
+                }
+                rows.append(PointListRow(
+                    id: event.id,
+                    trackName: piste.nom,
+                    trackColor: piste.couleur,
+                    time: event.time,
+                    label: hasLabel ? event.label : "",
+                    value: value,
+                    comment: event.comment
+                ))
+            }
+        }
+        pointsListStore.rows = rows.sorted { $0.time < $1.time }
+        pointsListStore.trackNames = pistes.map { $0.nom }
+    }
+
+    // Opens the point editor for a given event, wherever it lives. Shared by
+    // the timeline's double-click and the points list window, so both go
+    // through exactly the same editing path.
+    private func beginEditingPoint(eventId: UUID) {
+        guard !tracksLocked else { return }
+        for (trackIndex, piste) in pistes.enumerated() {
+            guard let event = piste.evenements.first(where: { $0.id == eventId }) else { continue }
+            pointAEditer = (trackIndex, eventId)
+            nouvellePositionString = String(format: "%.2f", event.time)
+            nouvelleYString = String(format: "%.2f", event.y)
+            nouveauComment = event.comment
+            if trackIndex == 0 || piste.type == .message {
+                nouveauLabel = event.label
+            }
+            // The editor is a sheet on the main window, so bring that window
+            // forward — otherwise, when the edit was triggered from the list
+            // window, the sheet would open behind it.
+            NSApp.mainWindow?.makeKeyAndOrderFront(nil)
+            return
+        }
+    }
+
+    private func openPointsListWindow() {
+        refreshPointsList()
+
+        // Wired every time (cheap, and the closure captures fresh state) so
+        // the list window can ask us to open the standard point editor.
+        pointsListStore.onRequestEdit = { eventId in
+            beginEditingPoint(eventId: eventId)
+        }
+
+        if let controller = pointsListWindowController {
+            if isPointsListWindowVisible {
+                controller.window?.close()
+                isPointsListWindowVisible = false
+            } else {
+                controller.showWindow(nil)
+                isPointsListWindowVisible = true
+            }
+            return
+        }
+
+        // The view observes pointsListStore, so no need to rebuild the hosting
+        // view on reopen — it re-renders on its own whenever the store changes.
+        let hostingView = NSHostingView(rootView: PointsListView(store: pointsListStore))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 380),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Points List"
+        window.setFrameAutosaveName("PointsListWindow")
+        window.contentView = hostingView
+        window.minSize = NSSize(width: 520, height: 300)
+        window.isReleasedWhenClosed = false
+        // Deliberately NOT a floating window: a floating list parked in the
+        // middle of the screen would sit on top of every sheet the main window
+        // opens (point editor, autofill, grid settings...), hiding them.
+
+        let delegate = OSCWindowCloseDelegate()
+        delegate.onClose = {
+            isPointsListWindowVisible = false
+        }
+        window.delegate = delegate
+        pointsListCloseDelegate = delegate
+
+        window.center()
+
+        pointsListWindowController = NSWindowController(window: window)
+        pointsListWindowController?.showWindow(nil)
+        isPointsListWindowVisible = true
     }
 
     private func openOSCMessagesWindow() {
@@ -1328,7 +1472,11 @@ struct ContentView: View {
     }
 
     // Generates evenly spaced bang events for bang/markers tracks.
-    private func bangEvents(period: Double, phase: Double, duree: Double, defaultLabel: String = "M", numberedLabelPrefix: String? = nil) -> [TimelineEvent] {
+    // defaultLabel is empty by design: plain bang tracks have no meaningful
+    // label (only markers and message tracks do, and those pass an explicit
+    // numberedLabelPrefix). It used to default to "M", which silently stamped
+    // every autofilled bang with a stray marker-style label.
+    private func bangEvents(period: Double, phase: Double, duree: Double, defaultLabel: String = "", numberedLabelPrefix: String? = nil) -> [TimelineEvent] {
         guard period > 0 else { return [] }
         let phaseOffset = phase * period
         var events: [TimelineEvent] = []
@@ -1879,11 +2027,14 @@ struct ContentView: View {
     }
 
     // Parses whatever is currently in the duration text field and applies it
-    // to `duree`, then resyncs the text field to the canonical "mm:ss" form
-    // (so e.g. "1:5" becomes "01:05", and invalid text reverts cleanly).
+    // to `duree`, then resyncs the text field to the canonical "mm:ss.cc" form
+    // (so e.g. "1:5" becomes "01:05.00", and invalid text reverts cleanly).
+    // Typed durations are rounded to whole seconds on purpose: sub-second
+    // precision is only ever meant to come from the trim handle, so there's no
+    // need to think about centiseconds when typing a duration in.
     private func commitDureeEdit() {
         if let parsed = parseDuration(dureeText) {
-            duree = max(parsed, 0.01)
+            duree = max(parsed.rounded(), 1)
         }
         dureeText = formattedDuration(duree)
     }
@@ -1961,6 +2112,7 @@ struct ContentView: View {
             if trackIndex == 0 || pistes[trackIndex].type == .message {
                 pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
             }
+            pistes[trackIndex].evenements[eventIndex].comment = nouveauComment
             pistes[trackIndex].evenements.sort()
             lastSentEvents.removeAll()
         }
@@ -2298,7 +2450,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 TextField("Duration", text: $dureeText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .frame(width: 60, height: 22)
+                    .frame(width: 85, height: 22)
                     .focused($focusedField, equals: .duree)
                     .onSubmit {
                         commitDureeEdit()
@@ -2473,6 +2625,23 @@ struct ContentView: View {
                         .offset(y: 20)
                 }
 
+                Button(action: openPointsListWindow) {
+                    Image(systemName: "list.bullet")
+                        .font(.body)
+                        .foregroundColor(.black)
+                        .frame(width: 44, height: 28)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .help("Show points list")
+                .overlay(alignment: .bottom) {
+                    Text("points")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.6))
+                        .offset(y: 20)
+                }
+
                 Button(action: saveProject) {
                     Text("Save")
                 }
@@ -2565,7 +2734,10 @@ struct ContentView: View {
                                         ZStack(alignment: .leading) {
                                             ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
                                                 VStack(spacing: 0) {
-                                                    Text(formattedTick(seconde, labelInterval: labelInterval))
+                                                    // The label at t=0 is dropped: centered on its graduation,
+                                                    // it would sit half-over the track headers, and the mask
+                                                    // below just chopped it in half. The tick mark stays.
+                                                    Text(seconde == 0 ? "" : formattedTick(seconde, labelInterval: labelInterval))
                                                         .font(.caption)
                                                     Rectangle().fill(Color.gray).frame(width: 1, height: 5)
                                                 }
@@ -2837,8 +3009,8 @@ struct ContentView: View {
                                                         DiagonalStripes(stripeWidth: 2, spacing: 2)
                                                             .stroke(pistes[index].couleur, lineWidth: 2)
                                                             .background(
-                                                                // Track color darkened ~50%: the color itself with a
-                                                                // half-opaque black laid over it.
+                                                                // Track color lightened: the color itself with a
+                                                                // half-opaque white laid over it.
                                                                 pistes[index].couleur.overlay(Color.white.opacity(0.5))
                                                             )
                                                             .frame(width: 140, height: 4)
@@ -3279,13 +3451,7 @@ struct ContentView: View {
                                                         }
                                                     }
                                                     .onTapGesture(count: 2) {
-                                                        guard !tracksLocked else { return }
-                                                        pointAEditer = (index, event.id)
-                                                        nouvellePositionString = String(format: "%.2f", event.time)
-                                                        nouvelleYString = String(format: "%.2f", event.y)
-                                                        if index == 0 || pistes[index].type == .message {
-                                                            nouveauLabel = event.label
-                                                        }
+                                                        beginEditingPoint(eventId: event.id)
                                                     }
                                                 }
                                                 } // end if !pistes[index].isFolded
@@ -3424,6 +3590,14 @@ struct ContentView: View {
                 startPlaybackTimer()
             }
         }
+        .onChange(of: pistes) { _, _ in
+            // Keep the points list window live: only rebuild the snapshot when
+            // that window is actually open, so the (O(points)) flattening isn't
+            // paid on every single edit the rest of the time.
+            if isPointsListWindowVisible {
+                refreshPointsList()
+            }
+        }
 
         let withReceives1 = baseContent
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSave)) { _ in
@@ -3483,6 +3657,18 @@ struct ContentView: View {
         let withReceives3b = withReceives3
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetZoom)) { _ in
             zoomX = 1.0
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetTrackHeight)) { _ in
+            // Only curve/step tracks are resizable (they're the ones with the
+            // striped drag handle), so only those get reset — 60 is the same
+            // default the handle's double-click reset uses.
+            guard !tracksLocked else { return }
+            for index in pistes.indices where pistes[index].type == .curve || pistes[index].type == .step {
+                pistes[index].height = 60
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowPointsList)) { _ in
+            openPointsListWindow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierToggleFoldAll)) { _ in
             toggleFoldAll()
@@ -3593,23 +3779,13 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { indexPisteARenommer = nil }
         }
-        .alert("Edit point", isPresented: Binding<Bool>(
+        return withAlerts2
+        .sheet(isPresented: Binding<Bool>(
             get: { pointAEditer != nil },
             set: { if !$0 { pointAEditer = nil } }
         )) {
-            TextField("Position (s)", text: $nouvellePositionString)
-            if pistes[pointAEditer?.0 ?? 0].type == .curve || pistes[pointAEditer?.0 ?? 0].type == .step {
-                TextField("Y (0-1)", text: $nouvelleYString)
-            }
-            if pointAEditer?.0 == 0 || pistes[pointAEditer?.0 ?? 0].type == .message {
-                TextField("Label", text: $nouveauLabel)
-            }
-            Button("OK") {
-                commitPointEdit()
-            }
-            Button("Cancel", role: .cancel) { pointAEditer = nil }
+            editPointSheet
         }
-        return withAlerts2
         .sheet(isPresented: Binding<Bool>(
             get: { amplitudeEditorTrackIndex != nil },
             set: { if !$0 { amplitudeEditorTrackIndex = nil } }
@@ -3757,6 +3933,75 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(width: 280)
+    }
+
+    // Point editor. A sheet rather than an alert, because alerts on macOS can
+    // only host single-line TextFields — the multi-line comment box needs a
+    // TextEditor, which an alert won't render.
+    private var editPointSheet: some View {
+        let trackIndex = pointAEditer?.trackIndex ?? 0
+        let isMarkersTrack = trackIndex == 0
+        let isMessageTrack = pistes.indices.contains(trackIndex) && pistes[trackIndex].type == .message
+        let hasY = pistes.indices.contains(trackIndex) && (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Edit point")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            HStack {
+                Text("Position (s)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 100, alignment: .trailing)
+                TextField("", text: $nouvellePositionString)
+            }
+            if hasY {
+                HStack {
+                    // The label reflects the track's actual amplitude range,
+                    // which is customizable per track (and forced to 0/1 only
+                    // in Gate mode) — not a hardcoded 0-1.
+                    Text(String(format: "Y [%g, %g]", pistes[trackIndex].minAmplitude, pistes[trackIndex].maxAmplitude))
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 100, alignment: .trailing)
+                    TextField("", text: $nouvelleYString)
+                }
+            }
+            if isMarkersTrack || isMessageTrack {
+                HStack {
+                    Text("Label")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 100, alignment: .trailing)
+                    TextField("", text: $nouveauLabel)
+                }
+            }
+
+            HStack(alignment: .top) {
+                Text("Comment")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 100, alignment: .trailing)
+                TextEditor(text: $nouveauComment)
+                    .font(.body)
+                    .frame(height: 80)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    pointAEditer = nil
+                }
+                Button("OK") {
+                    commitPointEdit()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 
     private var autofillBangSheet: some View {

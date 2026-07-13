@@ -169,6 +169,11 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("z", modifiers: [])
 
+                Button("Reset Track Height") {
+                    NotificationCenter.default.post(name: .OSCcourierResetTrackHeight, object: nil)
+                }
+                .keyboardShortcut("h", modifiers: [])
+
                 Button("Fold/Unfold All Tracks") {
                     NotificationCenter.default.post(name: .OSCcourierToggleFoldAll, object: nil)
                 }
@@ -179,12 +184,12 @@ struct OSCcourierApp: App {
 
                 Divider()
 
-                Button("Define Grid…") {
+                Button("Grid Settings…") {
                     NotificationCenter.default.post(name: .OSCcourierDefineGrid, object: nil)
                 }
                 .keyboardShortcut("g", modifiers: [.command, .option])
 
-                Toggle("Display Grid", isOn: $showGrid)
+                Toggle("Show Grid", isOn: $showGrid)
                     .keyboardShortcut("g", modifiers: .command)
 
                 Divider()
@@ -193,10 +198,15 @@ struct OSCcourierApp: App {
 
                 Divider()
 
-                Button("Open Outgoing OSC Message Window") {
+                Button("Outgoing OSC Messages") {
                     NotificationCenter.default.post(name: .OSCcourierOpenOSCMessagesWindow, object: nil)
                 }
                 .keyboardShortcut("m", modifiers: [])
+
+                Button("Points List") {
+                    NotificationCenter.default.post(name: .OSCcourierShowPointsList, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: [])
             }
 
             CommandMenu("Tracks") {
