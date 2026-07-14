@@ -708,6 +708,14 @@ struct ContentView: View {
     @State private var tempIsGate: Bool = false
     @State private var tempQuantizeStep: String = "0"
     @State private var tempQuantizeEnabled: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    // Track background tint. The same 0.3 that looks right on a light
+    // background reads as too saturated against a dark one, so it's pulled
+    // back in dark mode.
+    private var trackBackgroundOpacity: Double {
+        colorScheme == .dark ? 0.18 : 0.3
+    }
     // Point currently being placed by a press-drag-release on empty track
     // space: created on mouse-down, dragged while held, committed on release.
     @State private var creatingPointId: UUID?
@@ -1190,27 +1198,55 @@ struct ContentView: View {
             // and curve/step points don't — any label they hold is leftover
             // default state, so showing it (e.g. a stray "M") is just noise.
             let hasLabel = trackIndex == 0 || piste.type == .message
+            let hasY = piste.type == .curve || piste.type == .step
             for event in piste.evenements {
-                let value: String
-                switch piste.type {
-                case .curve, .step:
-                    value = String(format: "%.2f", event.y)
-                default:
-                    value = ""
-                }
                 rows.append(PointListRow(
                     id: event.id,
                     trackName: piste.nom,
                     trackColor: piste.couleur,
                     time: event.time,
                     label: hasLabel ? event.label : "",
-                    value: value,
-                    comment: event.comment
+                    y: event.y,
+                    comment: event.comment,
+                    hasY: hasY,
+                    hasLabel: hasLabel,
+                    minAmplitude: piste.minAmplitude,
+                    maxAmplitude: piste.maxAmplitude
                 ))
             }
         }
         pointsListStore.rows = rows.sorted { $0.time < $1.time }
         pointsListStore.trackNames = pistes.map { $0.nom }
+    }
+
+    // Applies an edit made in the points list window. Routed through the same
+    // clamping and gateSnappedY the timeline uses, so a value typed there is
+    // constrained exactly like one dragged here (range bounds, quantization,
+    // Gate mode).
+    private func applyPointEdit(_ edit: PointEdit) {
+        guard !tracksLocked else { return }
+        for trackIndex in pistes.indices {
+            guard let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == edit.id }) else { continue }
+
+            if let time = edit.time {
+                pistes[trackIndex].evenements[eventIndex].time = min(max(time, 0), duree)
+            }
+            if let label = edit.label {
+                pistes[trackIndex].evenements[eventIndex].label = label
+            }
+            if let y = edit.y {
+                let piste = pistes[trackIndex]
+                let clamped = min(max(y, piste.minAmplitude), piste.maxAmplitude)
+                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(clamped, forTrackIndex: trackIndex)
+            }
+            if let comment = edit.comment {
+                pistes[trackIndex].evenements[eventIndex].comment = comment
+            }
+
+            pistes[trackIndex].evenements.sort()
+            lastSentEvents.removeAll()
+            return
+        }
     }
 
     // Opens the point editor for a given event, wherever it lives. Shared by
@@ -1227,10 +1263,6 @@ struct ContentView: View {
             if trackIndex == 0 || piste.type == .message {
                 nouveauLabel = event.label
             }
-            // The editor is a sheet on the main window, so bring that window
-            // forward — otherwise, when the edit was triggered from the list
-            // window, the sheet would open behind it.
-            NSApp.mainWindow?.makeKeyAndOrderFront(nil)
             return
         }
     }
@@ -1318,9 +1350,9 @@ struct ContentView: View {
         refreshPointsList()
 
         // Wired every time (cheap, and the closure captures fresh state) so
-        // the list window can ask us to open the standard point editor.
-        pointsListStore.onRequestEdit = { eventId in
-            beginEditingPoint(eventId: eventId)
+        // the list window can hand its edits back to us.
+        pointsListStore.onCommitEdit = { edit in
+            applyPointEdit(edit)
         }
 
         if let controller = pointsListWindowController {
@@ -3275,7 +3307,7 @@ struct ContentView: View {
 
                                             ZStack(alignment: .leading) {
                                                 Rectangle()
-                                                    .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(0.3) : Color.clear)
+                                                    .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(trackBackgroundOpacity) : Color.clear)
                                                     .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
 
                                                 // Quantization lines, drawn across the full width of the track.

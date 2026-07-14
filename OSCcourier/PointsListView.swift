@@ -9,7 +9,16 @@ struct PointsListView: View {
     // nil = show every track. Otherwise, the name of the single track to show.
     @State private var trackFilter: String?
 
-    // Rows actually displayed, after the track filter is applied.
+    // Double-clicking a row opens this editor, in a sheet on THIS window (so
+    // the main window never has to come forward). It goes through the Table's
+    // own primaryAction rather than per-cell tap gestures: those competed with
+    // the Table's internal click handling and fired only intermittently.
+    @State private var editingRow: PointListRow?
+    @State private var draftTime: String = ""
+    @State private var draftLabel: String = ""
+    @State private var draftY: String = ""
+    @State private var draftComment: String = ""
+
     private var visibleRows: [PointListRow] {
         guard let filter = trackFilter else { return store.rows }
         return store.rows.filter { $0.trackName == filter }
@@ -57,35 +66,41 @@ struct PointsListView: View {
                         Text(formattedTime(row.time))
                             .monospacedDigit()
                     }
-                    .width(min: 70, ideal: 80)
+                    .width(min: 70, ideal: 85)
 
                     TableColumn("Label") { row in
-                        Text(row.label)
+                        naCell(row.label, applicable: row.hasLabel,
+                               help: "Points on \(row.trackName) have no label — only markers and message tracks do.")
                     }
                     .width(min: 60, ideal: 90)
 
                     TableColumn("Value") { row in
-                        Text(row.value)
-                            .monospacedDigit()
+                        naCell(row.valueText, applicable: row.hasY,
+                               help: "Points on \(row.trackName) have no value — only curve and step tracks do.")
                     }
-                    .width(min: 50, ideal: 60)
+                    .width(min: 50, ideal: 65)
 
                     TableColumn("Comment") { row in
-                        // Comments are multi-line; show them wrapped rather
-                        // than truncated to a single line.
-                        Text(row.comment)
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
+                        // Newlines flattened to spaces so one long comment can't
+                        // blow up the row height; the full text is in the tooltip
+                        // and in the editor.
+                        let flat = row.comment
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        Text(flat)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(row.comment)
                     }
                     .width(min: 120, ideal: 260)
                 }
-                // Double-clicking a row opens the same point editor the
-                // timeline uses (see PointsListStore.onRequestEdit).
                 .contextMenu(forSelectionType: UUID.self) { _ in
-                    Button("Edit Point…") { requestEditSelected() }
+                    Button("Edit Point…") { beginEditSelected() }
                 } primaryAction: { ids in
-                    if let id = ids.first {
-                        store.onRequestEdit?(id)
+                    // Table's own double-click hook: reliable, unlike tap
+                    // gestures attached to individual cells.
+                    if let id = ids.first, let row = store.rows.first(where: { $0.id == id }) {
+                        beginEdit(row)
                     }
                 }
 
@@ -96,10 +111,8 @@ struct PointsListView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
-                    Button("Edit Point…") {
-                        requestEditSelected()
-                    }
-                    .disabled(selection == nil)
+                    Button("Edit Point…") { beginEditSelected() }
+                        .disabled(selection == nil)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -114,11 +127,132 @@ struct PointsListView: View {
                 trackFilter = nil
             }
         }
+        .sheet(isPresented: Binding<Bool>(
+            get: { editingRow != nil },
+            set: { if !$0 { cancelEdit() } }
+        )) {
+            editorSheet
+        }
     }
 
-    private func requestEditSelected() {
-        guard let id = selection else { return }
-        store.onRequestEdit?(id)
+    // Cells for fields the track doesn't have (a label on a bang, a value on a
+    // marker) show an em dash — the macOS convention for "not applicable" —
+    // instead of an ambiguous blank, with a tooltip saying why.
+    @ViewBuilder
+    private func naCell(_ text: String, applicable: Bool, help: String) -> some View {
+        Text(applicable ? text : "—")
+            .monospacedDigit()
+            .foregroundColor(applicable ? .primary : .secondary.opacity(0.45))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(applicable ? "" : help)
+    }
+
+    private var editorSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let row = editingRow {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(row.trackColor)
+                        .frame(width: 8, height: 8)
+                    Text("Edit point on \(row.trackName)")
+                        .font(.headline)
+                }
+                .padding(.bottom, 4)
+
+                HStack {
+                    Text("Position (s)")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 100, alignment: .trailing)
+                    TextField("", text: $draftTime)
+                }
+
+                // Only the fields this track actually has are shown, so the
+                // sheet never offers something meaningless to fill in.
+                if row.hasY {
+                    HStack {
+                        Text(String(format: "Y [%g, %g]", row.minAmplitude, row.maxAmplitude))
+                            .foregroundColor(.gray.opacity(0.7))
+                            .frame(width: 100, alignment: .trailing)
+                        TextField("", text: $draftY)
+                    }
+                }
+
+                if row.hasLabel {
+                    HStack {
+                        Text("Label")
+                            .foregroundColor(.gray.opacity(0.7))
+                            .frame(width: 100, alignment: .trailing)
+                        TextField("", text: $draftLabel)
+                    }
+                }
+
+                HStack(alignment: .top) {
+                    Text("Comment")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 100, alignment: .trailing)
+                    TextEditor(text: $draftComment)
+                        .font(.body)
+                        .frame(height: 80)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                        )
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) { cancelEdit() }
+                    Button("OK") { commitEdit() }
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private func beginEditSelected() {
+        guard let id = selection, let row = store.rows.first(where: { $0.id == id }) else { return }
+        beginEdit(row)
+    }
+
+    private func beginEdit(_ row: PointListRow) {
+        // Plain seconds, not mm:ss — simpler to type, and matches the
+        // timeline's own point editor.
+        draftTime = String(format: "%.2f", row.time)
+        draftY = String(format: "%.2f", row.y)
+        draftLabel = row.label
+        draftComment = row.comment
+        editingRow = row
+    }
+
+    private func commitEdit() {
+        guard let row = editingRow else { return }
+        var edit = PointEdit(id: row.id)
+
+        if let v = Double(draftTime.trimmingCharacters(in: .whitespaces)) {
+            edit.time = v
+        }
+        if row.hasY, let v = Double(draftY.trimmingCharacters(in: .whitespaces)) {
+            edit.y = v
+        }
+        if row.hasLabel {
+            edit.label = draftLabel
+        }
+        edit.comment = draftComment
+
+        store.onCommitEdit?(edit)
+        cancelEdit()
+    }
+
+    private func cancelEdit() {
+        editingRow = nil
+        draftTime = ""
+        draftY = ""
+        draftLabel = ""
+        draftComment = ""
     }
 
     private func formattedTime(_ t: Double) -> String {
