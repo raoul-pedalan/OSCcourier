@@ -185,8 +185,14 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
     // 0/1 values, min/max locked to 0...1, no range editing) instead of
     // "Float" mode (arbitrary min/max range). Unused by curve tracks.
     var isGate: Bool = false
+    // Curve/step tracks: vertical quantization step, in track value units.
+    // 0 = off (free positioning). When > 0, point values snap to multiples of
+    // this step, offset from minAmplitude — for MIDI notes, preset indices,
+    // and other discrete-valued automation. Meaningless in Gate mode, where
+    // values are already constrained to 0/1.
+    var quantizeStep: Double = 0
 
-    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false) {
+    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false, quantizeStep: Double = 0) {
         self.id = id
         self.nom = nom
         self.couleur = couleur
@@ -198,10 +204,11 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         self.height = height
         self.isFolded = isFolded
         self.isGate = isGate
+        self.quantizeStep = quantizeStep
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate
+        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate, quantizeStep
     }
 
     init(from decoder: Decoder) throws {
@@ -218,6 +225,7 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         // Absent from older save files — default to unfolded rather than failing to decode.
         isFolded = try container.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
         isGate = try container.decodeIfPresent(Bool.self, forKey: .isGate) ?? false
+        quantizeStep = try container.decodeIfPresent(Double.self, forKey: .quantizeStep) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -233,6 +241,7 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         try container.encode(Double(height), forKey: .height)
         try container.encode(isFolded, forKey: .isFolded)
         try container.encode(isGate, forKey: .isGate)
+        try container.encode(quantizeStep, forKey: .quantizeStep)
     }
 }
 
@@ -697,6 +706,11 @@ struct ContentView: View {
     @State private var tempMinAmplitude: String = "0"
     @State private var tempMaxAmplitude: String = "1"
     @State private var tempIsGate: Bool = false
+    @State private var tempQuantizeStep: String = "0"
+    @State private var tempQuantizeEnabled: Bool = false
+    // Set when the user commits a quantize step that had to be clamped, so we
+    // can tell them rather than silently changing what they typed.
+    @State private var invalidQuantizeStepMessage: String? = nil
     @State private var pendingGateSwitchIndex: Int? = nil
     @State private var messagesWindowController: NSWindowController?
     // Explicit visibility tracking for the OSC messages window's Open/Close
@@ -770,14 +784,65 @@ struct ContentView: View {
         return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
     }
 
-    // In "Gate" mode, a step track's points are strictly boolean: snaps any
-    // continuous y to whichever of the track's min/max it's closer to,
-    // instead of leaving it at an arbitrary in-between value. No-op for
-    // Float mode or non-step tracks.
+    // Applies whatever vertical constraint the track has to a raw y value.
+    // Called from every point-creating/point-moving path (click, drag, editor),
+    // so both Gate mode and quantization behave consistently everywhere.
+    //
+    // Gate takes priority: it's already a strict 0/1 quantization, so a step
+    // value on top of it would be meaningless (and is hidden in the UI).
     private func gateSnappedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        guard pistes[index].type == .step, pistes[index].isGate else { return y }
-        let midpoint = (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2
-        return y >= midpoint ? pistes[index].maxAmplitude : pistes[index].minAmplitude
+        let piste = pistes[index]
+
+        if piste.type == .step && piste.isGate {
+            let midpoint = (piste.minAmplitude + piste.maxAmplitude) / 2
+            return y >= midpoint ? piste.maxAmplitude : piste.minAmplitude
+        }
+
+        guard piste.type == .curve || piste.type == .step else { return y }
+        return quantizedY(y, forTrackIndex: index)
+    }
+
+    // Snaps y to the nearest multiple of the track's quantizeStep, measured
+    // from minAmplitude (so the range's own bounds are always reachable), then
+    // clamps back into range — rounding could otherwise land just outside it.
+    private func quantizedY(_ y: Double, forTrackIndex index: Int) -> Double {
+        let piste = pistes[index]
+        let step = piste.quantizeStep
+        guard step > 0 else { return y }
+        let offset = y - piste.minAmplitude
+        let snapped = piste.minAmplitude + (offset / step).rounded() * step
+        return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
+    }
+
+    // The y values every quantization tick sits on, for a track. Empty when
+    // quantization is off. Capped so an absurdly small step can't generate
+    // thousands of ticks (the UI thins them out further; this is the hard
+    // safety limit on the underlying set).
+    private func quantizeTickValues(forTrackIndex index: Int) -> [Double] {
+        let piste = pistes[index]
+        let step = piste.quantizeStep
+        let range = piste.maxAmplitude - piste.minAmplitude
+        guard step > 0, range > 0 else { return [] }
+        let count = Int((range / step).rounded(.down))
+        guard count >= 1, count <= 500 else { return [] }
+        return (0...count).map { piste.minAmplitude + Double($0) * step }
+    }
+
+    // Which of those ticks to actually draw at the track's current height:
+    // keeps every Nth one (N from a "nice" progression) so they never get
+    // closer than a legible minimum, exactly like the horizontal grid does.
+    private func visibleQuantizeTicks(forTrackIndex index: Int) -> [Double] {
+        let all = quantizeTickValues(forTrackIndex: index)
+        guard all.count > 1 else { return all }
+        let usableHeight = pistes[index].height - 2 * curveMargin
+        guard usableHeight > 0 else { return [] }
+        let spacing = usableHeight / CGFloat(all.count - 1)
+        let minSpacing: CGFloat = 7
+        guard spacing < minSpacing else { return all }
+        let rawSkip = Double(minSpacing / spacing)
+        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500]
+        let skip = Int(niceSteps.first(where: { $0 >= rawSkip }) ?? 500)
+        return all.enumerated().compactMap { i, v in i % skip == 0 ? v : nil }
     }
 
     // A lightweight, non-interactive "ghost" preview of a folded track's
@@ -2127,6 +2192,9 @@ struct ContentView: View {
         pistes[index].isGate = true
         pistes[index].minAmplitude = 0
         pistes[index].maxAmplitude = 1
+        // Gate is itself a 0/1 quantization — any step value would be dead
+        // state, and would come back if the track were switched to Float again.
+        pistes[index].quantizeStep = 0
         for i in pistes[index].evenements.indices {
             pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
         }
@@ -2155,6 +2223,33 @@ struct ContentView: View {
             if let minVal = Double(tempMinAmplitude), let maxVal = Double(tempMaxAmplitude) {
                 pistes[index].minAmplitude = minVal
                 pistes[index].maxAmplitude = maxVal
+            }
+            // A step bigger than half the range would leave fewer than three
+            // usable values (the track would collapse onto its endpoints), so
+            // it's clamped — and the user is told, rather than silently getting
+            // something other than what they typed.
+            if !tempQuantizeEnabled {
+                pistes[index].quantizeStep = 0
+            } else if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
+                let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                let maxStep = range / 2
+                if range > 0 && stepVal > maxStep {
+                    pistes[index].quantizeStep = maxStep
+                    invalidQuantizeStepMessage = String(
+                        format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
+                        stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
+                    )
+                } else {
+                    pistes[index].quantizeStep = range > 0 ? stepVal : 0
+                }
+            }
+            // Re-snap existing points onto the new grid, so the track's
+            // contents actually match what the ticks now show.
+            if pistes[index].quantizeStep > 0 {
+                for i in pistes[index].evenements.indices {
+                    pistes[index].evenements[i].y = quantizedY(pistes[index].evenements[i].y, forTrackIndex: index)
+                }
+                lastSentEvents.removeAll()
             }
         }
         amplitudeEditorTrackIndex = nil
@@ -2864,8 +2959,12 @@ struct ContentView: View {
                                                         // show TRUE (top) / FALSE (bottom) instead of 3 numeric ticks.
                                                         ZStack(alignment: .topLeading) {
                                                             HStack(spacing: 3) {
+                                                                // Hidden only when quantization is on, since the blue
+                                                                // ticks then occupy this same column — no point having
+                                                                // two tick scales stacked on each other. A clear spacer
+                                                                // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text("OPEN")
                                                                     .font(.caption2)
@@ -2874,8 +2973,12 @@ struct ContentView: View {
                                                             .offset(y: topY - 6)
 
                                                             HStack(spacing: 3) {
+                                                                // Hidden only when quantization is on, since the blue
+                                                                // ticks then occupy this same column — no point having
+                                                                // two tick scales stacked on each other. A clear spacer
+                                                                // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text("CLOSED")
                                                                     .font(.caption2)
@@ -2888,8 +2991,12 @@ struct ContentView: View {
                                                     } else {
                                                         ZStack(alignment: .topLeading) {
                                                             HStack(spacing: 3) {
+                                                                // Hidden only when quantization is on, since the blue
+                                                                // ticks then occupy this same column — no point having
+                                                                // two tick scales stacked on each other. A clear spacer
+                                                                // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", pistes[index].maxAmplitude))
                                                                     .font(.caption2)
@@ -2898,8 +3005,12 @@ struct ContentView: View {
                                                             .offset(y: topY - 6)
 
                                                             HStack(spacing: 3) {
+                                                                // Hidden only when quantization is on, since the blue
+                                                                // ticks then occupy this same column — no point having
+                                                                // two tick scales stacked on each other. A clear spacer
+                                                                // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
                                                                     .font(.caption2)
@@ -2908,8 +3019,12 @@ struct ContentView: View {
                                                             .offset(y: midY - 6)
 
                                                             HStack(spacing: 3) {
+                                                                // Hidden only when quantization is on, since the blue
+                                                                // ticks then occupy this same column — no point having
+                                                                // two tick scales stacked on each other. A clear spacer
+                                                                // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", pistes[index].minAmplitude))
                                                                     .font(.caption2)
@@ -2919,6 +3034,33 @@ struct ContentView: View {
                                                         }
                                                         .frame(width: 60, height: trackHeight, alignment: .topLeading)
                                                         .offset(x: 144)
+                                                    }
+
+                                                    // Quantization ticks. They now occupy the column where the
+                                                    // range labels' own gray ticks used to be (those are gone),
+                                                    // so there's a single tick scale instead of two competing
+                                                    // ones. Blue keeps them readable as the quantization grid.
+                                                    // Only the visible subset (see visibleQuantizeTicks) is
+                                                    // drawn, so a fine step on a short track doesn't turn into
+                                                    // a solid block.
+                                                    if !pistes[index].isGate {
+                                                        let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                        ZStack(alignment: .topLeading) {
+                                                            ForEach(visibleQuantizeTicks(forTrackIndex: index), id: \.self) { value in
+                                                                let normalized = range > 0 ? (value - pistes[index].minAmplitude) / range : 0
+                                                                let y = curveMargin + (trackHeight - 2 * curveMargin) * (1 - normalized)
+                                                                Rectangle()
+                                                                    .fill(Color.blue.opacity(0.55))
+                                                                    .frame(width: 15, height: 1)
+                                                                    .offset(y: y)
+                                                            }
+                                                        }
+                                                        // Right edge stays at 150, level with where the gray ticks
+                                                        // end (144 + tickWidth); the left edge is pulled back so
+                                                        // they only just reach into the header (which ends at 140).
+                                                        .frame(width: 15, height: trackHeight, alignment: .topLeading)
+                                                        .offset(x: 135)
+                                                        .allowsHitTesting(false)
                                                     }
                                                 }
 
@@ -2961,6 +3103,8 @@ struct ContentView: View {
                                                                 tempMinAmplitude = String(format: "%.2f", pistes[index].minAmplitude)
                                                                 tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
                                                                 tempIsGate = pistes[index].isGate
+                                                                tempQuantizeStep = String(format: "%g", pistes[index].quantizeStep)
+                                                                tempQuantizeEnabled = pistes[index].quantizeStep > 0
                                                             }) {
                                                                 Image(systemName: "slider.horizontal.3")
                                                             }
@@ -3083,7 +3227,7 @@ struct ContentView: View {
                                                             let positionCliquee = time
                                                             let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                                                             let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: yValue))
+                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: gateSnappedY(yValue, forTrackIndex: index)))
                                                             pistes[index].evenements.sort()
                                                             lastSentEvents.removeAll()
                                                         }
@@ -3766,6 +3910,14 @@ struct ContentView: View {
         } message: {
             Text("This track already has points. Switching to Gate will redistribute all their values to 0 or 1.")
         }
+        .alert("Quantization step adjusted", isPresented: Binding<Bool>(
+            get: { invalidQuantizeStepMessage != nil },
+            set: { if !$0 { invalidQuantizeStepMessage = nil } }
+        )) {
+            Button("OK") { invalidQuantizeStepMessage = nil }
+        } message: {
+            Text(invalidQuantizeStepMessage ?? "")
+        }
         .alert("Rename track", isPresented: Binding<Bool>(
             get: { indexPisteARenommer != nil },
             set: { if !$0 { indexPisteARenommer = nil } }
@@ -4115,9 +4267,26 @@ struct ContentView: View {
                     Text("Gate").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: tempIsGate) { _, nowGate in
+                    // Gate locks the range to 0...1 — reflect that in the
+                    // (now disabled) fields, rather than leaving them showing
+                    // stale Float values that no longer apply.
+                    if nowGate {
+                        tempMinAmplitude = "0.00"
+                        tempMaxAmplitude = "1.00"
+                        tempQuantizeStep = "0"
+                        tempQuantizeEnabled = false
+                    }
+                }
             }
 
-            if !isStepTrack || !tempIsGate {
+            // Shown in every mode, but disabled in Gate: Gate locks the range
+            // to 0/1 and is itself a quantization, so there's nothing to set —
+            // greying the fields out (rather than hiding them) keeps the sheet
+            // from changing size as you toggle Float/Gate.
+            let isGateMode = isStepTrack && tempIsGate
+
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("max")
                         .foregroundColor(.gray.opacity(0.7))
@@ -4130,7 +4299,39 @@ struct ContentView: View {
                         .frame(width: 40, alignment: .trailing)
                     TextField("min", text: $tempMinAmplitude)
                 }
+
+                Divider()
+                    .padding(.vertical, 2)
+
+                Toggle("Quantize", isOn: $tempQuantizeEnabled)
+                    .onChange(of: tempQuantizeEnabled) { _, enabled in
+                        // Turning it on with a leftover "0" would be a no-op —
+                        // seed a sensible step (a tenth of the range) so the
+                        // toggle actually does something straight away.
+                        if enabled, (Double(tempQuantizeStep) ?? 0) <= 0 {
+                            let minV = Double(tempMinAmplitude) ?? 0
+                            let maxV = Double(tempMaxAmplitude) ?? 1
+                            let range = maxV - minV
+                            tempQuantizeStep = String(format: "%g", range > 0 ? range / 10 : 0.1)
+                        }
+                    }
+
+                HStack {
+                    Text("quantif.")
+                        .foregroundColor(.gray.opacity(0.7))
+                        .frame(width: 55, alignment: .trailing)
+                    TextField("", text: $tempQuantizeStep)
+                        .disabled(!tempQuantizeEnabled)
+                }
+                .opacity(tempQuantizeEnabled ? 1 : 0.45)
+
+                Text("Point values snap to multiples of this step.")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .disabled(isGateMode)
+            .opacity(isGateMode ? 0.45 : 1)
 
             HStack {
                 Spacer()
