@@ -708,6 +708,10 @@ struct ContentView: View {
     @State private var tempIsGate: Bool = false
     @State private var tempQuantizeStep: String = "0"
     @State private var tempQuantizeEnabled: Bool = false
+    // Point currently being placed by a press-drag-release on empty track
+    // space: created on mouse-down, dragged while held, committed on release.
+    @State private var creatingPointId: UUID?
+    @State private var creatingPointTrackIndex: Int?
     // Set when the user commits a quantize step that had to be clamped, so we
     // can tell them rather than silently changing what they typed.
     @State private var invalidQuantizeStepMessage: String? = nil
@@ -1229,6 +1233,85 @@ struct ContentView: View {
             NSApp.mainWindow?.makeKeyAndOrderFront(nil)
             return
         }
+    }
+
+    // Press-drag-release point creation, shared by every track type. The point
+    // is created on mouse-down and then follows the cursor until release, so
+    // it can be positioned in one gesture instead of click-then-drag-again.
+    // Snapping/quantization go through the same paths a normal drag uses, so
+    // behaviour is identical whether a point is being created or moved.
+    private func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
+        guard !tracksLocked else { return }
+        let piste = pistes[trackIndex]
+        let rawTime = (Double(location.x) / Double(largeurTimeline)) * duree
+        let time = min(max(rawTime, 0), duree)
+
+        let label: String
+        let y: Double
+        switch piste.type {
+        case .bang:
+            label = "M"
+            y = 0.5
+        case .message:
+            label = "key"
+            y = 0.5
+        case .curve, .step:
+            label = ""
+            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
+            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
+            y = gateSnappedY(raw, forTrackIndex: trackIndex)
+        case .normal:
+            label = ""
+            y = 0.5
+        }
+
+        let event = TimelineEvent(time: time, label: label, y: y)
+        pistes[trackIndex].evenements.append(event)
+        pistes[trackIndex].evenements.sort()
+        lastSentEvents.removeAll()
+
+        creatingPointId = event.id
+        creatingPointTrackIndex = trackIndex
+    }
+
+    // Moves the in-progress point as the cursor is dragged, applying the same
+    // constraints (timeline bounds, ⌘/magnetic snapping, vertical
+    // quantization) that dragging an existing point applies.
+    private func updateCreatingPoint(at location: CGPoint, largeurTimeline: CGFloat) {
+        guard !tracksLocked,
+              let id = creatingPointId,
+              let trackIndex = creatingPointTrackIndex,
+              pistes.indices.contains(trackIndex),
+              let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id })
+        else { return }
+
+        let xPos = Double(location.x)
+        var newTime = (xPos / Double(largeurTimeline)) * duree
+
+        if NSEvent.modifierFlags.contains(.command),
+           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+            newTime = snapped
+        } else if magneticGridSnap,
+                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+            newTime = snapped
+        }
+        pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), duree)
+
+        let piste = pistes[trackIndex]
+        if piste.type == .curve || piste.type == .step {
+            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
+            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
+            pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrackIndex: trackIndex)
+        }
+        lastSentEvents.removeAll()
+    }
+
+    private func finishCreatingPoint() {
+        if let trackIndex = creatingPointTrackIndex, pistes.indices.contains(trackIndex) {
+            pistes[trackIndex].evenements.sort()
+        }
+        creatingPointId = nil
+        creatingPointTrackIndex = nil
     }
 
     private func openPointsListWindow() {
@@ -3200,37 +3283,53 @@ struct ContentView: View {
                                                     Color.clear
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
-                                                        .onTapGesture { location in
-                                                            guard !tracksLocked else { return }
-                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
-                                                            let defaultLabel = pistes[index].type == .message ? "key" : "M"
-                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: defaultLabel, y: 0.5))
-                                                            pistes[index].evenements.sort()
-                                                            lastSentEvents.removeAll()
-                                                        }
+                                                        .gesture(
+                                                            DragGesture(minimumDistance: 0)
+                                                                .onChanged { value in
+                                                                    if creatingPointId == nil {
+                                                                        beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
+                                                                    }
+                                                                    updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
+                                                                }
+                                                                .onEnded { _ in
+                                                                    finishCreatingPoint()
+                                                                }
+                                                        )
                                                 } else if pistes[index].type == .curve {
                                                     Color.clear
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: pistes[index].height)
-                                                        .onTapGesture { location in
-                                                            guard !tracksLocked else { return }
-                                                            let time = (Double(location.x) / Double(largeurTimeline)) * duree
-                                                            // Shift + click near the drawn (or hypothetical, if
-                                                            // already a hole) curve line toggles that segment's
-                                                            // hole instead of adding a new point.
-                                                            if NSEvent.modifierFlags.contains(.shift),
-                                                               let curveY = curveYPosition(forTime: time, trackIndex: index),
-                                                               abs(Double(location.y) - Double(curveY)) < 12 {
-                                                                toggleSegmentEnabled(forTime: time, trackIndex: index)
-                                                                return
-                                                            }
-                                                            let positionCliquee = time
-                                                            let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
-                                                            let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: gateSnappedY(yValue, forTrackIndex: index)))
-                                                            pistes[index].evenements.sort()
-                                                            lastSentEvents.removeAll()
-                                                        }
+                                                        .gesture(
+                                                            DragGesture(minimumDistance: 0)
+                                                                .onChanged { value in
+                                                                    guard !tracksLocked else { return }
+                                                                    // Shift near the curve line means "toggle this
+                                                                    // segment's hole", and Option means "bend the
+                                                                    // segment" (handled by its own gesture) — neither
+                                                                    // should create a point.
+                                                                    if NSEvent.modifierFlags.contains(.shift) { return }
+                                                                    if NSEvent.modifierFlags.contains(.option) { return }
+                                                                    if creatingPointId == nil {
+                                                                        beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
+                                                                    }
+                                                                    updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
+                                                                }
+                                                                .onEnded { value in
+                                                                    guard !tracksLocked else { return }
+                                                                    if creatingPointId != nil {
+                                                                        finishCreatingPoint()
+                                                                        return
+                                                                    }
+                                                                    // No point was being created: this was a Shift
+                                                                    // click on (or near) the curve line.
+                                                                    let time = (Double(value.location.x) / Double(largeurTimeline)) * duree
+                                                                    if NSEvent.modifierFlags.contains(.shift),
+                                                                       let curveY = curveYPosition(forTime: time, trackIndex: index),
+                                                                       abs(Double(value.location.y) - Double(curveY)) < 12 {
+                                                                        toggleSegmentEnabled(forTime: time, trackIndex: index)
+                                                                    }
+                                                                }
+                                                        )
                                                         .onContinuousHover { phase in
                                                             switch phase {
                                                             case .active(let location):
@@ -3334,15 +3433,18 @@ struct ContentView: View {
                                                     Color.clear
                                                         .contentShape(Rectangle())
                                                         .frame(width: largeurTimeline, height: pistes[index].height)
-                                                        .onTapGesture { location in
-                                                            guard !tracksLocked else { return }
-                                                            let positionCliquee = (Double(location.x) / Double(largeurTimeline)) * duree
-                                                            let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
-                                                            let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                            pistes[index].evenements.append(TimelineEvent(time: positionCliquee, label: "", y: gateSnappedY(yValue, forTrackIndex: index)))
-                                                            pistes[index].evenements.sort()
-                                                            lastSentEvents.removeAll()
-                                                        }
+                                                        .gesture(
+                                                            DragGesture(minimumDistance: 0)
+                                                                .onChanged { value in
+                                                                    if creatingPointId == nil {
+                                                                        beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
+                                                                    }
+                                                                    updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
+                                                                }
+                                                                .onEnded { _ in
+                                                                    finishCreatingPoint()
+                                                                }
+                                                        )
                                                 }
 
                                                 if pistes[index].type == .curve && pistes[index].evenements.count > 1 {
