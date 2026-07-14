@@ -3278,6 +3278,30 @@ struct ContentView: View {
                                                     .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(0.3) : Color.clear)
                                                     .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
 
+                                                // Quantization lines, drawn across the full width of the track.
+                                                // They live HERE, in the track's own container (which is already
+                                                // largeurTimeline wide), and not in the header ZStack alongside
+                                                // the range labels — widening that one to timeline width
+                                                // overflowed its 140px slot and wrecked the row's layout.
+                                                if !pistes[index].isFolded,
+                                                   pistes[index].type == .curve || pistes[index].type == .step,
+                                                   !pistes[index].isGate,
+                                                   pistes[index].quantizeStep > 0 {
+                                                    let trackH = rowHeight(for: pistes[index])
+                                                    let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                    ForEach(visibleQuantizeTicks(forTrackIndex: index), id: \.self) { value in
+                                                        let normalized = range > 0 ? (value - pistes[index].minAmplitude) / range : 0
+                                                        let y = curveMargin + (trackH - 2 * curveMargin) * (1 - normalized)
+                                                        Rectangle()
+                                                            // Fainter than the short header ticks: a full-width line
+                                                            // at their opacity would compete with the curve itself.
+                                                            .fill(Color.blue.opacity(0.22))
+                                                            .frame(width: largeurTimeline, height: 1)
+                                                            .offset(y: y - trackH / 2)
+                                                    }
+                                                    .allowsHitTesting(false)
+                                                }
+
                                                 if !pistes[index].isFolded {
                                                 if pistes[index].type == .bang || pistes[index].type == .message {
                                                     Color.clear
