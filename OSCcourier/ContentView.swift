@@ -191,8 +191,18 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
     // and other discrete-valued automation. Meaningless in Gate mode, where
     // values are already constrained to 0/1.
     var quantizeStep: Double = 0
+    // Kept separate from quantizeStep so switching quantization off preserves
+    // the step the user had dialled in — turning it back on restores it,
+    // instead of starting from zero every time.
+    var quantizeEnabled: Bool = false
 
-    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false, quantizeStep: Double = 0) {
+    // Quantization only actually applies when it's switched on AND has a
+    // usable step. Everything (snapping, ticks) keys off this.
+    var quantizeActive: Bool {
+        quantizeEnabled && quantizeStep > 0
+    }
+
+    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false, quantizeStep: Double = 0, quantizeEnabled: Bool = false) {
         self.id = id
         self.nom = nom
         self.couleur = couleur
@@ -205,10 +215,11 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         self.isFolded = isFolded
         self.isGate = isGate
         self.quantizeStep = quantizeStep
+        self.quantizeEnabled = quantizeEnabled
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate, quantizeStep
+        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate, quantizeStep, quantizeEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -226,6 +237,8 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         isFolded = try container.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
         isGate = try container.decodeIfPresent(Bool.self, forKey: .isGate) ?? false
         quantizeStep = try container.decodeIfPresent(Double.self, forKey: .quantizeStep) ?? 0
+        // Projects saved before this flag existed used "step > 0" to mean "on".
+        quantizeEnabled = try container.decodeIfPresent(Bool.self, forKey: .quantizeEnabled) ?? (quantizeStep > 0)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -242,6 +255,7 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
         try container.encode(isFolded, forKey: .isFolded)
         try container.encode(isGate, forKey: .isGate)
         try container.encode(quantizeStep, forKey: .quantizeStep)
+        try container.encode(quantizeEnabled, forKey: .quantizeEnabled)
     }
 }
 
@@ -820,7 +834,7 @@ struct ContentView: View {
     private func quantizedY(_ y: Double, forTrackIndex index: Int) -> Double {
         let piste = pistes[index]
         let step = piste.quantizeStep
-        guard step > 0 else { return y }
+        guard piste.quantizeActive else { return y }
         let offset = y - piste.minAmplitude
         let snapped = piste.minAmplitude + (offset / step).rounded() * step
         return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
@@ -834,7 +848,7 @@ struct ContentView: View {
         let piste = pistes[index]
         let step = piste.quantizeStep
         let range = piste.maxAmplitude - piste.minAmplitude
-        guard step > 0, range > 0 else { return [] }
+        guard piste.quantizeActive, range > 0 else { return [] }
         let count = Int((range / step).rounded(.down))
         guard count >= 1, count <= 500 else { return [] }
         return (0...count).map { piste.minAmplitude + Double($0) * step }
@@ -2307,9 +2321,9 @@ struct ContentView: View {
         pistes[index].isGate = true
         pistes[index].minAmplitude = 0
         pistes[index].maxAmplitude = 1
-        // Gate is itself a 0/1 quantization — any step value would be dead
-        // state, and would come back if the track were switched to Float again.
-        pistes[index].quantizeStep = 0
+        // Gate is itself a 0/1 quantization, so quantization is switched off —
+        // but its step value is kept, so returning to Float restores it.
+        pistes[index].quantizeEnabled = false
         for i in pistes[index].evenements.indices {
             pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
         }
@@ -2339,33 +2353,35 @@ struct ContentView: View {
                 pistes[index].minAmplitude = minVal
                 pistes[index].maxAmplitude = maxVal
             }
-            // A step bigger than half the range would leave fewer than three
-            // usable values (the track would collapse onto its endpoints), so
-            // it's clamped — and the user is told, rather than silently getting
-            // something other than what they typed.
-            if !tempQuantizeEnabled {
-                pistes[index].quantizeStep = 0
-            } else if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
+            // The step value is stored regardless of the on/off flag, so
+            // switching quantization off and back on restores what was dialled
+            // in rather than resetting to zero.
+            pistes[index].quantizeEnabled = tempQuantizeEnabled
+            if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
                 let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
                 let maxStep = range / 2
+                // A step bigger than half the range would leave fewer than three
+                // usable values (the track would collapse onto its endpoints), so
+                // it's clamped — and the user is told, rather than silently getting
+                // something other than what they typed. Only warn when it's
+                // actually in effect.
                 if range > 0 && stepVal > maxStep {
                     pistes[index].quantizeStep = maxStep
-                    invalidQuantizeStepMessage = String(
-                        format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
-                        stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
-                    )
+                    if tempQuantizeEnabled {
+                        invalidQuantizeStepMessage = String(
+                            format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
+                            stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
+                        )
+                    }
                 } else {
                     pistes[index].quantizeStep = range > 0 ? stepVal : 0
                 }
             }
-            // Re-snap existing points onto the new grid, so the track's
-            // contents actually match what the ticks now show.
-            if pistes[index].quantizeStep > 0 {
-                for i in pistes[index].evenements.indices {
-                    pistes[index].evenements[i].y = quantizedY(pistes[index].evenements[i].y, forTrackIndex: index)
-                }
-                lastSentEvents.removeAll()
-            }
+            // NOTE: existing points are deliberately NOT re-snapped onto the
+            // new grid. Unlike Gate — which is a mode change that forces every
+            // value to 0/1 — quantization is an input aid: it constrains points
+            // as they're created or dragged, but never silently rewrites work
+            // that's already been placed.
         }
         amplitudeEditorTrackIndex = nil
     }
@@ -2999,7 +3015,9 @@ struct ContentView: View {
                                                     // ("markers" at index 0 stays pinned, never reordered).
                                                     Image(systemName: "line.3.horizontal")
                                                         .font(.system(size: 10))
-                                                        .foregroundColor(.black.opacity(0.35))
+                                                        // Dimmed when tracks are locked: the gesture below is a
+                                                        // no-op then, so the handle shouldn't look draggable.
+                                                        .foregroundColor(.black.opacity(tracksLocked ? 0.12 : 0.35))
                                                         .padding(6)
                                                         .contentShape(Rectangle())
                                                         .offset(x: 116, y: 2)
@@ -3079,7 +3097,7 @@ struct ContentView: View {
                                                                 // two tick scales stacked on each other. A clear spacer
                                                                 // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text("OPEN")
                                                                     .font(.caption2)
@@ -3093,7 +3111,7 @@ struct ContentView: View {
                                                                 // two tick scales stacked on each other. A clear spacer
                                                                 // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text("CLOSED")
                                                                     .font(.caption2)
@@ -3111,7 +3129,7 @@ struct ContentView: View {
                                                                 // two tick scales stacked on each other. A clear spacer
                                                                 // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", pistes[index].maxAmplitude))
                                                                     .font(.caption2)
@@ -3125,7 +3143,7 @@ struct ContentView: View {
                                                                 // two tick scales stacked on each other. A clear spacer
                                                                 // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
                                                                     .font(.caption2)
@@ -3139,7 +3157,7 @@ struct ContentView: View {
                                                                 // two tick scales stacked on each other. A clear spacer
                                                                 // keeps the labels in place either way.
                                                                 Rectangle()
-                                                                    .fill(pistes[index].quantizeStep > 0 ? Color.clear : Color.gray.opacity(0.5))
+                                                                    .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
                                                                     .frame(width: tickWidth, height: 1)
                                                                 Text(String(format: "%.2f", pistes[index].minAmplitude))
                                                                     .font(.caption2)
@@ -3219,7 +3237,7 @@ struct ContentView: View {
                                                                 tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
                                                                 tempIsGate = pistes[index].isGate
                                                                 tempQuantizeStep = String(format: "%g", pistes[index].quantizeStep)
-                                                                tempQuantizeEnabled = pistes[index].quantizeStep > 0
+                                                                tempQuantizeEnabled = pistes[index].quantizeEnabled
                                                             }) {
                                                                 Image(systemName: "slider.horizontal.3")
                                                             }
@@ -3265,12 +3283,17 @@ struct ContentView: View {
                                                 if pistes[index].type == .curve || pistes[index].type == .step {
                                                     VStack(spacing: 0) {
                                                         Spacer()
-                                                        DiagonalStripes(stripeWidth: 2, spacing: 2)
-                                                            .stroke(pistes[index].couleur, lineWidth: 2)
+                                                        DiagonalStripes(stripeWidth: 3, spacing: 3)
+                                                            .stroke(pistes[index].couleur, lineWidth: 3)
                                                             .background(
-                                                                // Track color lightened: the color itself with a
-                                                                // half-opaque white laid over it.
-                                                                pistes[index].couleur.overlay(Color.white.opacity(0.5))
+                                                                // Curve tracks are yellow, and yellow-on-lightened-yellow
+                                                                // was too low-contrast to read at this 4px height — so
+                                                                // their stripes sit on a DARKENED (brown) version of the
+                                                                // track color instead. The other types keep the lightened
+                                                                // background, which reads fine against their darker hues.
+                                                                pistes[index].type == .curve
+                                                                    ? pistes[index].couleur.overlay(Color.black.opacity(0.55))
+                                                                    : pistes[index].couleur.overlay(Color.white.opacity(0.5))
                                                             )
                                                             .frame(width: 140, height: 4)
                                                             .clipped()
@@ -3318,7 +3341,7 @@ struct ContentView: View {
                                                 if !pistes[index].isFolded,
                                                    pistes[index].type == .curve || pistes[index].type == .step,
                                                    !pistes[index].isGate,
-                                                   pistes[index].quantizeStep > 0 {
+                                                   pistes[index].quantizeActive {
                                                     let trackH = rowHeight(for: pistes[index])
                                                     let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
                                                     ForEach(visibleQuantizeTicks(forTrackIndex: index), id: \.self) { value in
@@ -4432,7 +4455,8 @@ struct ContentView: View {
                     if nowGate {
                         tempMinAmplitude = "0.00"
                         tempMaxAmplitude = "1.00"
-                        tempQuantizeStep = "0"
+                        // Step value kept — only switched off — so returning to
+                        // Float brings it back.
                         tempQuantizeEnabled = false
                     }
                 }
@@ -4463,9 +4487,9 @@ struct ContentView: View {
 
                 Toggle("Quantize", isOn: $tempQuantizeEnabled)
                     .onChange(of: tempQuantizeEnabled) { _, enabled in
-                        // Turning it on with a leftover "0" would be a no-op —
-                        // seed a sensible step (a tenth of the range) so the
-                        // toggle actually does something straight away.
+                        // Only seed a value if there isn't one yet: an existing
+                        // step is kept (shown greyed while off) so toggling
+                        // back on restores exactly what was there.
                         if enabled, (Double(tempQuantizeStep) ?? 0) <= 0 {
                             let minV = Double(tempMinAmplitude) ?? 0
                             let maxV = Double(tempMaxAmplitude) ?? 1
