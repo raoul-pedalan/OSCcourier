@@ -65,6 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
+
 struct OSCcourierApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // Shared with SettingsView and ContentView via the same @AppStorage key.

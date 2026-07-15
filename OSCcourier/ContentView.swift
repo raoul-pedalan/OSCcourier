@@ -638,13 +638,13 @@ struct ContentView: View {
     // per-tick errors accumulate into real drift over a long playback session.
     @State private var lastTickTimestamp: Double?
     @State private var zoomX: Double = 1.0
-    @State private var pistes: [TimelineTrack] = [
-        TimelineTrack(nom: "/markers", couleur: Color(red: 0.45, green: 0.4, blue: 0.4), evenements: [], type: .bang, height: 45),
-        TimelineTrack(nom: "/track_1", couleur: .blue, evenements: [], type: .bang, height: 45),
-        TimelineTrack(nom: "/track_2", couleur: .yellow, evenements: [], type: .curve, height: 60),
-        TimelineTrack(nom: "/track_3", couleur: .yellow, evenements: [], type: .curve, height: 60),
-        TimelineTrack(nom: "/track_4", couleur: Color(red: 0.608, green: 0.086, blue: 0.365), evenements: [], type: .step, height: 60)
-    ]
+    @StateObject private var timelineStore = TimelineStore()
+    @Environment(\.undoManager) private var undoManager
+
+    private var pistes: [TimelineTrack] {
+        get { timelineStore.pistes }
+        nonmutating set { timelineStore.setPistes(newValue) }
+    }
     @State private var lastSentEvents: Set<String> = []
     @State private var indexPisteARenommer: Int?
     @State private var nouveauNomPiste = ""
@@ -1404,6 +1404,7 @@ struct ContentView: View {
         delegate.onClose = {
             isPointsListWindowVisible = false
         }
+        delegate.sharedUndoManager = timelineStore.undoManager
         window.delegate = delegate
         pointsListCloseDelegate = delegate
 
@@ -3891,6 +3892,7 @@ struct ContentView: View {
         .background(Color.gray.opacity(0.07))
         .navigationTitle(savedFileURL?.deletingPathExtension().lastPathComponent ?? "OSCcourier")
         .onAppear {
+            timelineStore.undoManager = undoManager
             setupOnAppear()
         }
         .onDisappear {
@@ -4551,8 +4553,19 @@ struct UpPointingTriangle: Shape {
 // more reliable for the Open/Close toggle behavior.
 class OSCWindowCloseDelegate: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
+    // When set, this window's Undo/Redo (Cmd-Z / Cmd-Shift-Z) operate on this
+    // shared manager instead of the empty, separate one AppKit would create
+    // for the window by default — lets a secondary window (e.g. Points List)
+    // share the main window's undo history rather than silently having its
+    // own, unused one.
+    var sharedUndoManager: UndoManager?
+
     func windowWillClose(_ notification: Notification) {
         onClose?()
+    }
+
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        sharedUndoManager
     }
 }
 
