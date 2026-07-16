@@ -9,6 +9,7 @@ Create different types of tracks — interpolated curve, step, message, bang —
 - Advanced zoom and grid system
 - Autofill: populate tracks with periodic patterns automatically
 - Points List window: review every point at a glance and attach comments to individual points
+- Unlimited undo/redo
 - Sequences saved as JSON
 
 OSCcourier was initially designed to give Max/MSP the timeline it lacks — a kind of score. But since it emits standard OSC messages, it should work with any application able to receive them.
