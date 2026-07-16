@@ -3,74 +3,74 @@ import PDFKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var oscManager = OSCManager()
-    @StateObject private var messageStore = OSCMessageStore()
-    @StateObject private var pointListStore = PointListStore()
-    @State private var duree: Double = 30.0
-    @State private var dureeText: String = "00:30.00"
-    @State private var position: Double = 0.0
-    @State private var enLecture: Bool = false
-    @AppStorage("enBoucle") private var enBoucle: Bool = false
-    @State private var timer: Timer?
+    @StateObject var oscManager = OSCManager()
+    @StateObject var messageStore = OSCMessageStore()
+    @StateObject var pointListStore = PointListStore()
+    @State var duree: Double = 30.0
+    @State var dureeText: String = "00:30.00"
+    @State var position: Double = 0.0
+    @State var enLecture: Bool = false
+    @AppStorage("enBoucle") var enBoucle: Bool = false
+    @State var timer: Timer?
     // Real wall-clock timestamp of the previous playback tick (monotonic
     // clock, in seconds). Used to advance `position` by the actual elapsed
     // time between ticks instead of an assumed fixed 0.05 — Timer doesn't
     // guarantee exact intervals, so assuming a fixed delta would let small
     // per-tick errors accumulate into real drift over a long playback session.
-    @State private var lastTickTimestamp: Double?
-    @State private var zoomX: Double = 1.0
-    @StateObject private var timelineStore = TimelineStore()
-    @Environment(\.undoManager) private var undoManager
+    @State var lastTickTimestamp: Double?
+    @State var zoomX: Double = 1.0
+    @StateObject var timelineStore = TimelineStore()
+    @Environment(\.undoManager) var undoManager
 
-    private var pistes: [TimelineTrack] {
+    var pistes: [TimelineTrack] {
         get { timelineStore.pistes }
         nonmutating set { timelineStore.setPistes(newValue) }
     }
-    @State private var lastSentEvents: Set<String> = []
-    @State private var indexPisteARenommer: Int?
-    @State private var nouveauNomPiste = ""
-    @State private var pointAEditer: (trackIndex: Int, eventId: UUID)?
-    @State private var nouvellePositionString = ""
-    @State private var nouveauLabel = "M"
-    @State private var nouveauComment = ""
-    @State private var nouvelleYString = "0.5"
-    @State private var amplitudeEditorTrackIndex: Int?
+    @State var lastSentEvents: Set<String> = []
+    @State var indexPisteARenommer: Int?
+    @State var nouveauNomPiste = ""
+    @State var pointAEditer: (trackIndex: Int, eventId: UUID)?
+    @State var nouvellePositionString = ""
+    @State var nouveauLabel = "M"
+    @State var nouveauComment = ""
+    @State var nouvelleYString = "0.5"
+    @State var amplitudeEditorTrackIndex: Int?
     // Autofill Rectangle popup (step tracks): generates a rectangular/pulse
     // pattern of step events across the track.
-    @State private var autofillTrackIndex: Int?
-    @State private var autofillPeriodString: String = "1.0"
-    @State private var autofillPhaseString: String = "0.0"
-    @State private var autofillPulseWidthString: String = "0.5"
-    @State private var autofillAmpMinString: String = "0.0"
-    @State private var autofillAmpMaxString: String = "1.0"
+    @State var autofillTrackIndex: Int?
+    @State var autofillPeriodString: String = "1.0"
+    @State var autofillPhaseString: String = "0.0"
+    @State var autofillPulseWidthString: String = "0.5"
+    @State var autofillAmpMinString: String = "0.0"
+    @State var autofillAmpMaxString: String = "1.0"
 
     // Autofill Wave popup (curve tracks): generates a sine or (skewed) sawtooth wave.
-    @State private var waveTrackIndex: Int?
-    @State private var waveIsSine: Bool = true // true = Sin, false = Saw
-    @State private var wavePeriodString: String = "1.0"
-    @State private var wavePhaseString: String = "0.0"
-    @State private var waveSkewString: String = "0.5"
-    @State private var waveAmpMinString: String = "0.0"
-    @State private var waveAmpMaxString: String = "1.0"
+    @State var waveTrackIndex: Int?
+    @State var waveIsSine: Bool = true // true = Sin, false = Saw
+    @State var wavePeriodString: String = "1.0"
+    @State var wavePhaseString: String = "0.0"
+    @State var waveSkewString: String = "0.5"
+    @State var waveAmpMinString: String = "0.0"
+    @State var waveAmpMaxString: String = "1.0"
 
     // Autofill Bang popup (bang/markers tracks): generates evenly spaced bangs.
-    @State private var bangTrackIndex: Int?
-    @State private var bangPeriodString: String = "1.0"
-    @State private var bangPhaseString: String = "0.0"
+    @State var bangTrackIndex: Int?
+    @State var bangPeriodString: String = "1.0"
+    @State var bangPhaseString: String = "0.0"
     // Message tracks only: prefix used for generated labels ("prefix_1",
     // "prefix_2", ...), replacing the previously hardcoded "key".
-    @State private var bangLabelPrefixString: String = "key"
+    @State var bangLabelPrefixString: String = "key"
     // Set when the pencil button is pressed on a track that already has
     // points, to show an "Overwrite track?" confirmation before opening
     // the actual autofill popup.
-    @State private var pendingAutofillIndex: Int?
-    @State private var showClearAllConfirmation = false
-    @State private var showDeleteAllTracksConfirmation = false
+    @State var pendingAutofillIndex: Int?
+    @State var showClearAllConfirmation = false
+    @State var showDeleteAllTracksConfirmation = false
     // Modifier-aware cursor over points: shift = delete cursor, cmd = snap cursor.
     // Tracks whether the mouse is currently over any point, and listens for
     // modifier key changes while hovering (since .onHover alone only fires on
     // enter/exit, not when a modifier key is pressed mid-hover).
-    @State private var isHoveringPoint: Bool = false
+    @State var isHoveringPoint: Bool = false
     // Option-drag on a curve segment (Logic Pro automation-curve style).
     // Whether the cursor is currently within the erase/bend zone (12px) of
     // this hovered curve track's line. Boolean on purpose: it only changes
@@ -79,80 +79,80 @@ struct ContentView: View {
     // a full body re-render per pixel — constantly rebuilding the hover
     // stream and tracking areas, which is what silently broke both the
     // Option and Shift hover cursors.
-    @State private var isNearCurveControlZone: Bool = false
-    @State private var isOptionHeldForCursor: Bool = false
-    @State private var curveDragSegmentID: UUID?
-    @State private var curveDragBaseline: Double?
-    @State private var curveDragBulgeBaseline: Double?
-    @State private var isNearSnapZone: Bool = false
+    @State var isNearCurveControlZone: Bool = false
+    @State var isOptionHeldForCursor: Bool = false
+    @State var curveDragSegmentID: UUID?
+    @State var curveDragBaseline: Double?
+    @State var curveDragBulgeBaseline: Double?
+    @State var isNearSnapZone: Bool = false
     // Tracks proximity to a grid line specifically (not markers) — used to
     // show the snap cursor for "magnetic grid" auto-snap even without ⌘ held.
-    @State private var isNearGridSnapZone: Bool = false
+    @State var isNearGridSnapZone: Bool = false
     // Whether the closest ⌘-snap target (marker or grid line combined) is
     // specifically the grid line — used only to color the snap cursor.
-    @State private var isNearestSnapGrid: Bool = false
-    @State private var flagsChangedMonitor: Any?
+    @State var isNearestSnapGrid: Bool = false
+    @State var flagsChangedMonitor: Any?
     // Tracks whether the window is currently full screen, so the top
     // padding reserved to clear the title bar can be dropped once that
     // title bar itself is hidden (full screen has no title bar to avoid).
-    @State private var isFullScreen: Bool = false
-    @State private var fullScreenEnterObserver: Any?
-    @State private var fullScreenExitObserver: Any?
-    @State private var tempMinAmplitude: String = "0"
-    @State private var tempMaxAmplitude: String = "1"
-    @State private var tempIsGate: Bool = false
-    @State private var tempQuantizeStep: String = "0"
-    @State private var tempQuantizeEnabled: Bool = false
-    @Environment(\.colorScheme) private var colorScheme
+    @State var isFullScreen: Bool = false
+    @State var fullScreenEnterObserver: Any?
+    @State var fullScreenExitObserver: Any?
+    @State var tempMinAmplitude: String = "0"
+    @State var tempMaxAmplitude: String = "1"
+    @State var tempIsGate: Bool = false
+    @State var tempQuantizeStep: String = "0"
+    @State var tempQuantizeEnabled: Bool = false
+    @Environment(\.colorScheme) var colorScheme
 
     // Track background tint. The same 0.3 that looks right on a light
     // background reads as too saturated against a dark one, so it's pulled
     // back in dark mode.
-    private var trackBackgroundOpacity: Double {
+    var trackBackgroundOpacity: Double {
         colorScheme == .dark ? 0.18 : 0.3
     }
     // Point currently being placed by a press-drag-release on empty track
     // space: created on mouse-down, dragged while held, committed on release.
-    @State private var creatingPointId: UUID?
-    @State private var creatingPointTrackIndex: Int?
+    @State var creatingPointId: UUID?
+    @State var creatingPointTrackIndex: Int?
     // Set when the user commits a quantize step that had to be clamped, so we
     // can tell them rather than silently changing what they typed.
-    @State private var invalidQuantizeStepMessage: String? = nil
-    @State private var pendingGateSwitchIndex: Int? = nil
-    @State private var messagesWindowController: NSWindowController?
+    @State var invalidQuantizeStepMessage: String? = nil
+    @State var pendingGateSwitchIndex: Int? = nil
+    @State var messagesWindowController: NSWindowController?
     // Explicit visibility tracking for the OSC messages window's Open/Close
     // toggle — more reliable than reading NSWindow.isVisible directly.
-    @State private var isOSCWindowVisible: Bool = false
-    @State private var oscWindowCloseDelegate: OSCWindowCloseDelegate?
+    @State var isOSCWindowVisible: Bool = false
+    @State var oscWindowCloseDelegate: OSCWindowCloseDelegate?
     // Points list window (same open/close toggle pattern as the OSC one).
-    @State private var pointListWindowController: NSWindowController?
-    @State private var isPointListWindowVisible: Bool = false
-    @State private var pointListCloseDelegate: OSCWindowCloseDelegate?
-    @State private var pdfWindowController: NSWindowController?
+    @State var pointListWindowController: NSWindowController?
+    @State var isPointListWindowVisible: Bool = false
+    @State var pointListCloseDelegate: OSCWindowCloseDelegate?
+    @State var pdfWindowController: NSWindowController?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
-    @State private var savedFileURL: URL?
+    @State var savedFileURL: URL?
     // Managing focus explicitly (defaulting to nil) stops macOS from
     // automatically giving keyboard focus to the first text field at launch.
     private enum ToolbarField: Hashable {
         case duree, oscAddress
     }
-    @FocusState private var focusedField: ToolbarField?
-    @State private var draggedTrackIndex: Int?
-    @State private var dragStartHeight: CGFloat = 0
+    @FocusState var focusedField: ToolbarField?
+    @State var draggedTrackIndex: Int?
+    @State var dragStartHeight: CGFloat = 0
     // Duration trim handle, pinned to the right edge of the window: drag
     // horizontally to grow/shrink the track's total duration.
-    @State private var isDraggingDurationHandle: Bool = false
+    @State var isDraggingDurationHandle: Bool = false
     // Velocity-based drag: the horizontal offset from where the drag
     // started controls the *rate* of change (seconds of duree per second
     // held), rather than directly mapping to a duree delta. A repeating
     // timer applies that rate continuously while the drag is held.
-    @State private var durationDragCurrentDeltaX: CGFloat = 0
-    @State private var durationDragTimer: Timer?
+    @State var durationDragCurrentDeltaX: CGFloat = 0
+    @State var durationDragTimer: Timer?
     // Brief flash indicator for the compact command bar's "OSC" label,
     // lit up for a short moment each time an OSC message actually goes out.
-    @State private var isOSCFlashing: Bool = false
-    @State private var oscFlashTimer: Timer?
+    @State var isOSCFlashing: Bool = false
+    @State var oscFlashTimer: Timer?
     // How fast duree changes per second, per pixel of horizontal offset
     // from the drag's start point.
     // Non-linear speed curve: rate = sign(dx) * |dx|^exponent * scale.
@@ -161,12 +161,12 @@ struct ContentView: View {
     private let durationDragVelocityExponent: Double = 1.8
     private let durationDragVelocityScale: Double = 0.00126
     // Track reordering (drag handle in the header). "markers" (index 0) stays pinned.
-    @State private var reorderingIndex: Int?
-    @State private var reorderDragTranslation: CGFloat = 0
+    @State var reorderingIndex: Int?
+    @State var reorderDragTranslation: CGFloat = 0
     // Accumulates by ± the swapped neighbor's height each time a swap happens during
     // the same drag, so the raw (cumulative-since-start) gesture translation can be
     // corrected into the right visual offset without ever being overwritten wrong.
-    @State private var reorderBaselineOffset: CGFloat = 0
+    @State var reorderBaselineOffset: CGFloat = 0
 
     // Vertical margin (= circle radius) reserved at the top/bottom of a curve
     // track so that points at the extreme values (0 or 1) aren't half-clipped.
@@ -186,10 +186,6 @@ struct ContentView: View {
     // The actual row height to use for a given track: folded tracks always
     // collapse to foldedTrackHeight, regardless of type; otherwise bang/message
     // tracks are a fixed 45, and curve/step tracks use their own `height`.
-    private func rowHeight(for piste: TimelineTrack) -> CGFloat {
-        if piste.isFolded { return foldedTrackHeight }
-        return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
-    }
 
     // Applies whatever vertical constraint the track has to a raw y value.
     // Called from every point-creating/point-moving path (click, drag, editor),
@@ -197,60 +193,19 @@ struct ContentView: View {
     //
     // Gate takes priority: it's already a strict 0/1 quantization, so a step
     // value on top of it would be meaningless (and is hidden in the UI).
-    private func gateSnappedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
-
-        if piste.type == .step && piste.isGate {
-            let midpoint = (piste.minAmplitude + piste.maxAmplitude) / 2
-            return y >= midpoint ? piste.maxAmplitude : piste.minAmplitude
-        }
-
-        guard piste.type == .curve || piste.type == .step else { return y }
-        return quantizedY(y, forTrackIndex: index)
-    }
 
     // Snaps y to the nearest multiple of the track's quantizeStep, measured
     // from minAmplitude (so the range's own bounds are always reachable), then
     // clamps back into range — rounding could otherwise land just outside it.
-    private func quantizedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        guard piste.quantizeActive else { return y }
-        let offset = y - piste.minAmplitude
-        let snapped = piste.minAmplitude + (offset / step).rounded() * step
-        return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
-    }
 
     // The y values every quantization tick sits on, for a track. Empty when
     // quantization is off. Capped so an absurdly small step can't generate
     // thousands of ticks (the UI thins them out further; this is the hard
     // safety limit on the underlying set).
-    private func quantizeTickValues(forTrackIndex index: Int) -> [Double] {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        let range = piste.maxAmplitude - piste.minAmplitude
-        guard piste.quantizeActive, range > 0 else { return [] }
-        let count = Int((range / step).rounded(.down))
-        guard count >= 1, count <= 500 else { return [] }
-        return (0...count).map { piste.minAmplitude + Double($0) * step }
-    }
 
     // Which of those ticks to actually draw at the track's current height:
     // keeps every Nth one (N from a "nice" progression) so they never get
     // closer than a legible minimum, exactly like the horizontal grid does.
-    private func visibleQuantizeTicks(forTrackIndex index: Int) -> [Double] {
-        let all = quantizeTickValues(forTrackIndex: index)
-        guard all.count > 1 else { return all }
-        let usableHeight = pistes[index].height - 2 * curveMargin
-        guard usableHeight > 0 else { return [] }
-        let spacing = usableHeight / CGFloat(all.count - 1)
-        let minSpacing: CGFloat = 7
-        guard spacing < minSpacing else { return all }
-        let rawSkip = Double(minSpacing / spacing)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500]
-        let skip = Int(niceSteps.first(where: { $0 >= rawSkip }) ?? 500)
-        return all.enumerated().compactMap { i, v in i % skip == 0 ? v : nil }
-    }
 
     // A lightweight, non-interactive "ghost" preview of a folded track's
     // content — no point markers, no coordinate labels, no gestures, just a
@@ -259,103 +214,45 @@ struct ContentView: View {
     // (ignoring segmentCurve/segmentBulge) since the folded row is too thin
     // for the curvature to read anyway.
     @ViewBuilder
-    private func foldedGhostTrace(for piste: TimelineTrack, largeurTimeline: CGFloat) -> some View {
-        let h = foldedTrackHeight
-        let margin: CGFloat = 3
-        switch piste.type {
-        case .bang, .message:
-            ForEach(piste.evenements) { event in
-                let xPos = CGFloat(event.time / duree) * largeurTimeline
-                Rectangle()
-                    .fill(piste.couleur.opacity(0.7))
-                    .frame(width: 1, height: h * 0.6)
-                    .position(x: xPos, y: h / 2)
-            }
-            .allowsHitTesting(false)
-        case .curve:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for value: Double) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
-                        let point = CGPoint(x: xPos, y: yPos(for: event.y))
-                        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1)
-                .allowsHitTesting(false)
-            }
-        case .step:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for event: TimelineEvent) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (event.y - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
-                        let y = yPos(for: event)
-                        if i == 0 {
-                            path.move(to: CGPoint(x: xPos, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
-                            path.addLine(to: CGPoint(x: xPos, y: y))
-                        }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1.5)
-                .allowsHitTesting(false)
-            }
-        case .normal:
-            EmptyView()
-        }
-    }
 
     // MARK: - Zoom-centering state
-    @State private var scrollOffsetX: CGFloat = 0
+    @State var scrollOffsetX: CGFloat = 0
     // True while a pinch gesture is in progress: TimelineScrollView's Coordinator
     // handles its own mouse-anchored centering during a pinch, so the viewport-center
     // recentering below (used for the RotaryKnob) should stand down while this is true.
-    @State private var isPinchZooming: Bool = false
+    @State var isPinchZooming: Bool = false
     // Toggle for showing/hiding the "time, value" coordinate labels next to points.
-    @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
+    @AppStorage("showPointCoordinates") var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
-    @AppStorage("showGrid") private var showGrid: Bool = false
-    @AppStorage("oscMessagesPerSecond") private var oscMessagesPerSecond: Int = 20
+    @AppStorage("showGrid") var showGrid: Bool = false
+    @AppStorage("oscMessagesPerSecond") var oscMessagesPerSecond: Int = 20
     // Toggles between the full command bar (toolbar with all controls) and
     // a compact, full-width control line (position + play/loop indicators).
-    @AppStorage("showCommandBar") private var showCommandBar: Bool = true
+    @AppStorage("showCommandBar") var showCommandBar: Bool = true
     // Shared with OSCcourierApp's menu commands via the same @AppStorage keys.
-    @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
+    @AppStorage("showMarkersTrack") var showMarkersTrack: Bool = true
+    @AppStorage("tracksLocked") var tracksLocked: Bool = false
     // "Go to (mm:ss)" dialog, triggered from the Play menu.
-    @State private var showGoToTimeDialog: Bool = false
-    @State private var goToTimeString: String = "00:00"
-    @State private var showGoToMarkerNameDialog: Bool = false
-    @State private var goToMarkerNameString: String = ""
-    @State private var showGoToMarkerNoMatch: Bool = false
+    @State var showGoToTimeDialog: Bool = false
+    @State var goToTimeString: String = "00:00"
+    @State var showGoToMarkerNameDialog: Bool = false
+    @State var goToMarkerNameString: String = ""
+    @State var showGoToMarkerNoMatch: Bool = false
     // Grid line generation: evenly spaced dashed vertical lines across all
     // tracks, same period/phase model as the bang autofill.
-    @State private var showGridSettingsPopup: Bool = false
-    @State private var gridPeriodString: String = "1.0"
-    @State private var gridPhaseString: String = "0.0"
-    @State private var gridPeriod: Double = 1.0
-    @State private var gridPhase: Double = 0.0
+    @State var showGridSettingsPopup: Bool = false
+    @State var gridPeriodString: String = "1.0"
+    @State var gridPhaseString: String = "0.0"
+    @State var gridPeriod: Double = 1.0
+    @State var gridPhase: Double = 0.0
     // Width of the timeline viewport (updated from the outer GeometryReader), used to
     // compute how much zoom is needed to reach the 1s = 1000px target regardless of `duree`.
-    @State private var timelineAreaWidth: CGFloat = 1500
+    @State var timelineAreaWidth: CGFloat = 1500
 
     // Maximum zoom factor such that at max zoom, 1 second of timeline = 1000px,
     // no matter how long the track (`duree`) is. Without this, a fixed max zoom
     // (e.g. 10x) isn't enough to reach that resolution once `duree` gets large.
-    private var maxZoomX: Double {
+    var maxZoomX: Double {
         let outerWidth = max(timelineAreaWidth, 1)
         let desiredLargeur = 1000.0 * duree // pixels needed so that 1s = 1000px
         let zoom = (desiredLargeur + 140) / outerWidth
@@ -365,7 +262,7 @@ struct ContentView: View {
     // maxZoomX computed as if duree were pinned at 30s (same outerWidth) —
     // used purely as a reference span for calibrating the zoom knob's
     // sensitivity below, not for the actual zoom range.
-    private var referenceMaxZoomX: Double {
+    var referenceMaxZoomX: Double {
         let outerWidth = max(timelineAreaWidth, 1)
         let desiredLargeur = 1000.0 * 30.0
         return max(1.0, (desiredLargeur + 140) / outerWidth)
@@ -377,7 +274,7 @@ struct ContentView: View {
     // longer tracks to reach the same zoom level. Scaling sensitivity by the
     // ratio of the current range's span to the 30s-reference span keeps the
     // same drag distance always covering the same *fraction* of the range.
-    private var zoomKnobSensitivity: Double {
+    var zoomKnobSensitivity: Double {
         let referenceSpan = max(referenceMaxZoomX - 1.0, 0.0001)
         let currentSpan = max(maxZoomX - 1.0, 0.0001)
         return 0.05 * (currentSpan / referenceSpan)
@@ -385,7 +282,7 @@ struct ContentView: View {
 
     // Tracks actually shown in the timeline — all of them, unless the
     // "/markers" track (always index 0) is hidden via showMarkersTrack.
-    private var visiblePistes: [TimelineTrack] {
+    var visiblePistes: [TimelineTrack] {
         showMarkersTrack ? pistes : Array(pistes.dropFirst())
     }
 
@@ -393,7 +290,7 @@ struct ContentView: View {
     // inside the inner GeometryReader), plus the top padding reserved for the playhead
     // triangle. Used as the document's actual height so vertical scrolling can reveal
     // tracks that would otherwise be clipped below the visible viewport.
-    private var totalTracksHeight: CGFloat {
+    var totalTracksHeight: CGFloat {
         24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5) + 14
     }
 
@@ -401,7 +298,7 @@ struct ContentView: View {
     // track never reuses a number already taken by a track of the other color.
     // Based on the highest existing /track_N suffix rather than a raw count,
     // so it stays correct even after tracks have been deleted or reordered.
-    private var nextTrackName: String {
+    var nextTrackName: String {
         let existingNumbers = pistes.compactMap { piste -> Int? in
             guard piste.nom.hasPrefix("/track_") else { return nil }
             return Int(piste.nom.dropFirst("/track_".count))
@@ -415,482 +312,64 @@ struct ContentView: View {
     // "mm:ss.cc" — centiseconds included because the duration trim handle
     // adjusts by 0.01s steps: rounding the display to whole seconds made the
     // field look frozen while trimming, and misreported the actual duration.
-    private func formattedDuration(_ seconds: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        return String(format: "%02d:%02d.%02d", minutes, secs, centis)
-    }
 
     // Parses a duration back into seconds. Deliberately permissive, so typing
     // a duration stays simple even though the display is precise: "30",
     // "30.5", "00:30" and "00:30.47" are all accepted.
-    private func parseDuration(_ text: String) -> Double? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let parts = trimmed.split(separator: ":")
-        if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) {
-            return minutes * 60 + seconds
-        } else if parts.count == 1, let seconds = Double(parts[0]) {
-            return seconds
-        }
-        return nil
-    }
 
     // Formats a ruler tick label. Ticks spaced 1s apart or more show plain
     // "mm:ss"; ticks spaced under 1s apart (zoomed in a lot) additionally
     // show centiseconds ("mm:ss.cc"), since otherwise consecutive sub-second
     // ticks would render identically.
-    private func formattedTick(_ seconds: Double, labelInterval: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        if labelInterval < 1 {
-            return String(format: "%02d:%02d.%02d", minutes, secs, centis)
-        } else {
-            return String(format: "%02d:%02d", minutes, secs)
-        }
-    }
 
     // Formats a duration in seconds as "mm:ss:cc" (minutes:seconds:centiseconds).
-    private func formattedPosition(_ seconds: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        return String(format: "%02d:%02d:%02d", minutes, secs, centis)
-    }
 
-    private func encodedProjectData() -> Data? {
-        let data = SaveData(duree: duree, oscAddress: oscManager.address, zoomX: zoomX, pistes: pistes)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try? encoder.encode(data)
-    }
 
-    private func saveProject() {
-        guard let jsonData = encodedProjectData() else { return }
-
-        if let url = savedFileURL {
-            try? jsonData.write(to: url)
-        } else {
-            promptAndSave(jsonData)
-        }
-    }
 
     // Always prompts for a new location, regardless of any previously saved file.
-    private func saveProjectAs() {
-        guard let jsonData = encodedProjectData() else { return }
-        promptAndSave(jsonData)
-    }
 
-    private func promptAndSave(_ jsonData: Data) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "OSCcourier.json"
-        panel.canCreateDirectories = true
-        if panel.runModal() == .OK, let url = panel.url {
-            savedFileURL = url
-            try? jsonData.write(to: url)
-        }
-    }
 
-    private func loadProject() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let jsonData = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
 
-        enLecture = false
-        position = 0
-        lastSentEvents.removeAll()
-        duree = decoded.duree
-        dureeText = formattedDuration(decoded.duree)
-        zoomX = decoded.zoomX
-        oscManager.address = decoded.oscAddress
-        oscManager.setupOSCConnection()
-        pistes = decoded.pistes
-        savedFileURL = url // further saves overwrite the file we just loaded
-    }
-
-    private func openPDFWindow() {
-        if pdfWindowController != nil {
-            pdfWindowController?.showWindow(nil)
-            return
-        }
-        guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
-        let document = PDFDocument(url: pdfURL)
-        let pdfView = PDFView()
-        pdfView.document = document
-        pdfView.autoScales = false
-        pdfView.scaleFactor = 1.5
-
-        // Size the window to fit the PDF's actual page at that same scale,
-        // instead of a fixed guess, so nothing gets cut off horizontally.
-        var contentWidth: CGFloat = 600
-        var contentHeight: CGFloat = 800
-        if let page = document?.page(at: 0) {
-            let pageBounds = page.bounds(for: .mediaBox)
-            contentWidth = pageBounds.width * pdfView.scaleFactor
-            contentHeight = pageBounds.height * pdfView.scaleFactor
-        }
-        if let screenFrame = NSScreen.main?.visibleFrame {
-            contentWidth = min(contentWidth, screenFrame.width * 0.9)
-            contentHeight = min(contentHeight, screenFrame.height * 0.9)
-        }
-
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight),
-                             styleMask: [.titled, .closable, .resizable],
-                             backing: .buffered,
-                             defer: false)
-        window.title = "Help"
-        window.center()
-        window.contentView = pdfView
-        pdfWindowController = NSWindowController(window: window)
-        pdfWindowController?.showWindow(nil)
-    }
 
     // Shared with SettingsView via the same @AppStorage key.
-    @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
-    @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
+    @AppStorage("oscAddressPrefix") var oscAddressPrefix: String = ""
+    @AppStorage("oscReceivePort") var oscReceivePort: Int = 7500
     // Grid snap mode: false = grid lines only snap like markers do, via
     // ⌘+drag; true = "magnetic grid", points snap to the nearest grid line
     // automatically while dragging, no ⌘ needed. Markers themselves always
     // require ⌘ either way — this setting only affects grid-line snapping.
-    @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
+    @AppStorage("magneticGridSnap") var magneticGridSnap: Bool = false
 
-    private func sendOSCMessage(_ message: String, color: Color = .primary) {
-        let fullMessage = oscAddressPrefix + message
-        oscManager.sendMessage(fullMessage)
-        messageStore.addMessage(fullMessage, color: color)
-        flashOSCIndicator()
-    }
 
-    private func flashOSCIndicator() {
-        isOSCFlashing = true
-        oscFlashTimer?.invalidate()
-        let t = Timer(timeInterval: 0.15, repeats: false) { _ in
-            DispatchQueue.main.async {
-                isOSCFlashing = false
-            }
-        }
-        // .common so the flash still resets promptly even if the user is
-        // mid-drag on something else when messages are sent.
-        RunLoop.main.add(t, forMode: .common)
-        oscFlashTimer = t
-    }
 
     // Rebuilds the points list snapshot into the shared store. Called whenever
     // the tracks change, so the (observing) list window stays live.
-    private func refreshPointList() {
-        var rows: [PointListRow] = []
-        for (trackIndex, piste) in pistes.enumerated() {
-            // Only markers and message tracks carry a meaningful label. Bang
-            // and curve/step points don't — any label they hold is leftover
-            // default state, so showing it (e.g. a stray "M") is just noise.
-            let hasLabel = trackIndex == 0 || piste.type == .message
-            let hasY = piste.type == .curve || piste.type == .step
-            for event in piste.evenements {
-                rows.append(PointListRow(
-                    id: event.id,
-                    trackName: piste.nom,
-                    trackColor: piste.couleur,
-                    time: event.time,
-                    label: hasLabel ? event.label : "",
-                    y: event.y,
-                    comment: event.comment,
-                    hasY: hasY,
-                    hasLabel: hasLabel,
-                    minAmplitude: piste.minAmplitude,
-                    maxAmplitude: piste.maxAmplitude
-                ))
-            }
-        }
-        pointListStore.rows = rows.sorted { $0.time < $1.time }
-        pointListStore.trackNames = pistes.map { $0.nom }
-    }
 
     // Applies an edit made in the points list window. Routed through the same
     // clamping and gateSnappedY the timeline uses, so a value typed there is
     // constrained exactly like one dragged here (range bounds, quantization,
     // Gate mode).
-    private func applyPointEdit(_ edit: PointEdit) {
-        guard !tracksLocked else { return }
-        for trackIndex in pistes.indices {
-            guard let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == edit.id }) else { continue }
-
-            if let time = edit.time {
-                pistes[trackIndex].evenements[eventIndex].time = min(max(time, 0), duree)
-            }
-            if let label = edit.label {
-                pistes[trackIndex].evenements[eventIndex].label = label
-            }
-            if let y = edit.y {
-                let piste = pistes[trackIndex]
-                let clamped = min(max(y, piste.minAmplitude), piste.maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(clamped, forTrackIndex: trackIndex)
-            }
-            if let comment = edit.comment {
-                pistes[trackIndex].evenements[eventIndex].comment = comment
-            }
-
-            pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
-            return
-        }
-    }
 
     // Opens the point editor for a given event, wherever it lives. Shared by
     // the timeline's double-click and the points list window, so both go
     // through exactly the same editing path.
-    private func beginEditingPoint(eventId: UUID) {
-        guard !tracksLocked else { return }
-        for (trackIndex, piste) in pistes.enumerated() {
-            guard let event = piste.evenements.first(where: { $0.id == eventId }) else { continue }
-            pointAEditer = (trackIndex, eventId)
-            nouvellePositionString = String(format: "%.2f", event.time)
-            nouvelleYString = String(format: "%.2f", event.y)
-            nouveauComment = event.comment
-            if trackIndex == 0 || piste.type == .message {
-                nouveauLabel = event.label
-            }
-            return
-        }
-    }
 
     // Press-drag-release point creation, shared by every track type. The point
     // is created on mouse-down and then follows the cursor until release, so
     // it can be positioned in one gesture instead of click-then-drag-again.
     // Snapping/quantization go through the same paths a normal drag uses, so
     // behaviour is identical whether a point is being created or moved.
-    private func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        guard !tracksLocked else { return }
-        let piste = pistes[trackIndex]
-        let rawTime = (Double(location.x) / Double(largeurTimeline)) * duree
-        let time = min(max(rawTime, 0), duree)
-
-        let label: String
-        let y: Double
-        switch piste.type {
-        case .bang:
-            label = "M"
-            y = 0.5
-        case .message:
-            label = "key"
-            y = 0.5
-        case .curve, .step:
-            label = ""
-            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
-            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            y = gateSnappedY(raw, forTrackIndex: trackIndex)
-        case .normal:
-            label = ""
-            y = 0.5
-        }
-
-        let event = TimelineEvent(time: time, label: label, y: y)
-        pistes[trackIndex].evenements.append(event)
-        pistes[trackIndex].evenements.sort()
-        lastSentEvents.removeAll()
-
-        creatingPointId = event.id
-        creatingPointTrackIndex = trackIndex
-    }
 
     // Moves the in-progress point as the cursor is dragged, applying the same
     // constraints (timeline bounds, ⌘/magnetic snapping, vertical
     // quantization) that dragging an existing point applies.
-    private func updateCreatingPoint(at location: CGPoint, largeurTimeline: CGFloat) {
-        guard !tracksLocked,
-              let id = creatingPointId,
-              let trackIndex = creatingPointTrackIndex,
-              pistes.indices.contains(trackIndex),
-              let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id })
-        else { return }
 
-        let xPos = Double(location.x)
-        var newTime = (xPos / Double(largeurTimeline)) * duree
 
-        if NSEvent.modifierFlags.contains(.command),
-           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-            newTime = snapped
-        } else if magneticGridSnap,
-                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-            newTime = snapped
-        }
-        pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), duree)
 
-        let piste = pistes[trackIndex]
-        if piste.type == .curve || piste.type == .step {
-            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
-            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrackIndex: trackIndex)
-        }
-        lastSentEvents.removeAll()
-    }
-
-    private func finishCreatingPoint() {
-        if let trackIndex = creatingPointTrackIndex, pistes.indices.contains(trackIndex) {
-            pistes[trackIndex].evenements.sort()
-        }
-        creatingPointId = nil
-        creatingPointTrackIndex = nil
-    }
-
-    private func openPointListWindow() {
-        refreshPointList()
-
-        // Wired every time (cheap, and the closure captures fresh state) so
-        // the list window can hand its edits back to us.
-        pointListStore.onCommitEdit = { edit in
-            applyPointEdit(edit)
-        }
-
-        if let controller = pointListWindowController {
-            if isPointListWindowVisible {
-                controller.window?.close()
-                isPointListWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                isPointListWindowVisible = true
-            }
-            return
-        }
-
-        // The view observes pointListStore, so no need to rebuild the hosting
-        // view on reopen — it re-renders on its own whenever the store changes.
-        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore))
-        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 380),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Point List"
-        window.setFrameAutosaveName("PointListWindow")
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 520, height: 300)
-        window.isReleasedWhenClosed = false
-        // Deliberately NOT a floating window: a floating list parked in the
-        // middle of the screen would sit on top of every sheet the main window
-        // opens (point editor, autofill, grid settings...), hiding them.
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            isPointListWindowVisible = false
-        }
-        delegate.sharedUndoManager = timelineStore.undoManager
-        window.delegate = delegate
-        pointListCloseDelegate = delegate
-
-        window.center()
-
-        pointListWindowController = NSWindowController(window: window)
-        pointListWindowController?.showWindow(nil)
-        isPointListWindowVisible = true
-    }
-
-    private func openOSCMessagesWindow() {
-        // No per-window appearance handling here anymore: NSApp.appearance
-        // (set app-wide from the Appearance setting) already covers every
-        // window, including this one and its title bar.
-        if let controller = messagesWindowController {
-            if isOSCWindowVisible {
-                controller.window?.close()
-                isOSCWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                isOSCWindowVisible = true
-            }
-            return
-        }
-
-        let contentView = OSCMessagesView(messageStore: messageStore)
-        let hostingView = NSHostingView(rootView: contentView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 300)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 300),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Outgoing OSC Messages"
-        window.setFrameAutosaveName("OSCMessagesWindow")
-        window.setContentSize(NSSize(width: 220, height: 300))
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 50, height: 300)
-        // Without this, closing a manually-created NSWindow (not from a
-        // nib) can release it out from under us, leaving our controller
-        // holding a stale reference on the next toggle.
-        window.isReleasedWhenClosed = false
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            isOSCWindowVisible = false
-        }
-        window.delegate = delegate
-        oscWindowCloseDelegate = delegate
-
-        // Top-right of the screen, with a small margin from the edges —
-        // applied after setFrameAutosaveName so it always ends up there,
-        // rather than wherever a previously saved frame happened to be.
-        if let screenFrame = NSScreen.main?.visibleFrame {
-            let margin: CGFloat = 20
-            let origin = NSPoint(
-                x: screenFrame.maxX - window.frame.width - margin,
-                y: screenFrame.maxY - window.frame.height - margin
-            )
-            window.setFrameOrigin(origin)
-        }
-
-        messagesWindowController = NSWindowController(window: window)
-        messagesWindowController?.showWindow(nil)
-        isOSCWindowVisible = true
-    }
 
     // Generates a rectangular/pulse-train pattern of step events across [0, duree].
     // period: T in seconds. phase: fraction of the period (0...1) the pattern is
     // shifted by. pulseWidth: fraction of the period (0...1) spent at ampMax.
-    private func rectangleEvents(period: Double, phase: Double, pulseWidth: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        let highDuration = min(max(pulseWidth, 0), 1) * period
-
-        var events: [TimelineEvent] = []
-        let firstN = Int((-phaseOffset / period).rounded(.down)) - 1
-        var n = firstN
-        while true {
-            let cycleStart = Double(n) * period + phaseOffset
-            if cycleStart > duree { break }
-            let highEnd = cycleStart + highDuration
-            if cycleStart >= 0 && cycleStart <= duree {
-                events.append(TimelineEvent(time: cycleStart, label: "", y: ampMax))
-            }
-            if highEnd >= 0 && highEnd <= duree {
-                events.append(TimelineEvent(time: highEnd, label: "", y: ampMin))
-            }
-            n += 1
-        }
-
-        // Make sure playback starting at t=0 reflects the correct held value,
-        // even if the first generated edge falls after 0.
-        if !events.contains(where: { $0.time == 0 }) {
-            let containingN = Int(((0 - phaseOffset) / period).rounded(.down))
-            let cycleStart0 = Double(containingN) * period + phaseOffset
-            let highEnd0 = cycleStart0 + highDuration
-            let valueAtZero = (0 >= cycleStart0 && 0 < highEnd0) ? ampMax : ampMin
-            events.insert(TimelineEvent(time: 0, label: "", y: valueAtZero), at: 0)
-        }
-
-        return events.sorted { $0.time < $1.time }
-    }
 
     // Generates a sine or skewed-sawtooth wave for curve tracks (piecewise-linear
     // interpolation between the generated points, so a Sin wave needs many
@@ -899,270 +378,73 @@ struct ContentView: View {
     // Warps a normalized progress value t (0...1) into a symmetric S-curve
     // shape based on a single curvature parameter, matching Logic Pro's
     // automation curve tool. curvature == 0 leaves t unchanged (straight line).
-    private func curvedProgress(_ t: Double, curvature: Double) -> Double {
-        guard curvature != 0 else { return t }
-        let k = pow(2, curvature)
-        if t < 0.5 {
-            return pow(t * 2, k) / 2
-        } else {
-            return 1 - pow((1 - t) * 2, k) / 2
-        }
-    }
 
     // A simple power-curve warp with no inflection point (single concave or
     // convex bow throughout, unlike curvedProgress's symmetric S-shape).
     // bulge == 0 leaves t unchanged (straight line).
-    private func bulgeProgress(_ t: Double, bulge: Double) -> Double {
-        guard bulge != 0 else { return t }
-        let k = pow(2, bulge)
-        return pow(t, k)
-    }
 
     // Combines both warps: horizontal drag (segmentCurve, S-shape) and
     // vertical drag (segmentBulge, simple bow) apply together.
-    private func combinedProgress(_ t: Double, curvature: Double, bulge: Double) -> Double {
-        curvedProgress(bulgeProgress(t, bulge: bulge), curvature: curvature)
-    }
 
     // The curve's rendered y-position (in track-local pixels), at a given
     // time, accounting for each segment's curvature. Returns nil if the time
     // falls outside the track's own point range (no curve there).
-    private func curveYPosition(forTime time: Double, trackIndex: Int) -> CGFloat? {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1, let first = sorted.first, let last = sorted.last,
-              time >= first.time, time <= last.time else { return nil }
-
-        for i in 0..<(sorted.count - 1) {
-            let a = sorted[i]
-            let b = sorted[i + 1]
-            guard time >= a.time && time <= b.time else { continue }
-            let t = (b.time - a.time) > 0 ? (time - a.time) / (b.time - a.time) : 0
-            let curvedT = combinedProgress(t, curvature: a.segmentCurve, bulge: a.segmentBulge)
-            let value = a.y + (b.y - a.y) * curvedT
-            let amplitudeRange = pistes[trackIndex].maxAmplitude - pistes[trackIndex].minAmplitude
-            let normalizedY = amplitudeRange > 0 ? (value - pistes[trackIndex].minAmplitude) / amplitudeRange : 0.5
-            return curveMargin + (pistes[trackIndex].height - 2 * curveMargin) * (1 - normalizedY)
-        }
-        return nil
-    }
 
     // Whether the segment containing `time` is currently a hole
     // (segmentEnabled == false). Used to pick the erase vs. reconnect
     // cursor symbol while hovering. Defaults to true (no hole) if there's
     // no such segment.
-    private func isSegmentEnabled(forTime time: Double, trackIndex: Int) -> Bool {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1 else { return true }
-        for i in 0..<(sorted.count - 1) {
-            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
-            return sorted[i].segmentEnabled
-        }
-        return true
-    }
 
     // Directly applies the Shift segment-erase/reconnect cursor for a given
     // mouse location, imperatively — called from the curve area's
     // onContinuousHover on every real mouse movement. No @State involved,
     // so it works regardless of SwiftUI's render cycle.
-    private func applyShiftSegmentCursor(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        let time = (Double(location.x) / Double(largeurTimeline)) * duree
-        if let curveY = curveYPosition(forTime: time, trackIndex: trackIndex),
-           abs(Double(location.y) - Double(curveY)) < 12 {
-            if isSegmentEnabled(forTime: time, trackIndex: trackIndex) {
-                cursor(fromSymbol: "eraser.fill").set()
-            } else {
-                cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
-            }
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
 
     // Toggles segmentEnabled on whichever segment (curve tracks only)
     // contains `time`, punching or filling a silent "hole" in the curve.
     // Both endpoints stay untouched — only the interpolation/OSC output
     // between them is switched on or off.
-    private func toggleSegmentEnabled(forTime time: Double, trackIndex: Int) {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1 else { return }
-        for i in 0..<(sorted.count - 1) {
-            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
-            if let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == sorted[i].id }) {
-                pistes[trackIndex].evenements[eventIndex].segmentEnabled.toggle()
-                lastSentEvents.removeAll()
-            }
-            return
-        }
-    }
 
-    private func waveEvents(isSine: Bool, period: Double, phase: Double, skew: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var events: [TimelineEvent] = []
-
-        if isSine {
-            // Only place control points at the peaks and troughs (where a sine's
-            // tangent is naturally horizontal), and let the existing curve
-            // interpolation (segmentCurve) compute the shape between them —
-            // instead of approximating the wave with many sampled points.
-            // curvature ≈ 1.0 was picked to closely match a real sine's shape
-            // between a peak and a trough (a symmetric S-curve is a good fit,
-            // since sine also has zero slope at the extremes and its steepest
-            // slope exactly at the midpoint).
-            let sineSegmentCurvature = 1.0
-            let halfPeriod = period / 2
-            let firstPeakTime = phaseOffset + period / 4
-            let firstN = Int(((0 - firstPeakTime) / halfPeriod).rounded(.down)) - 1
-            var n = firstN
-            while true {
-                let time = firstPeakTime + Double(n) * halfPeriod
-                if time > duree { break }
-                let parity = ((n % 2) + 2) % 2 // n=0 → first peak, alternating from there
-                let value = parity == 0 ? ampMax : ampMin
-                if time >= 0 && time <= duree {
-                    events.append(TimelineEvent(time: time, label: "", y: value, segmentCurve: sineSegmentCurvature))
-                }
-                n += 1
-            }
-        } else {
-            // Skew = fraction of the period spent rising (0...1). 0.5 = symmetric
-            // triangle; near 1 = classic rising sawtooth; near 0 = reversed sawtooth.
-            let riseDuration = min(max(skew, 0.01), 0.99) * period
-            let firstN = Int(((0 - phaseOffset) / period).rounded(.down)) - 1
-            var n = firstN
-            while true {
-                let cycleStart = Double(n) * period + phaseOffset
-                if cycleStart > duree { break }
-                let peakTime = cycleStart + riseDuration
-                if cycleStart >= 0 && cycleStart <= duree {
-                    events.append(TimelineEvent(time: cycleStart, label: "", y: ampMin))
-                }
-                if peakTime >= 0 && peakTime <= duree {
-                    events.append(TimelineEvent(time: peakTime, label: "", y: ampMax))
-                }
-                n += 1
-            }
-        }
-
-        return events.sorted { $0.time < $1.time }
-    }
 
     // Generates evenly spaced bang events for bang/markers tracks.
     // defaultLabel is empty by design: plain bang tracks have no meaningful
     // label (only markers and message tracks do, and those pass an explicit
     // numberedLabelPrefix). It used to default to "M", which silently stamped
     // every autofilled bang with a stray marker-style label.
-    private func bangEvents(period: Double, phase: Double, duree: Double, defaultLabel: String = "", numberedLabelPrefix: String? = nil) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var events: [TimelineEvent] = []
-        var n = 0
-        var counter = 1
-        while true {
-            let time = Double(n) * period + phaseOffset
-            if time > duree { break }
-            if time >= 0 {
-                let label: String
-                if let prefix = numberedLabelPrefix {
-                    label = "\(prefix)_\(counter)"
-                    counter += 1
-                } else {
-                    label = defaultLabel
-                }
-                events.append(TimelineEvent(time: time, label: label, y: 0.5))
-            }
-            n += 1
-        }
-        return events
-    }
 
     // Called by the pencil button. Warns first if the track already has
     // points (since autofill replaces them entirely), otherwise opens the
     // relevant popup directly.
     // Builds an NSCursor from an SF Symbol image, tinted the given color.
-    private func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            .applying(.init(paletteColors: [color]))
-        // Falls back to a known-valid symbol (rather than an empty NSImage)
-        // if `name` doesn't resolve — an invalid SF Symbol name would
-        // otherwise silently produce an invisible cursor, which is exactly
-        // the kind of bug that's very hard to notice/debug from testing
-        // alone.
-        let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
-            ?? NSImage()
-        let image = baseImage.withSymbolConfiguration(config) ?? baseImage
-        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
-    }
 
     // All snap-target times currently available: marker positions, plus grid
     // lines when the grid is visible. Uses the same thinned-out set that's
     // actually rendered (visibleGridLineTimes), so snapping never lands on
     // a grid line that isn't visible on screen.
-    private func snapCandidateTimes(largeurTimeline: Double) -> [Double] {
-        var times = pistes[0].evenements.map { $0.time }
-        if showGrid {
-            times.append(contentsOf: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)))
-        }
-        return times
-    }
 
     // Finds the closest time to xPos among a given set of candidates, if any
     // falls within the 7px snap zone — nil otherwise.
-    private func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double) -> Double? {
-        guard !candidates.isEmpty, duree > 0 else { return nil }
-        let closest = candidates.min(by: { a, b in
-            let xA = (a / duree) * largeurTimeline
-            let xB = (b / duree) * largeurTimeline
-            return abs(xA - xPos) < abs(xB - xPos)
-        })
-        guard let closest = closest else { return nil }
-        let closestXPos = (closest / duree) * largeurTimeline
-        return abs(closestXPos - xPos) < 7 ? closest : nil
-    }
 
     // The closest snap-target time to xPos (in timeline pixels), if any
     // falls within the 7px snap zone — nil otherwise. Combines markers and
     // grid lines (used for the ⌘-driven snap, and the hover snap-cursor
     // indicator, which treat both the same way).
-    private func nearestSnapTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // Markers only (no grid lines) — the counterpart to nearestGridTime,
     // used to tell which of the two a combined ⌘-snap actually landed on.
-    private func nearestMarkerTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: pistes[0].evenements.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // Grid lines only (no markers) — used for "magnetic grid" auto-snap,
     // which should never pull a point onto a marker without ⌘. Matches the
     // thinned-out set actually rendered on screen (visibleGridLineTimes),
     // so you can never snap to a line you can't see.
-    private func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        guard showGrid else { return nil }
-        return nearestTime(among: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // When both a marker and a grid line are within the snap zone, which one
     // is actually closer to xPos? Used purely to pick the cursor color
     // (marker snap stays black, grid snap turns gray) — the actual snapping
     // logic elsewhere already picks the true closest via nearestSnapTime.
-    private func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double) -> Bool {
-        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline)
-        let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
-        guard let gridTime else { return false }
-        guard let markerTime else { return true }
-        let markerX = (markerTime / duree) * largeurTimeline
-        let gridX = (gridTime / duree) * largeurTimeline
-        return abs(gridX - xPos) < abs(markerX - xPos)
-    }
 
     // Is xPos (in timeline pixels) within the 7px snap zone of the nearest
     // marker line or grid line?
-    private func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
-        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline) != nil
-    }
 
     // Applies the right cursor for the current hover + modifier-key state
     // while hovering an actual point. Curve-segment hover (Option-bend,
@@ -1171,40 +453,11 @@ struct ContentView: View {
     // more reliable than ad-hoc NSCursor.set() calls during plain hover
     // (macOS silently overrides those outside an active drag), which is
     // why that logic doesn't live here.
-    private func updatePointCursor() {
-        guard isHoveringPoint else {
-            NSCursor.arrow.set()
-            return
-        }
-        if NSEvent.modifierFlags.contains(.shift) {
-            cursor(fromSymbol: "eraser.badge.xmark").set()
-        } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-            let color: NSColor = isNearestSnapGrid ? .gray : .black
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: color).set()
-        } else if magneticGridSnap && isNearGridSnapZone {
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
 
 
     // Generates evenly spaced grid line times across [0, duree] — same
     // period/phase model as bangEvents, but returning bare times (no labels
     // needed since grid lines are purely visual, not OSC-emitting events).
-    private func gridLineTimes(period: Double, phase: Double, duree: Double) -> [Double] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var times: [Double] = []
-        var n = 0
-        while true {
-            let time = Double(n) * period + phaseOffset
-            if time > duree { break }
-            if time >= 0 { times.append(time) }
-            n += 1
-        }
-        return times
-    }
 
     // For DISPLAY only (never for snapping, which stays at full granularity):
     // thins out the grid lines when their pixel spacing would be too dense
@@ -1213,394 +466,62 @@ struct ContentView: View {
     // Keeps every Nth line (N = smallest power-of-two-ish multiplier that
     // brings the spacing above a legible minimum) instead of changing the
     // actual period itself.
-    private func visibleGridLineTimes(largeurTimeline: CGFloat) -> [Double] {
-        let allTimes = gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree)
-        guard duree > 0, gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
-        let pixelsPerLine = largeurTimeline * CGFloat(gridPeriod / duree)
-        let minSpacing: CGFloat = 16
-        guard pixelsPerLine < minSpacing else { return allTimes }
-        // How many consecutive lines to fold into one to reach minSpacing —
-        // rounded up to a "nice" step (1, 2, 5, 10, 20, 50...) so the
-        // remaining visible lines still land on clean multiples of the
-        // original period rather than an arbitrary skip count.
-        let rawSkip = Double(minSpacing / pixelsPerLine)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
-        let skip = niceSteps.first(where: { $0 >= rawSkip }) ?? (niceSteps.last ?? 1000)
-        return allTimes.enumerated().compactMap { index, time in
-            index % Int(skip) == 0 ? time : nil
-        }
-    }
 
-    private func commitGridSettings() {
-        if let period = Double(gridPeriodString), let phase = Double(gridPhaseString) {
-            gridPeriod = period
-            gridPhase = phase
-        }
-        showGridSettingsPopup = false
-    }
 
-    private func openGridSettingsPopup() {
-        gridPeriodString = String(format: "%.2f", gridPeriod)
-        gridPhaseString = String(format: "%.2f", gridPhase)
-        showGridSettingsPopup = true
-    }
 
     // Scrolls the timeline horizontally so the playhead is centered in the
     // viewport, regardless of the current zoom level. Used after any "go to"
     // jump (time, next marker, marker by name) so the result is always
     // actually visible, not just updated off-screen.
-    private func centerOnPlayhead() {
-        let outerWidth = max(timelineAreaWidth, 1)
-        // timelineAreaWidth already excludes the duration handle (the whole
-        // timeline area is padded by its width), so no extra subtraction here
-        // — this must mirror the largeurTimeline used for drawing exactly.
-        let largeurTimeline = outerWidth * CGFloat(zoomX) - 140
-        guard largeurTimeline > 0 else { return }
-        let playheadX = 140 + CGFloat(position / duree) * largeurTimeline
-        scrollOffsetX = max(0, playheadX - outerWidth / 2)
-    }
 
     // Jumps the playhead to the next marker strictly after the current
     // position; wraps around to the earliest marker if there is none, or
     // does nothing if there are no markers at all.
-    private func goToNextMarker() {
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        guard !sorted.isEmpty else { return }
-        let target = sorted.first(where: { $0.time > position + 0.001 })?.time ?? sorted[0].time
-        position = target
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Jumps the playhead to the previous marker strictly before the current
     // position; wraps around to the latest marker if there is none, or does
     // nothing if there are no markers at all.
-    private func goToPreviousMarker() {
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        guard !sorted.isEmpty else { return }
-        let target = sorted.last(where: { $0.time < position - 0.001 })?.time ?? sorted[sorted.count - 1].time
-        position = target
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Jumps the playhead to the marker whose label matches `name`.
     // Tries an exact case-insensitive match first, then falls back to a
     // case-insensitive substring match (so a partial name, or one with a
     // stray extra space, still finds something reasonable). Shows a
     // "No match" alert if nothing matches either way.
-    private func goToMarkerByName(_ name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            showGoToMarkerNoMatch = true
-            return
-        }
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        let exactMatch = sorted.first(where: { $0.label.caseInsensitiveCompare(trimmed) == .orderedSame })
-        let partialMatch = sorted.first(where: { $0.label.range(of: trimmed, options: .caseInsensitive) != nil })
-        guard let match = exactMatch ?? partialMatch else {
-            showGoToMarkerNoMatch = true
-            return
-        }
-        position = match.time
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Parses a "mm:ss" (or bare seconds) string and jumps the playhead
     // there, clamped to [0, duree]. Reuses the same parser as the duration
     // field.
-    private func goToTime(_ text: String) {
-        guard let parsed = parseDuration(text) else { return }
-        position = min(max(parsed, 0), duree)
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Fold/unfold all tracks at once: if any track is currently unfolded,
     // fold everything; otherwise (everything already folded) unfold
     // everything. Mirrors the common "expand/collapse all" convention.
-    private func toggleFoldAll() {
-        let shouldFold = pistes.contains { !$0.isFolded }
-        for i in pistes.indices {
-            pistes[i].isFolded = shouldFold
-        }
-    }
 
     // Mute/unmute all tracks at once: if every track is already muted,
     // unmute everything; otherwise mute everything.
-    private func muteUnmuteAll() {
-        let shouldMute = !pistes.allSatisfy { $0.isMuted }
-        for i in pistes.indices {
-            pistes[i].isMuted = shouldMute
-        }
-    }
 
     // Removes every track except the pinned "/markers" track at index 0.
-    private func deleteAllTracks() {
-        guard !tracksLocked else { return }
-        pistes = [pistes[0]]
-        lastSentEvents.removeAll()
-    }
 
     // Centralizes track creation (used by both the toolbar buttons and the
     // Tracks menu commands) so the lock guard only needs to live in one place.
-    private func addTrack(couleur: Color, type: TrackType, height: CGFloat) {
-        guard !tracksLocked else { return }
-        pistes.append(TimelineTrack(nom: nextTrackName, couleur: couleur, evenements: [], type: type, height: height))
-    }
 
-    private func openAutofillPopup(for index: Int) {
-        guard !tracksLocked else { return }
-        if pistes[index].evenements.isEmpty {
-            proceedWithAutofill(for: index)
-        } else {
-            pendingAutofillIndex = index
-        }
-    }
 
-    private func proceedWithAutofill(for index: Int) {
-        switch pistes[index].type {
-        case .step:
-            autofillTrackIndex = index
-            autofillPeriodString = "1.0"
-            autofillPhaseString = "0.0"
-            autofillPulseWidthString = "0.5"
-            autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .curve:
-            waveTrackIndex = index
-            waveIsSine = true
-            wavePeriodString = "1.0"
-            wavePhaseString = "0.0"
-            waveSkewString = "0.5"
-            waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .bang, .message:
-            bangTrackIndex = index
-            bangPeriodString = "1.0"
-            bangPhaseString = "0.0"
-            bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
-        case .normal:
-            break
-        }
-    }
 
-    private func sendOSCMessagesForPosition(_ pos: Double) {
-        for piste in pistes where !piste.isMuted {
-            if piste.type == .bang {
-                let tol = 0.01
-                for event in piste.evenements {
-                    if abs(pos - event.time) < tol {
-                        if piste.nom == "/markers" {
-                            let label = event.label.isEmpty ? "marker" : event.label
-                            sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
-                        } else {
-                            sendOSCMessage(piste.nom + " bang", color: piste.couleur)
-                        }
-                    }
-                }
-            } else if piste.type == .message {
-                let tol = 0.01
-                for event in piste.evenements {
-                    if abs(pos - event.time) < tol {
-                        sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
-                    }
-                }
-            } else if piste.type == .curve {
-                // Only speaks where the curve is actually drawn — strictly
-                // between its first and last point. Before the first point
-                // or after the last one, the track stays silent instead of
-                // continuously repeating the nearest endpoint's value.
-                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-                if sortedEvents.isEmpty { continue }
-
-                let lastEventBefore = sortedEvents.last(where: { $0.time <= pos })
-                let nextEvent = sortedEvents.first(where: { $0.time > pos })
-
-                if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
-                    let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                    let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                    let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
-                }
-            } else if piste.type == .step {
-                // Zero-order hold: send the last event's value as-is, never interpolated.
-                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-                if sortedEvents.isEmpty { continue }
-
-                if let lastEventBefore = sortedEvents.last(where: { $0.time <= pos }) {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y), color: piste.couleur)
-                } else if let firstEvent = sortedEvents.first {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y), color: piste.couleur)
-                }
-            }
-        }
-    }
 
     // Called every 50ms by the playback timer. Pulled out into its own
     // function (rather than a large inline closure) so Swift type-checks it
     // on its own, instead of as part of one giant expression tree together
     // with the rest of the view body — which was timing out the compiler.
-    private func advancePlaybackTick() {
-        guard enLecture else {
-            // Reset so that resuming later doesn't compute a delta spanning
-            // the whole time playback was paused/stopped.
-            lastTickTimestamp = nil
-            return
-        }
-
-        let now = Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
-        // First tick after starting/resuming: fall back to the nominal 0.05
-        // since there's no previous timestamp yet to compute a real delta from.
-        let delta = lastTickTimestamp.map { now - $0 } ?? 0.05
-        lastTickTimestamp = now
-
-        let prev = position
-        position += delta
-        var justLooped = false
-        if position >= duree {
-            position = 0.0
-            if !enBoucle { enLecture = false }
-            lastSentEvents.removeAll()
-            justLooped = true
-        }
-        // Right on the tick where playback wraps back to 0, `prev` still
-        // holds the old (near-`duree`) position — comparing it directly
-        // against early event times would make the crossing check
-        // (prev < event.time <= position) fail for anything near the
-        // start, since prev is much larger than those times. Substitute a
-        // value below 0 for that one tick so events from the very start of
-        // the loop are correctly treated as freshly crossed.
-        let effectivePrev = justLooped ? -1.0 : prev
-
-        for piste in pistes {
-            guard piste.type == .bang, !piste.isMuted else { continue }
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                if piste.nom == "/markers" {
-                    let label = event.label.isEmpty ? "marker" : event.label
-                    sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
-                } else {
-                    sendOSCMessage(piste.nom + " bang", color: piste.couleur)
-                }
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .message, !piste.isMuted else { continue }
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-message-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .curve, !piste.isMuted else { continue }
-            // Only speaks where the curve is actually drawn — see the same
-            // comment in sendOSCMessagesForPosition.
-            let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-            if sortedEvents.isEmpty { continue }
-
-            let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
-            let nextEvent = sortedEvents.first(where: { $0.time > position })
-
-            if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
-                let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .step, !piste.isMuted else { continue }
-            // Zero-order hold, but only send OSC when a new point is crossed —
-            // the value doesn't change between two points, so continuous sending
-            // (like every 50ms tick) would just flood the system uselessly.
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-step-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y), color: piste.couleur)
-            }
-        }
-    }
 
     // Everything that used to run inline in .onAppear's closure, pulled out
     // into its own function for the same reason as advancePlaybackTick():
     // large closures embedded directly in the view body get type-checked as
     // part of one giant expression tree together with the rest of `body`,
     // which was timing out the compiler.
-    private func setupOnAppear() {
-        // macOS assigns first responder to the first key-view-eligible
-        // NSTextField right after the window appears, regardless of
-        // FocusState's initial value — so we explicitly clear it again
-        // a beat later to actually win that race.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focusedField = nil
-        }
-
-        dureeText = formattedDuration(duree)
-
-        // Incoming OSC messages control transport from the outside.
-        oscManager.onOSCMessageReceived = handleReceivedOSCMessage
-        oscManager.startListening(port: oscReceivePort)
-
-        // .onHover alone only fires on enter/exit; this keeps the point
-        // cursor (shift/cmd) in sync if the modifier key changes while
-        // the mouse stays over the same point.
-        if flagsChangedMonitor == nil {
-            flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                updatePointCursor()
-                isOptionHeldForCursor = event.modifierFlags.contains(.option)
-                return event
-            }
-        }
-
-        if fullScreenEnterObserver == nil {
-            fullScreenEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: nil, queue: .main) { _ in
-                isFullScreen = true
-            }
-        }
-        if fullScreenExitObserver == nil {
-            fullScreenExitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main) { _ in
-                isFullScreen = false
-            }
-        }
-
-        startPlaybackTimer()
-    }
 
     // (Re)creates the playback timer at the interval implied by the current
     // oscMessagesPerSecond setting (interval = 1 / rate). Called on setup and
     // again whenever the rate changes mid-session, so the new rate takes
     // effect immediately without needing to stop/restart playback.
-    private func startPlaybackTimer() {
-        timer?.invalidate()
-        let rate = max(1, oscMessagesPerSecond)
-        let interval = 1.0 / Double(rate)
-        let playbackTimer = Timer(timeInterval: interval, repeats: true) { _ in
-            DispatchQueue.main.async {
-                advancePlaybackTick()
-            }
-        }
-        // .common (not just .default) so playback keeps ticking even while
-        // some other drag (a point, a track resize, the duration handle...)
-        // is actively being tracked elsewhere in the app.
-        RunLoop.main.add(playbackTimer, forMode: .common)
-        timer = playbackTimer
-    }
 
     // Parses whatever is currently in the duration text field and applies it
     // to `duree`, then resyncs the text field to the canonical "mm:ss.cc" form
@@ -1608,232 +529,24 @@ struct ContentView: View {
     // Typed durations are rounded to whole seconds on purpose: sub-second
     // precision is only ever meant to come from the trim handle, so there's no
     // need to think about centiseconds when typing a duration in.
-    private func commitDureeEdit() {
-        if let parsed = parseDuration(dureeText) {
-            duree = max(parsed.rounded(), 1)
-        }
-        dureeText = formattedDuration(duree)
-    }
 
-    private func handleReceivedOSCMessage(_ message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
-        switch normalized {
-        case "play":
-            enLecture = true
-        case "pause":
-            enLecture = false
-        case "stop":
-            enLecture = false
-            position = 0
-            lastSentEvents.removeAll()
-        default:
-            break
-        }
-    }
 
-    private func tearDownOnDisappear() {
-        timer?.invalidate()
-        timer = nil
-        oscManager.cancelConnection()
-        oscManager.stopListening()
-        if let monitor = flagsChangedMonitor {
-            NSEvent.removeMonitor(monitor)
-            flagsChangedMonitor = nil
-        }
-        if let observer = fullScreenEnterObserver {
-            NotificationCenter.default.removeObserver(observer)
-            fullScreenEnterObserver = nil
-        }
-        if let observer = fullScreenExitObserver {
-            NotificationCenter.default.removeObserver(observer)
-            fullScreenExitObserver = nil
-        }
-        stopDurationDragTimer()
-        oscFlashTimer?.invalidate()
-        oscFlashTimer = nil
-    }
 
     // Recenters the horizontal scroll so the playhead stays at the same
     // on-screen (viewport-relative) position before and after a zoom
     // change — i.e. the zoom appears to happen "around" the playhead.
     // (Pinch-zoom anchors on the mouse position instead, handled separately
     // in TimelineScrollView's Coordinator.)
-    private func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
-        guard !isPinchZooming else { return }
-        let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
-        guard largeurAvant > 0 else { return }
 
-        let anchorTime = min(max(position, 0), duree)
-        let absoluteContentXBefore = 140 + CGFloat(anchorTime / duree) * largeurAvant
-        let locationXInViewport = absoluteContentXBefore - scrollOffsetX
-
-        let largeurApres = outerWidth * CGFloat(newZoom) - 140
-        guard largeurApres > 0 else { return }
-        let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
-        let maxX = max(0, outerWidth * CGFloat(newZoom) - outerWidth)
-        let newOffsetX = max(0, min(absoluteContentXAfter - locationXInViewport, maxX))
-        scrollOffsetX = newOffsetX
-    }
-
-    private func commitPointEdit() {
-        if let (trackIndex, eventId) = pointAEditer,
-           let newPosition = Double(nouvellePositionString),
-           let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == eventId }) {
-            pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), duree)
-            if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(nouvelleYString) {
-                let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrackIndex: trackIndex)
-            }
-            if trackIndex == 0 || pistes[trackIndex].type == .message {
-                pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
-            }
-            pistes[trackIndex].evenements[eventIndex].comment = nouveauComment
-            pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
-        }
-        pointAEditer = nil
-    }
 
     // Actually performs the Float -> Gate switch: forces the 0...1 range and
     // snaps every existing point to strict boolean 0/1. Split out from
     // commitAmplitudeEdit so it can be deferred behind a confirmation when
     // there are existing points to redistribute.
-    private func applyGateModeSwitch(forTrackIndex index: Int) {
-        pistes[index].isGate = true
-        pistes[index].minAmplitude = 0
-        pistes[index].maxAmplitude = 1
-        // Gate is itself a 0/1 quantization, so quantization is switched off —
-        // but its step value is kept, so returning to Float restores it.
-        pistes[index].quantizeEnabled = false
-        for i in pistes[index].evenements.indices {
-            pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
-        }
-        lastSentEvents.removeAll()
-    }
 
-    private func commitAmplitudeEdit() {
-        guard let index = amplitudeEditorTrackIndex else {
-            amplitudeEditorTrackIndex = nil
-            return
-        }
-        if pistes[index].type == .step && tempIsGate {
-            // Switching FROM Float TO Gate with existing points would
-            // silently redistribute all their values to 0/1 — warn first
-            // instead, and only apply once the user confirms.
-            if !pistes[index].isGate && !pistes[index].evenements.isEmpty {
-                pendingGateSwitchIndex = index
-                amplitudeEditorTrackIndex = nil
-                return
-            }
-            applyGateModeSwitch(forTrackIndex: index)
-        } else {
-            if pistes[index].type == .step {
-                pistes[index].isGate = false
-            }
-            if let minVal = Double(tempMinAmplitude), let maxVal = Double(tempMaxAmplitude) {
-                pistes[index].minAmplitude = minVal
-                pistes[index].maxAmplitude = maxVal
-            }
-            // The step value is stored regardless of the on/off flag, so
-            // switching quantization off and back on restores what was dialled
-            // in rather than resetting to zero.
-            pistes[index].quantizeEnabled = tempQuantizeEnabled
-            if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
-                let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
-                let maxStep = range / 2
-                // A step bigger than half the range would leave fewer than three
-                // usable values (the track would collapse onto its endpoints), so
-                // it's clamped — and the user is told, rather than silently getting
-                // something other than what they typed. Only warn when it's
-                // actually in effect.
-                if range > 0 && stepVal > maxStep {
-                    pistes[index].quantizeStep = maxStep
-                    if tempQuantizeEnabled {
-                        invalidQuantizeStepMessage = String(
-                            format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
-                            stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
-                        )
-                    }
-                } else {
-                    pistes[index].quantizeStep = range > 0 ? stepVal : 0
-                }
-            }
-            // NOTE: existing points are deliberately NOT re-snapped onto the
-            // new grid. Unlike Gate — which is a mode change that forces every
-            // value to 0/1 — quantization is an input aid: it constrains points
-            // as they're created or dragged, but never silently rewrites work
-            // that's already been placed.
-        }
-        amplitudeEditorTrackIndex = nil
-    }
 
-    private func commitAutofillRectangle() {
-        if let index = autofillTrackIndex,
-           let period = Double(autofillPeriodString),
-           let phase = Double(autofillPhaseString),
-           let pulseWidth = Double(autofillPulseWidthString),
-           let ampMin = Double(autofillAmpMinString),
-           let ampMax = Double(autofillAmpMaxString) {
-            pistes[index].evenements = rectangleEvents(
-                period: period,
-                phase: phase,
-                pulseWidth: pulseWidth,
-                ampMin: ampMin,
-                ampMax: ampMax,
-                duree: duree
-            )
-            lastSentEvents.removeAll()
-        }
-        autofillTrackIndex = nil
-    }
 
-    private func commitAutofillWave() {
-        if let index = waveTrackIndex,
-           let period = Double(wavePeriodString),
-           let phase = Double(wavePhaseString),
-           let skew = Double(waveSkewString),
-           let ampMin = Double(waveAmpMinString),
-           let ampMax = Double(waveAmpMaxString) {
-            pistes[index].evenements = waveEvents(
-                isSine: waveIsSine,
-                period: period,
-                phase: phase,
-                skew: skew,
-                ampMin: ampMin,
-                ampMax: ampMax,
-                duree: duree
-            )
-            lastSentEvents.removeAll()
-        }
-        waveTrackIndex = nil
-    }
 
-    private func commitAutofillBang() {
-        if let index = bangTrackIndex,
-           let period = Double(bangPeriodString),
-           let phase = Double(bangPhaseString) {
-            let isMarkersTrack = index == 0
-            let isMessageTrack = pistes[index].type == .message
-            let trimmedPrefix = bangLabelPrefixString.trimmingCharacters(in: .whitespaces)
-            let numberedLabelPrefix: String?
-            if isMarkersTrack {
-                numberedLabelPrefix = trimmedPrefix.isEmpty ? "M" : trimmedPrefix
-            } else if isMessageTrack {
-                numberedLabelPrefix = trimmedPrefix.isEmpty ? "key" : trimmedPrefix
-            } else {
-                numberedLabelPrefix = nil
-            }
-            pistes[index].evenements = bangEvents(
-                period: period,
-                phase: phase,
-                duree: duree,
-                numberedLabelPrefix: numberedLabelPrefix
-            )
-            lastSentEvents.removeAll()
-        }
-        bangTrackIndex = nil
-    }
 
     // Compact alternative to the full toolbar (toggled via the View menu,
     // ⌘B): a full-width bar acting as an extended version of the position
@@ -1849,7 +562,7 @@ struct ContentView: View {
     // AttributedString rather than concatenating separate Text views with
     // `+` (deprecated since macOS 26 in favor of string interpolation /
     // AttributedString for per-segment styling).
-    private var durationLabelText: Text {
+    var durationLabelText: Text {
         var attributed = AttributedString("Duration ")
         attributed.foregroundColor = .gray
         var value = AttributedString(formattedDuration(duree))
@@ -1858,7 +571,7 @@ struct ContentView: View {
         return Text(attributed)
     }
 
-    private var compactControlBar: some View {
+    var compactControlBar: some View {
         ZStack {
             Rectangle().fill(Color.black)
             Text(formattedPosition(position))
@@ -1913,35 +626,9 @@ struct ContentView: View {
     // drag's current rate of change (see durationDragCurrentDeltaX) for as
     // long as the drag is held — this is what makes it velocity-based
     // rather than a one-shot position mapping.
-    private func startDurationDragTimer() {
-        durationDragTimer?.invalidate()
-        let tickInterval = 0.02
-        let newTimer = Timer(timeInterval: tickInterval, repeats: true) { _ in
-            DispatchQueue.main.async {
-                let dx = Double(durationDragCurrentDeltaX)
-                let magnitude = pow(abs(dx), durationDragVelocityExponent) * durationDragVelocityScale
-                let ratePerSecond = dx < 0 ? -magnitude : magnitude
-                let rawDuree = duree + ratePerSecond * tickInterval
-                let quantized = (rawDuree * 100).rounded() / 100
-                duree = max(0.1, quantized)
-                dureeText = formattedDuration(duree)
-            }
-        }
-        // Timer.scheduledTimer only runs in the .default run loop mode,
-        // which AppKit suspends while actively tracking a mouse drag (the
-        // run loop switches to .eventTracking mode during that time) — so
-        // the timer would silently never fire while the drag is held.
-        // Adding it in .common mode instead keeps it running throughout.
-        RunLoop.main.add(newTimer, forMode: .common)
-        durationDragTimer = newTimer
-    }
 
-    private func stopDurationDragTimer() {
-        durationDragTimer?.invalidate()
-        durationDragTimer = nil
-    }
 
-    private var durationDragHandle: some View {
+    var durationDragHandle: some View {
         ZStack(alignment: .top) {
             Rectangle()
                 .fill(Color.gray.opacity(0.07))
@@ -1998,7 +685,7 @@ struct ContentView: View {
     // (not centered) so the body always extends leftward into the window
     // instead of overflowing past the right edge, since the handle itself
     // sits right at that edge.
-    private var durationTooltip: some View {
+    var durationTooltip: some View {
         VStack(alignment: .trailing, spacing: 0) {
             UpPointingTriangle()
                 .fill(Color.black.opacity(0.85))
@@ -3559,7 +2246,7 @@ struct ContentView: View {
     // deeply nested inline view trees can time out the type-checker;
     // pulling each sheet's content into its own typed computed property
     // gives it a much smaller, independent expression to check.
-    private var autofillRectangleSheet: some View {
+    var autofillRectangleSheet: some View {
         let isGateTrack = autofillTrackIndex.map { pistes[$0].isGate } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Rectangle")
@@ -3614,7 +2301,7 @@ struct ContentView: View {
         .frame(width: 280)
     }
 
-    private var autofillWaveSheet: some View {
+    var autofillWaveSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Curve")
                 .font(.headline)
@@ -3676,7 +2363,7 @@ struct ContentView: View {
     // Point editor. A sheet rather than an alert, because alerts on macOS can
     // only host single-line TextFields — the multi-line comment box needs a
     // TextEditor, which an alert won't render.
-    private var editPointSheet: some View {
+    var editPointSheet: some View {
         let trackIndex = pointAEditer?.trackIndex ?? 0
         let isMarkersTrack = trackIndex == 0
         let isMessageTrack = pistes.indices.contains(trackIndex) && pistes[trackIndex].type == .message
@@ -3740,7 +2427,7 @@ struct ContentView: View {
         .frame(width: 360)
     }
 
-    private var autofillBangSheet: some View {
+    var autofillBangSheet: some View {
         let isMarkersTrack = bangTrackIndex == 0
         let isMessageTrack = bangTrackIndex.map { pistes[$0].type == .message } ?? false
         let title = isMarkersTrack ? "Autofill Markers" : (isMessageTrack ? "Autofill Message" : "Autofill Bang")
@@ -3786,7 +2473,7 @@ struct ContentView: View {
         .frame(width: 280)
     }
 
-    private var gridSettingsSheet: some View {
+    var gridSettingsSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Grid")
                 .font(.headline)
@@ -3838,7 +2525,7 @@ struct ContentView: View {
     // min/max fields (Float behavior). Step tracks additionally get a
     // Float/Gate toggle: Gate locks the range to 0...1 (boolean on/off) and
     // hides the min/max fields entirely, since there's nothing to configure.
-    private var rangeEditorSheet: some View {
+    var rangeEditorSheet: some View {
         let isStepTrack = amplitudeEditorTrackIndex.map { pistes[$0].type == .step } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Range")
