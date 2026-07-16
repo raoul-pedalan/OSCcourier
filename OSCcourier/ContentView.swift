@@ -3859,13 +3859,19 @@ struct ContentView: View {
                                             sendOSCMessagesForPosition(position)
                                         }
                                 )
-                                .onTapGesture(count: 2) {
-                                    // Same "Go to time" dialog the Play menu command opens —
-                                    // one keyboard-driven way to enter a position, whether
-                                    // triggered from the menu or straight off the handle.
-                                    goToTimeString = formattedDuration(position)
-                                    showGoToTimeDialog = true
-                                }
+                                .simultaneousGesture(
+                                    TapGesture(count: 2).onEnded {
+                                        // Same "Go to time" dialog the Play menu command opens —
+                                        // one keyboard-driven way to enter a position, whether
+                                        // triggered from the menu or straight off the handle.
+                                        // simultaneousGesture (not .onTapGesture): the drag
+                                        // above uses minimumDistance 0, which would otherwise
+                                        // win exclusive recognition and swallow every tap
+                                        // before a double-tap could ever be detected.
+                                        goToTimeString = formattedDuration(position)
+                                        showGoToTimeDialog = true
+                                    }
+                                )
                                 .onHover { isHovering in
                                     if isHovering {
                                         NSCursor.resizeLeftRight.set()
