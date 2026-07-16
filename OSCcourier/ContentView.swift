@@ -613,7 +613,7 @@ extension Notification.Name {
     static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
     static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
     static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
-    static let OSCcourierShowPointsList = Notification.Name("OSCcourierShowPointsList")
+    static let OSCcourierShowPointList = Notification.Name("OSCcourierShowPointList")
     static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")
     static let OSCcourierDefineGrid = Notification.Name("OSCcourierDefineGrid")
     static let OSCcourierOpenOSCMessagesWindow = Notification.Name("OSCcourierOpenOSCMessagesWindow")
@@ -624,7 +624,7 @@ extension Notification.Name {
 struct ContentView: View {
     @StateObject private var oscManager = OSCManager()
     @StateObject private var messageStore = OSCMessageStore()
-    @StateObject private var pointsListStore = PointsListStore()
+    @StateObject private var pointListStore = PointListStore()
     @State private var duree: Double = 30.0
     @State private var dureeText: String = "00:30.00"
     @State private var position: Double = 0.0
@@ -744,9 +744,9 @@ struct ContentView: View {
     @State private var isOSCWindowVisible: Bool = false
     @State private var oscWindowCloseDelegate: OSCWindowCloseDelegate?
     // Points list window (same open/close toggle pattern as the OSC one).
-    @State private var pointsListWindowController: NSWindowController?
-    @State private var isPointsListWindowVisible: Bool = false
-    @State private var pointsListCloseDelegate: OSCWindowCloseDelegate?
+    @State private var pointListWindowController: NSWindowController?
+    @State private var isPointListWindowVisible: Bool = false
+    @State private var pointListCloseDelegate: OSCWindowCloseDelegate?
     @State private var pdfWindowController: NSWindowController?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
@@ -1205,7 +1205,7 @@ struct ContentView: View {
 
     // Rebuilds the points list snapshot into the shared store. Called whenever
     // the tracks change, so the (observing) list window stays live.
-    private func refreshPointsList() {
+    private func refreshPointList() {
         var rows: [PointListRow] = []
         for (trackIndex, piste) in pistes.enumerated() {
             // Only markers and message tracks carry a meaningful label. Bang
@@ -1229,8 +1229,8 @@ struct ContentView: View {
                 ))
             }
         }
-        pointsListStore.rows = rows.sorted { $0.time < $1.time }
-        pointsListStore.trackNames = pistes.map { $0.nom }
+        pointListStore.rows = rows.sorted { $0.time < $1.time }
+        pointListStore.trackNames = pistes.map { $0.nom }
     }
 
     // Applies an edit made in the points list window. Routed through the same
@@ -1360,29 +1360,29 @@ struct ContentView: View {
         creatingPointTrackIndex = nil
     }
 
-    private func openPointsListWindow() {
-        refreshPointsList()
+    private func openPointListWindow() {
+        refreshPointList()
 
         // Wired every time (cheap, and the closure captures fresh state) so
         // the list window can hand its edits back to us.
-        pointsListStore.onCommitEdit = { edit in
+        pointListStore.onCommitEdit = { edit in
             applyPointEdit(edit)
         }
 
-        if let controller = pointsListWindowController {
-            if isPointsListWindowVisible {
+        if let controller = pointListWindowController {
+            if isPointListWindowVisible {
                 controller.window?.close()
-                isPointsListWindowVisible = false
+                isPointListWindowVisible = false
             } else {
                 controller.showWindow(nil)
-                isPointsListWindowVisible = true
+                isPointListWindowVisible = true
             }
             return
         }
 
-        // The view observes pointsListStore, so no need to rebuild the hosting
+        // The view observes pointListStore, so no need to rebuild the hosting
         // view on reopen — it re-renders on its own whenever the store changes.
-        let hostingView = NSHostingView(rootView: PointsListView(store: pointsListStore))
+        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore))
         hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
 
         let window = NSWindow(
@@ -1391,8 +1391,8 @@ struct ContentView: View {
             backing: .buffered,
             defer: false
         )
-        window.title = "Points List"
-        window.setFrameAutosaveName("PointsListWindow")
+        window.title = "Point List"
+        window.setFrameAutosaveName("PointListWindow")
         window.contentView = hostingView
         window.minSize = NSSize(width: 520, height: 300)
         window.isReleasedWhenClosed = false
@@ -1402,17 +1402,17 @@ struct ContentView: View {
 
         let delegate = OSCWindowCloseDelegate()
         delegate.onClose = {
-            isPointsListWindowVisible = false
+            isPointListWindowVisible = false
         }
         delegate.sharedUndoManager = timelineStore.undoManager
         window.delegate = delegate
-        pointsListCloseDelegate = delegate
+        pointListCloseDelegate = delegate
 
         window.center()
 
-        pointsListWindowController = NSWindowController(window: window)
-        pointsListWindowController?.showWindow(nil)
-        isPointsListWindowVisible = true
+        pointListWindowController = NSWindowController(window: window)
+        pointListWindowController?.showWindow(nil)
+        isPointListWindowVisible = true
     }
 
     private func openOSCMessagesWindow() {
@@ -2852,7 +2852,7 @@ struct ContentView: View {
                         .offset(y: 20)
                 }
 
-                Button(action: openPointsListWindow) {
+                Button(action: openPointListWindow) {
                     Image(systemName: "list.bullet")
                         .font(.body)
                         .foregroundColor(.black)
@@ -3846,10 +3846,26 @@ struct ContentView: View {
                                 .gesture(
                                     DragGesture(minimumDistance: 0)
                                         .onChanged { value in
-                                            position = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                            let xPos = Double(value.location.x - 140)
+                                            var newPosition = (xPos / Double(largeurTimeline)) * duree
+                                            // ⌘ snaps the playhead to the nearest marker/grid
+                                            // line — the same snap zone and candidates a point
+                                            // drag uses, so the two behave identically.
+                                            if NSEvent.modifierFlags.contains(.command),
+                                               let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                newPosition = snapped
+                                            }
+                                            position = min(max(newPosition, 0), duree)
                                             sendOSCMessagesForPosition(position)
                                         }
                                 )
+                                .onTapGesture(count: 2) {
+                                    // Same "Go to time" dialog the Play menu command opens —
+                                    // one keyboard-driven way to enter a position, whether
+                                    // triggered from the menu or straight off the handle.
+                                    goToTimeString = formattedDuration(position)
+                                    showGoToTimeDialog = true
+                                }
                                 .onHover { isHovering in
                                     if isHovering {
                                         NSCursor.resizeLeftRight.set()
@@ -3921,8 +3937,8 @@ struct ContentView: View {
             // Keep the points list window live: only rebuild the snapshot when
             // that window is actually open, so the (O(points)) flattening isn't
             // paid on every single edit the rest of the time.
-            if isPointsListWindowVisible {
-                refreshPointsList()
+            if isPointListWindowVisible {
+                refreshPointList()
             }
         }
 
@@ -3994,8 +4010,8 @@ struct ContentView: View {
                 pistes[index].height = 60
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowPointsList)) { _ in
-            openPointsListWindow()
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowPointList)) { _ in
+            openPointListWindow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierToggleFoldAll)) { _ in
             toggleFoldAll()
@@ -4314,13 +4330,11 @@ struct ContentView: View {
                 Text("Comment")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 100, alignment: .trailing)
-                TextEditor(text: $nouveauComment)
-                    .font(.body)
-                    .frame(height: 80)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                    )
+                TextField("", text: $nouveauComment)
+                    // A plain single-line field: no newlines to type in the
+                    // first place, and Return submits (like every other
+                    // field in this sheet) instead of inserting a line break.
+                    .onSubmit { commitPointEdit() }
             }
 
             HStack {

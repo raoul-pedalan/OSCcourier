@@ -1,10 +1,10 @@
-// PointsListView
+// PointListView
 import SwiftUI
 
-struct PointsListView: View {
+struct PointListView: View {
     // Observed (not a plain array) so edits made on the timeline while this
     // window is open show up immediately.
-    @ObservedObject var store: PointsListStore
+    @ObservedObject var store: PointListStore
     @State private var selection: UUID?
     // nil = show every track. Otherwise, the name of the single track to show.
     @State private var trackFilter: String?
@@ -191,13 +191,12 @@ struct PointsListView: View {
                     Text("Comment")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 100, alignment: .trailing)
-                    TextEditor(text: $draftComment)
-                        .font(.body)
-                        .frame(height: 80)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                        )
+                    TextField("", text: $draftComment)
+                        // A plain single-line field: no newlines to type in
+                        // the first place, and Return submits (like every
+                        // other field in this sheet) instead of inserting a
+                        // line break.
+                        .onSubmit { commitEdit() }
                 }
 
                 HStack {

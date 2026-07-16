@@ -205,7 +205,7 @@ struct OSCcourierApp: App {
                 .keyboardShortcut("m", modifiers: [])
 
                 Button("Points List") {
-                    NotificationCenter.default.post(name: .OSCcourierShowPointsList, object: nil)
+                    NotificationCenter.default.post(name: .OSCcourierShowPointList, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: [])
             }

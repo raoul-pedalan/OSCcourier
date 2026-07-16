@@ -1,4 +1,4 @@
-// PointsListStore
+// PointListStore
 import SwiftUI
 import Combine
 
@@ -50,11 +50,11 @@ struct PointEdit {
     var comment: String? = nil
 }
 
-// Shared between ContentView and the points list window. ContentView pushes a
+// Shared between ContentView and the point list window. ContentView pushes a
 // fresh snapshot into `rows` whenever the tracks change; because the window's
 // view observes this object, it re-renders live instead of showing a stale
 // snapshot from whenever it was opened.
-class PointsListStore: ObservableObject {
+class PointListStore: ObservableObject {
     @Published var rows: [PointListRow] = []
     // Track names in timeline order, used to populate the filter menu. Kept
     // separate from `rows` so the menu still lists a track even when it has no
