@@ -103,6 +103,20 @@ struct ContentView: View {
     @State var groupDragBaseline: [UUID: Double] = [:]
     @State var groupDragAnchorOriginalTime: Double?
     @State var keyDownMonitor: Any?
+    // Copy/paste of a point selection. The clipboard remembers the source
+    // track's type, since paste is only allowed onto a same-type track.
+    @State var pointClipboard: [PointClipboardEntry] = []
+    @State var pointClipboardTrackType: TrackType?
+    @State var isPasteModeActive: Bool = false
+    @State var showDifferentTypePasteAlert: Bool = false
+    // The source track's amplitude range, remembered alongside the clipboard
+    // so paste can detect a mismatch with the destination track and offer to
+    // rescale (curve/step tracks only — the only types where Y is meaningful).
+    @State var pointClipboardSourceMinAmplitude: Double?
+    @State var pointClipboardSourceMaxAmplitude: Double?
+    @State var pendingPasteAnchorTime: Double?
+    @State var pendingPasteTrackIndex: Int?
+    @State var showPasteScaleRangeAlert: Bool = false
     @State var curveDragSegmentID: UUID?
     @State var curveDragBaseline: Double?
     @State var curveDragBulgeBaseline: Double?
@@ -1496,7 +1510,7 @@ struct ContentView: View {
                                                                     // ⇧⌥ is the lasso-selection gesture (handled
                                                                     // elsewhere as a .simultaneousGesture on this same
                                                                     // track) — never create a point for it.
-                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -1520,6 +1534,7 @@ struct ContentView: View {
                                                                     // should create a point.
                                                                     if NSEvent.modifierFlags.contains(.shift) { return }
                                                                     if NSEvent.modifierFlags.contains(.option) { return }
+                                                                    if isPasteModeActive { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -1652,7 +1667,7 @@ struct ContentView: View {
                                                                     // ⇧⌥ is the lasso-selection gesture (handled
                                                                     // elsewhere as a .simultaneousGesture on this same
                                                                     // track) — never create a point for it.
-                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -1874,7 +1889,7 @@ struct ContentView: View {
                                                                 // ⇧⌥ starting directly on top of a point means the
                                                                 // lasso started there — don't also move the point out
                                                                 // from under it via this gesture.
-                                                                guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
+                                                                guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
 
                                                                 // Dragging a point that's part of the current selection
                                                                 // moves the whole selection together, in X only — Y stays
@@ -1985,13 +2000,36 @@ struct ContentView: View {
                                             }
                                             // Idle-hover cursor for lasso-selection mode (⇧⌥ held, not yet
                                             // dragging) — the imperative .set() call inside the drag gesture
-                                            // above takes over once the drag actually starts.
+                                            // above takes over once the drag actually starts. Also doubles as
+                                            // the paste-mode cursor (red, no drag needed to trigger it).
                                             .overlay {
                                                 CursorOverlay(
-                                                    isActive: isShiftHeldForCursor && isOptionHeldForCursor && !tracksLocked,
-                                                    symbolName: "dot.crosshair"
+                                                    isActive: (isShiftHeldForCursor && isOptionHeldForCursor && !tracksLocked) || isPasteModeActive,
+                                                    symbolName: isPasteModeActive && (isNearSnapZone || isNearGridSnapZone)
+                                                        ? "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left"
+                                                        : "dot.crosshair",
+                                                    color: isPasteModeActive ? .red : .black
                                                 )
                                                 .allowsHitTesting(false)
+                                            }
+                                            // While in paste mode, track snap proximity continuously (same
+                                            // candidates as a point drag) so the cursor reflects where a
+                                            // click-up would actually land, before the user even clicks.
+                                            .onContinuousHover { phase in
+                                                guard isPasteModeActive else { return }
+                                                switch phase {
+                                                case .active(let location):
+                                                    let xPos = Double(location.x)
+                                                    let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
+                                                        && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
+                                                    let willSnapToGrid = magneticGridSnap
+                                                        && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
+                                                    if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
+                                                    if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+                                                case .ended:
+                                                    if isNearSnapZone { isNearSnapZone = false }
+                                                    if isNearGridSnapZone { isNearGridSnapZone = false }
+                                                }
                                             }
                                             // ⌥⇧-drag lassos points on THIS track only — attached as
                                             // .simultaneousGesture (not .gesture) so it never blocks the
@@ -2001,7 +2039,7 @@ struct ContentView: View {
                                             .simultaneousGesture(
                                                 DragGesture(minimumDistance: 3, coordinateSpace: .local)
                                                     .onChanged { value in
-                                                        guard !tracksLocked,
+                                                        guard !tracksLocked, !isPasteModeActive,
                                                               NSEvent.modifierFlags.contains(.shift),
                                                               NSEvent.modifierFlags.contains(.option) else { return }
                                                         // onContinuousHover (used below for the idle-hover cursor)
@@ -2049,6 +2087,57 @@ struct ContentView: View {
                                                         lassoTrackIndex = nil
                                                         lassoStartLocation = nil
                                                         lassoCurrentLocation = nil
+                                                    }
+                                            )
+                                            // Paste-mode click: minimumDistance 0 so a plain click and a
+                                            // click-drag both land here, using the release location either
+                                            // way — a plain click pastes right there, a click-drag pastes
+                                            // wherever it ended (with the same Cmd/grid snap as a point drag).
+                                            .simultaneousGesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        // Same reason as the lasso's onChanged: the tracking-area-based
+                                                        // CursorOverlay stops driving the cursor once the mouse is
+                                                        // captured by an active drag, so keep the crosshair asserted
+                                                        // by hand for the whole mouse-down-to-up window — including
+                                                        // switching to the snap glyph as it comes into range.
+                                                        guard isPasteModeActive else { return }
+                                                        let xPos = Double(value.location.x)
+                                                        let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
+                                                            && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
+                                                        let willSnapToGrid = magneticGridSnap
+                                                            && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
+                                                        if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
+                                                        if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+                                                        if willSnapToMarker || willSnapToGrid {
+                                                            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .red).set()
+                                                        } else {
+                                                            cursor(fromSymbol: "dot.crosshair", color: .red).set()
+                                                        }
+                                                    }
+                                                    .onEnded { value in
+                                                        guard isPasteModeActive, pointClipboardTrackType != nil else { return }
+                                                        let xPos = Double(value.location.x)
+                                                        var anchorTime = (xPos / Double(largeurTimeline)) * duree
+                                                        if NSEvent.modifierFlags.contains(.command),
+                                                           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                            anchorTime = snapped
+                                                        } else if magneticGridSnap,
+                                                                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                            anchorTime = snapped
+                                                        }
+                                                        anchorTime = min(max(anchorTime, 0), duree)
+                                                        if pasteNeedsTypeChoice(trackIndex: index) {
+                                                            pendingPasteAnchorTime = anchorTime
+                                                            pendingPasteTrackIndex = index
+                                                            showDifferentTypePasteAlert = true
+                                                        } else if pasteNeedsRangeChoice(trackIndex: index) {
+                                                            pendingPasteAnchorTime = anchorTime
+                                                            pendingPasteTrackIndex = index
+                                                            showPasteScaleRangeAlert = true
+                                                        } else if pasteClipboard(at: anchorTime, trackIndex: index, scaleToRange: false) {
+                                                            isPasteModeActive = false
+                                                        }
                                                     }
                                             )
                                         }
@@ -2347,6 +2436,50 @@ struct ContentView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("No marker with that name was found.")
+        }
+        .alert("Different track type", isPresented: $showDifferentTypePasteAlert) {
+            Button("Adapt (Scale to Fit)") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                // Dismiss only — stays in paste mode so the user can try a
+                // different spot, or press Escape to back out entirely.
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+        } message: {
+            Text("The copied points come from a different track type. Adapt them to this track (converting labels, rescaling values), or cancel?")
+        }
+        .alert("Different amplitude range", isPresented: $showPasteScaleRangeAlert) {
+            Button("Scale to Fit") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Keep As-Is") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: false)
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                // Dismiss only — stays in paste mode so the user can try a
+                // different spot, or press Escape to back out entirely.
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+        } message: {
+            Text("The copied points come from a track with a different amplitude range. Scale their values to fit this track's range, or paste them unchanged (clamped if out of range)?")
         }
 
         let withAlerts2 = withAlerts

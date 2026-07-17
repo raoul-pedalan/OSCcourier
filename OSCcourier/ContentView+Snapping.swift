@@ -232,6 +232,11 @@ extension ContentView {
     }
 
     func updatePointCursor() {
+        // Paste mode owns the cursor entirely while active — don't let a
+        // stray modifier-key change (e.g. releasing ⌘ right after ⌘V)
+        // clobber the red crosshair with the arrow just because the mouse
+        // isn't currently over a point.
+        guard !isPasteModeActive else { return }
         guard isHoveringPoint else {
             NSCursor.arrow.set()
             return

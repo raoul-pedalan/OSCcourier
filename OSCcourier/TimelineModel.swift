@@ -187,3 +187,16 @@ struct SaveData: Codable {
     var zoomX: Double
     var pistes: [TimelineTrack]
 }
+
+// A copied point, positioned relative to the earliest point in the copied
+// selection — lets paste re-anchor the whole group at wherever the user
+// clicks, while preserving their original spacing.
+struct PointClipboardEntry {
+    let deltaTime: Double
+    let label: String
+    let y: Double
+    let segmentCurve: Double
+    let segmentBulge: Double
+    let segmentEnabled: Bool
+    let comment: String
+}

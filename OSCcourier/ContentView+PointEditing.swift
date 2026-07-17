@@ -72,6 +72,106 @@ extension ContentView {
         }
     }
 
+    // Called from a track's paste gesture at the click-up location. Returns
+    // false (and leaves paste mode active so the caller can show the
+    // incompatible-track alert) if the track's type doesn't match the
+    // clipboard's source type.
+    func pasteClipboard(at anchorTime: Double, trackIndex: Int, scaleToRange: Bool) -> Bool {
+        guard !tracksLocked, !pointClipboard.isEmpty,
+              let clipboardType = pointClipboardTrackType else { return false }
+
+        let piste = pistes[trackIndex]
+        let destinationType = piste.type
+        let typesDiffer = destinationType != clipboardType
+        let srcMin = pointClipboardSourceMinAmplitude
+        let srcMax = pointClipboardSourceMaxAmplitude
+        var newSelection: Set<UUID> = []
+        var pasted: [TimelineEvent] = []
+        for entry in pointClipboard {
+            var y = entry.y
+            if scaleToRange, let srcMin, let srcMax, srcMax > srcMin {
+                let normalized = (entry.y - srcMin) / (srcMax - srcMin)
+                y = piste.minAmplitude + normalized * (piste.maxAmplitude - piste.minAmplitude)
+            }
+            // A label only means something on markers/message tracks, and
+            // what it should default to differs by type — carrying the
+            // source label over verbatim only makes sense between two
+            // tracks of the same type.
+            let label: String
+            if !typesDiffer {
+                label = entry.label
+            } else {
+                switch destinationType {
+                case .bang: label = "M"
+                case .message: label = entry.label.isEmpty ? "key" : entry.label
+                case .curve, .step, .normal: label = ""
+                }
+            }
+            let newEvent = TimelineEvent(
+                time: min(max(anchorTime + entry.deltaTime, 0), duree),
+                label: label,
+                y: min(max(y, piste.minAmplitude), piste.maxAmplitude),
+                segmentCurve: entry.segmentCurve,
+                segmentBulge: entry.segmentBulge,
+                segmentEnabled: entry.segmentEnabled,
+                comment: entry.comment
+            )
+            pasted.append(newEvent)
+            newSelection.insert(newEvent.id)
+        }
+        pistes[trackIndex].evenements.append(contentsOf: pasted)
+        pistes[trackIndex].evenements.sort()
+        lastSentEvents.removeAll()
+        // The freshly pasted points become the new selection, so they can
+        // immediately be nudged as a group if the placement needs tweaking.
+        selectedPointIDs = newSelection
+        return true
+    }
+
+    // Whether the destination track's type differs from the clipboard's
+    // source type — if so, paste needs the user to explicitly choose to
+    // adapt (or cancel), rather than silently reinterpreting the data.
+    func pasteNeedsTypeChoice(trackIndex: Int) -> Bool {
+        guard let clipboardType = pointClipboardTrackType else { return false }
+        return pistes[trackIndex].type != clipboardType
+    }
+
+    // Whether the destination track's amplitude range differs from the
+    // clipboard's source range — only meaningful for curve/step tracks,
+    // the only types where Y carries real information.
+    func pasteNeedsRangeChoice(trackIndex: Int) -> Bool {
+        guard pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step else { return false }
+        guard let srcMin = pointClipboardSourceMinAmplitude, let srcMax = pointClipboardSourceMaxAmplitude else { return false }
+        return srcMin != pistes[trackIndex].minAmplitude || srcMax != pistes[trackIndex].maxAmplitude
+    }
+
+    // The lasso only ever selects points on a single track, so the first
+    // track with a match is the source — its type is remembered so paste
+    // can reject a mismatched destination.
+    func copySelectedPoints() {
+        guard !selectedPointIDs.isEmpty else { return }
+        for piste in pistes {
+            let matching = piste.evenements.filter { selectedPointIDs.contains($0.id) }
+            guard !matching.isEmpty else { continue }
+            let earliestTime = matching.map { $0.time }.min() ?? 0
+            pointClipboard = matching.map { event in
+                PointClipboardEntry(
+                    deltaTime: event.time - earliestTime,
+                    label: event.label,
+                    y: event.y,
+                    segmentCurve: event.segmentCurve,
+                    segmentBulge: event.segmentBulge,
+                    segmentEnabled: event.segmentEnabled,
+                    comment: event.comment
+                )
+            }
+            pointClipboardTrackType = piste.type
+            pointClipboardSourceMinAmplitude = piste.minAmplitude
+            pointClipboardSourceMaxAmplitude = piste.maxAmplitude
+            return
+        }
+    }
+
     // The lasso only ever selects points on the single track it started on,
     // so removing by id across every track's evenements is safe — at most
     // one track actually has any matches.

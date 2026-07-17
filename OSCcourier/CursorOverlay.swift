@@ -12,31 +12,35 @@ import AppKit
 struct CursorOverlay: NSViewRepresentable {
     var isActive: Bool
     var symbolName: String
+    var color: NSColor = .black
 
     func makeNSView(context: Context) -> TrackingView {
         let view = TrackingView()
         view.symbolName = symbolName
         view.isActive = isActive
+        view.color = color
         return view
     }
 
     func updateNSView(_ nsView: TrackingView, context: Context) {
         let activeChanged = nsView.isActive != isActive
         let symbolChanged = nsView.symbolName != symbolName
+        let colorChanged = nsView.color != color
         nsView.symbolName = symbolName
         nsView.isActive = isActive
+        nsView.color = color
         // cursorUpdate/mouseEntered only fire on actual mouse movement (or on
         // a tracking-area boundary crossing), so if isActive just flipped
         // (e.g. Option pressed/released with the mouse sitting still) — or
-        // the symbol changed while already active (e.g. sliding from a live
-        // segment straight into a hole without leaving the zone) — force
-        // the cursor to update right now if the mouse happens to already be
-        // within this view.
-        guard (activeChanged || symbolChanged), let window = nsView.window, window.isKeyWindow else { return }
+        // the symbol/color changed while already active (e.g. sliding from a
+        // live segment straight into a hole without leaving the zone) —
+        // force the cursor to update right now if the mouse happens to
+        // already be within this view.
+        guard (activeChanged || symbolChanged || colorChanged), let window = nsView.window, window.isKeyWindow else { return }
         let mouseLocation = nsView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard nsView.bounds.contains(mouseLocation) else { return }
         if isActive {
-            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
+            NSCursor(image: CursorOverlay.symbolImage(named: symbolName, color: color), hotSpot: NSPoint(x: 8, y: 8)).set()
         } else {
             NSCursor.arrow.set()
         }
@@ -46,8 +50,9 @@ struct CursorOverlay: NSViewRepresentable {
     // to a known-valid symbol (rather than a blank NSImage) if the name
     // doesn't resolve — an invalid name would otherwise silently produce an
     // invisible cursor, which is very hard to notice while testing.
-    static func symbolImage(named symbolName: String) -> NSImage {
+    static func symbolImage(named symbolName: String, color: NSColor = .black) -> NSImage {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            .applying(.init(paletteColors: [color]))
         let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
             ?? NSImage()
@@ -57,6 +62,7 @@ struct CursorOverlay: NSViewRepresentable {
     class TrackingView: NSView {
         var symbolName: String = ""
         var isActive: Bool = false
+        var color: NSColor = .black
         private var trackingArea: NSTrackingArea?
 
         override func updateTrackingAreas() {
@@ -82,7 +88,7 @@ struct CursorOverlay: NSViewRepresentable {
             // set by other mechanisms underneath (e.g. the Shift
             // erase/reconnect cursor applied from onContinuousHover).
             guard isActive else { return }
-            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
+            NSCursor(image: CursorOverlay.symbolImage(named: symbolName, color: color), hotSpot: NSPoint(x: 8, y: 8)).set()
         }
 
         override func mouseEntered(with event: NSEvent) {

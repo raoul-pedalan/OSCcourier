@@ -33,16 +33,42 @@ extension ContentView {
         // Backspace removes the current lasso selection.
         if keyDownMonitor == nil {
             keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard event.keyCode == 51,
-                      !selectedPointIDs.isEmpty else { return event }
-                // Don't hijack Backspace while the user is editing text
+                // Don't hijack any of these while the user is editing text
                 // somewhere else (renaming a track, a field in a sheet,
-                // Settings...) — let it through as normal character deletion.
+                // Settings...) — let the key through as normal text editing.
                 if NSApp.keyWindow?.firstResponder is NSTextView {
                     return event
                 }
-                deleteSelectedPoints()
-                return nil
+
+                // Backspace: delete the current selection.
+                if event.keyCode == 51 {
+                    guard !selectedPointIDs.isEmpty else { return event }
+                    deleteSelectedPoints()
+                    return nil
+                }
+
+                // ⌘C: copy the current selection.
+                if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "c" {
+                    guard !selectedPointIDs.isEmpty else { return event }
+                    copySelectedPoints()
+                    return nil
+                }
+
+                // ⌘V: enter paste mode (red crosshair cursor) — the actual
+                // paste happens on click, handled by each track's own gesture.
+                if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "v" {
+                    guard !pointClipboard.isEmpty else { return event }
+                    isPasteModeActive = true
+                    return nil
+                }
+
+                // Escape: cancel paste mode.
+                if event.keyCode == 53, isPasteModeActive {
+                    isPasteModeActive = false
+                    return nil
+                }
+
+                return event
             }
         }
 
