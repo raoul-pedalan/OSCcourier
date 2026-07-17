@@ -2407,6 +2407,33 @@ struct ContentView: View {
                                     }
                                 }
 
+                                // Moving the playhead by click lives here, in a thin strip right
+                                // above the ruler (roughly the height of the playhead triangle) —
+                                // not on the ruler itself, which is dedicated entirely to the loop
+                                // zone. Added BEFORE the triangle below so the triangle (added
+                                // later, on top in z-order) keeps first dibs on hit-testing over
+                                // its own small area — otherwise this band would swallow every
+                                // click/double-click meant for the triangle itself.
+                                // Same full-width + x>140 guard pattern as the ruler's own gesture
+                                // (rather than a narrower frame + .offset), since .offset doesn't
+                                // reliably shift a gesture's reported location the same way it
+                                // shifts the view visually — this proven pattern avoids that trap.
+                                DiagonalStripes(stripeWidth: 3, spacing: 3)
+                                    .stroke(Color.gray.opacity(0.3), lineWidth: 3)
+                                    .frame(height: 15)
+                                    .offset(y: -15)
+                                    .allowsHitTesting(false)
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .frame(height: 15)
+                                    .offset(y: -15)
+                                    .onTapGesture { location in
+                                        guard location.x > 140 else { return }
+                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * duree
+                                        position = min(max(clicked, 0), duree)
+                                        sendOSCMessagesForPosition(position)
+                                    }
+
                                 ZStack(alignment: .topLeading) {
                                     Rectangle().fill(Color.red).frame(width: 2, height: CGFloat(totalHeight))
                                     Image(systemName: "triangle.fill")
@@ -2450,26 +2477,6 @@ struct ContentView: View {
                                         NSCursor.arrow.set()
                                     }
                                 }
-
-                                // Moving the playhead by click now lives here, in a thin strip
-                                // right above the ruler (roughly the height of the playhead
-                                // triangle) — not on the ruler itself anymore, which is now
-                                // dedicated entirely to the loop zone (create/resize/move/erase)
-                                // without a plain click being reinterpreted as "jump the playhead".
-                                // Same full-width + x>140 guard pattern as the ruler's own gesture
-                                // (rather than a narrower frame + .offset), since .offset doesn't
-                                // reliably shift a gesture's reported location the same way it
-                                // shifts the view visually — this proven pattern avoids that trap.
-                                Color.clear
-                                    .contentShape(Rectangle())
-                                    .frame(height: 15)
-                                    .offset(y: -15)
-                                    .onTapGesture { location in
-                                        guard location.x > 140 else { return }
-                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * duree
-                                        position = min(max(clicked, 0), duree)
-                                        sendOSCMessagesForPosition(position)
-                                    }
                             }
                             .padding(.top, 14) // room for the playhead triangle, which pokes above y=0
                         }
