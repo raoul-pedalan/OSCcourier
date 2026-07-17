@@ -134,11 +134,15 @@ struct ContentView: View {
     @State var savedFileURL: URL?
     // Managing focus explicitly (defaulting to nil) stops macOS from
     // automatically giving keyboard focus to the first text field at launch.
-    private enum ToolbarField: Hashable {
+    enum ToolbarField: Hashable {
         case duree, oscAddress
     }
     @FocusState var focusedField: ToolbarField?
     @State var draggedTrackIndex: Int?
+    // Which track's Clear/Duplicate button the cursor is currently over —
+    // ⌥ only swaps that specific button to "duplicate", not every track's
+    // button at once just because ⌥ happens to be held somewhere.
+    @State var duplicateHoverTrackIndex: Int?
     @State var dragStartHeight: CGFloat = 0
     // Duration trim handle, pinned to the right edge of the window: drag
     // horizontally to grow/shrink the track's total duration.
@@ -158,8 +162,8 @@ struct ContentView: View {
     // Non-linear speed curve: rate = sign(dx) * |dx|^exponent * scale.
     // exponent > 1 makes small offsets noticeably slower (more precise) and
     // large offsets noticeably faster than a plain linear mapping would.
-    private let durationDragVelocityExponent: Double = 1.8
-    private let durationDragVelocityScale: Double = 0.00126
+    let durationDragVelocityExponent: Double = 1.8
+    let durationDragVelocityScale: Double = 0.00126
     // Track reordering (drag handle in the header). "markers" (index 0) stays pinned.
     @State var reorderingIndex: Int?
     @State var reorderDragTranslation: CGFloat = 0
@@ -172,16 +176,16 @@ struct ContentView: View {
     // track so that points at the extreme values (0 or 1) aren't half-clipped.
     // Shared by the ruler labels, the path, and the point positions so they
     // all stay consistent with each other.
-    private let curveMargin: CGFloat = 6
+    let curveMargin: CGFloat = 6
 
     // Height a folded track's row is reduced to: just enough for the name,
     // fold triangle, and reorder handle.
-    private let foldedTrackHeight: CGFloat = 24
+    let foldedTrackHeight: CGFloat = 24
 
     // Width of the duration trim handle strip pinned to the window's right
     // edge. Shared so the timeline drawing width can reserve exactly this
     // much, keeping the end of the tracks aligned with the handle's bar.
-    private let durationHandleWidth: CGFloat = 18
+    let durationHandleWidth: CGFloat = 18
 
     // The actual row height to use for a given track: folded tracks always
     // collapse to foldedTrackHeight, regardless of type; otherwise bang/message
@@ -213,7 +217,6 @@ struct ContentView: View {
     // collapsed. Curve/step segments are drawn as straight lines here
     // (ignoring segmentCurve/segmentBulge) since the folded row is too thin
     // for the curvature to read anyway.
-    @ViewBuilder
 
     // MARK: - Zoom-centering state
     @State var scrollOffsetX: CGFloat = 0
@@ -1276,11 +1279,28 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
-                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        Button(action: {
+                                                            guard !tracksLocked else { return }
+                                                            if isOptionHeldForCursor && duplicateHoverTrackIndex == index {
+                                                                duplicateTrack(at: index)
+                                                            } else {
+                                                                pistes[index].evenements.removeAll()
+                                                                lastSentEvents.removeAll()
+                                                            }
+                                                        }) {
+                                                            // Fixed frame: swapping between the two SF Symbols (they have
+                                                            // slightly different intrinsic widths) must not nudge the
+                                                            // neighboring buttons in this row — only the icon inside
+                                                            // this fixed box changes, never the row's layout.
+                                                            Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
+                                                                .foregroundColor((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? .blue : .gray)
+                                                                .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
-                                                        .help("Clear all points on this track")
+                                                        .onHover { hovering in
+                                                            duplicateHoverTrackIndex = hovering ? index : (duplicateHoverTrackIndex == index ? nil : duplicateHoverTrackIndex)
+                                                        }
+                                                        .help((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
                                                     }
                                                     .offset(x: -20)
                                                     .padding(.trailing, 20)
@@ -1321,11 +1341,28 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
-                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        Button(action: {
+                                                            guard !tracksLocked else { return }
+                                                            if isOptionHeldForCursor && duplicateHoverTrackIndex == index {
+                                                                duplicateTrack(at: index)
+                                                            } else {
+                                                                pistes[index].evenements.removeAll()
+                                                                lastSentEvents.removeAll()
+                                                            }
+                                                        }) {
+                                                            // Fixed frame: swapping between the two SF Symbols (they have
+                                                            // slightly different intrinsic widths) must not nudge the
+                                                            // neighboring buttons in this row — only the icon inside
+                                                            // this fixed box changes, never the row's layout.
+                                                            Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
+                                                                .foregroundColor((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? .blue : .gray)
+                                                                .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
-                                                        .help("Clear all points on this track")
+                                                        .onHover { hovering in
+                                                            duplicateHoverTrackIndex = hovering ? index : (duplicateHoverTrackIndex == index ? nil : duplicateHoverTrackIndex)
+                                                        }
+                                                        .help((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
 
                                                         Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); lastSentEvents.removeAll() }) {
                                                             Image(systemName: "minus.circle.fill").foregroundColor(.red)
