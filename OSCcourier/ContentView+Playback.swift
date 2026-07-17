@@ -77,15 +77,22 @@ extension ContentView {
     }
 
     // Shared by the toolbar Play button and the Play/Pause menu command.
-    func togglePlayback() {
-        if !enLecture, enBoucle, let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd,
+    // Shared by togglePlayback (local Play button/menu/spacebar) and the
+    // OSC "/play" handler: if a loop zone is active and the playhead isn't
+    // currently inside it, jump straight to its start instead of playing
+    // through from wherever it currently sits until it eventually wanders
+    // into the zone.
+    private func jumpToLoopZoneStartIfNeeded() {
+        if enBoucle, let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd,
            position < zoneStart || position > zoneEnd {
-            // Starting playback with an active loop zone: if the playhead
-            // isn't already inside it, jump straight to its start instead
-            // of playing through from wherever it currently sits until it
-            // eventually wanders into the zone.
             position = zoneStart
             sendOSCMessagesForPosition(position)
+        }
+    }
+
+    func togglePlayback() {
+        if !enLecture {
+            jumpToLoopZoneStartIfNeeded()
         }
         enLecture.toggle()
     }
@@ -216,6 +223,9 @@ extension ContentView {
         let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
         switch normalized {
         case "play":
+            if !enLecture {
+                jumpToLoopZoneStartIfNeeded()
+            }
             enLecture = true
         case "pause":
             enLecture = false
