@@ -102,6 +102,7 @@ struct ContentView: View {
     // dragged one — Y is untouched, only time shifts.
     @State var groupDragBaseline: [UUID: Double] = [:]
     @State var groupDragAnchorOriginalTime: Double?
+    @State var keyDownMonitor: Any?
     @State var curveDragSegmentID: UUID?
     @State var curveDragBaseline: Double?
     @State var curveDragBulgeBaseline: Double?

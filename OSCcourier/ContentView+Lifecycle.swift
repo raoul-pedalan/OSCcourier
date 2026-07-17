@@ -30,6 +30,22 @@ extension ContentView {
             }
         }
 
+        // Backspace removes the current lasso selection.
+        if keyDownMonitor == nil {
+            keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.keyCode == 51,
+                      !selectedPointIDs.isEmpty else { return event }
+                // Don't hijack Backspace while the user is editing text
+                // somewhere else (renaming a track, a field in a sheet,
+                // Settings...) — let it through as normal character deletion.
+                if NSApp.keyWindow?.firstResponder is NSTextView {
+                    return event
+                }
+                deleteSelectedPoints()
+                return nil
+            }
+        }
+
         if fullScreenEnterObserver == nil {
             fullScreenEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: nil, queue: .main) { _ in
                 isFullScreen = true
@@ -52,6 +68,10 @@ extension ContentView {
         if let monitor = flagsChangedMonitor {
             NSEvent.removeMonitor(monitor)
             flagsChangedMonitor = nil
+        }
+        if let monitor = keyDownMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyDownMonitor = nil
         }
         if let observer = fullScreenEnterObserver {
             NotificationCenter.default.removeObserver(observer)

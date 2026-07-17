@@ -72,6 +72,18 @@ extension ContentView {
         }
     }
 
+    // The lasso only ever selects points on the single track it started on,
+    // so removing by id across every track's evenements is safe — at most
+    // one track actually has any matches.
+    func deleteSelectedPoints() {
+        guard !tracksLocked, !selectedPointIDs.isEmpty else { return }
+        for i in pistes.indices {
+            pistes[i].evenements.removeAll { selectedPointIDs.contains($0.id) }
+        }
+        selectedPointIDs.removeAll()
+        lastSentEvents.removeAll()
+    }
+
     func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
         guard !tracksLocked else { return }
         if !selectedPointIDs.isEmpty {
