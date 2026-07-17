@@ -10,6 +10,15 @@ import Foundation
 import Darwin
 import Combine
 
+// A parsed OSC argument. Only the types OSCcourier actually needs to
+// receive are supported (float, int, string) — anything else in the type
+// tag string is simply skipped rather than crashing the parser.
+enum OSCValue {
+    case float(Float)
+    case int(Int32)
+    case string(String)
+}
+
 class OSCManager: ObservableObject {
     @Published var address: String = "127.0.0.1:7400"
     @Published var isConnected = true
@@ -18,8 +27,9 @@ class OSCManager: ObservableObject {
     private var listenSocketFD: Int32 = -1
     private var isListening = false
     // Called (on the main thread) whenever a message is received, with the
-    // decoded address string (e.g. "/play"). Set this from ContentView.
-    var onOSCMessageReceived: ((String) -> Void)?
+    // decoded address string (e.g. "/play") and any OSC arguments that came
+    // with it (e.g. a float for "/goto 12.5"). Set this from ContentView.
+    var onOSCMessageReceived: ((String, [OSCValue]) -> Void)?
 
     private func padTo4(_ data: Data) -> Data {
         let remainder = data.count % 4
@@ -124,27 +134,74 @@ class OSCManager: ObservableObject {
                 let bytesRead = recv(socketFD, &buffer, buffer.count, 0)
                 guard bytesRead > 0 else { continue }
 
-                let data = Data(buffer[0..<bytesRead])
-                // This app's own OSC messages are a null-terminated "address"
-                // string followed by a padded type-tag chunk, but other
-                // senders (e.g. Max's udpsend) may just send raw, unpadded
-                // text with no null terminator at all — so fall back to
-                // treating the whole datagram as the message in that case.
-                let message: String
-                if let nullIndex = data.firstIndex(of: 0) {
-                    message = String(data: data[0..<nullIndex], encoding: .utf8) ?? ""
-                } else {
-                    message = String(data: data, encoding: .utf8) ?? ""
-                }
-                guard !message.isEmpty else { continue }
+                guard let (address, args) = self.parseOSCPacket(Array(buffer[0..<bytesRead])) else { continue }
 
                 DispatchQueue.main.async {
-                    self.onOSCMessageReceived?(message)
+                    self.onOSCMessageReceived?(address, args)
                 }
             }
         }
 
         print("OSC: écoute sur le port \(port)")
+    }
+
+    // Parses a standard OSC packet: a null-terminated, 4-byte-padded address
+    // string, optionally followed by a null-terminated, 4-byte-padded type
+    // tag string (starting with ",") and the arguments it describes.
+    //
+    // This app's own outgoing messages (see sendMessage) are argument-less
+    // (just an address + an empty "," type tag), but other senders (Max's
+    // udpsend, TouchOSC, etc.) may send real arguments, or may not even
+    // null-terminate the address at all for plain-text UDP — both are
+    // handled here, falling back to "address only, no args" whenever the
+    // packet doesn't look like a fully-formed OSC message.
+    private func parseOSCPacket(_ bytes: [UInt8]) -> (address: String, args: [OSCValue])? {
+        guard let addrNullIdx = bytes.firstIndex(of: 0) else {
+            // No null terminator anywhere — raw text, no args possible.
+            let address = String(bytes: bytes, encoding: .utf8) ?? ""
+            return address.isEmpty ? nil : (address, [])
+        }
+        guard let address = String(bytes: bytes[0..<addrNullIdx], encoding: .utf8), !address.isEmpty else {
+            return nil
+        }
+
+        var i = ((addrNullIdx / 4) + 1) * 4
+        guard i < bytes.count, bytes[i] == UInt8(ascii: ",") else {
+            // No type tag: either no arguments, or a non-OSC sender — either
+            // way, just the address.
+            return (address, [])
+        }
+        guard let tagNullIdx = bytes[i...].firstIndex(of: 0) else {
+            return (address, [])
+        }
+        let typeTags = String(bytes: bytes[(i + 1)..<tagNullIdx], encoding: .utf8) ?? ""
+        i = (((tagNullIdx - i) / 4) + 1) * 4 + i
+
+        var args: [OSCValue] = []
+        for tag in typeTags {
+            switch tag {
+            case "f":
+                guard i + 4 <= bytes.count else { return (address, args) }
+                let bits = (UInt32(bytes[i]) << 24) | (UInt32(bytes[i + 1]) << 16) | (UInt32(bytes[i + 2]) << 8) | UInt32(bytes[i + 3])
+                args.append(.float(Float(bitPattern: bits)))
+                i += 4
+            case "i":
+                guard i + 4 <= bytes.count else { return (address, args) }
+                let bits = (UInt32(bytes[i]) << 24) | (UInt32(bytes[i + 1]) << 16) | (UInt32(bytes[i + 2]) << 8) | UInt32(bytes[i + 3])
+                args.append(.int(Int32(bitPattern: bits)))
+                i += 4
+            case "s":
+                guard let sNullIdx = bytes[i...].firstIndex(of: 0) else { return (address, args) }
+                let str = String(bytes: bytes[i..<sNullIdx], encoding: .utf8) ?? ""
+                args.append(.string(str))
+                i = (((sNullIdx - i) / 4) + 1) * 4 + i
+            default:
+                // Unsupported tag (blob, true/false, etc.) — stop parsing
+                // further arguments rather than misreading their bytes.
+                return (address, args)
+            }
+        }
+        return (address, args)
     }
 
     func stopListening() {

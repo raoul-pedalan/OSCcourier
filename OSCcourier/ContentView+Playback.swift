@@ -211,7 +211,7 @@ extension ContentView {
         timer = playbackTimer
     }
 
-    func handleReceivedOSCMessage(_ message: String) {
+    func handleReceivedOSCMessage(_ message: String, _ args: [OSCValue]) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
         switch normalized {
@@ -223,8 +223,64 @@ extension ContentView {
             enLecture = false
             position = 0
             lastSentEvents.removeAll()
+        case "goto":
+            // A string argument is a marker name; a numeric one is a time in
+            // seconds — mirrors the app's own "Go to Position" popup, which
+            // offers the exact same two ways to navigate.
+            switch args.first {
+            case .string(let name):
+                goToMarkerByName(name)
+            case .float(let seconds):
+                position = min(max(Double(seconds), 0), duree)
+                sendOSCMessagesForPosition(position)
+                centerOnPlayhead()
+            case .int(let seconds):
+                position = min(max(Double(seconds), 0), duree)
+                sendOSCMessagesForPosition(position)
+                centerOnPlayhead()
+            case .none:
+                break
+            }
+        case "loop":
+            // An explicit 0/1 (or any nonzero number) sets the state
+            // directly — safer for remote automation than a blind toggle,
+            // which could drift out of sync with the app's own state.
+            // No argument at all falls back to a plain toggle, matching the
+            // local "C" hotkey.
+            switch args.first {
+            case .int(let value):
+                enBoucle = value != 0
+            case .float(let value):
+                enBoucle = value != 0
+            case .string, .none:
+                enBoucle.toggle()
+            }
+        case "loopzone":
+            // Two numeric args: start and end, in seconds — order doesn't
+            // matter, sorted the same way a ruler-drawn zone is. Setting a
+            // zone this way activates Loop right away, same as drawing one
+            // by hand in the ruler.
+            guard args.count >= 2,
+                  let a = numericOSCValue(args[0]),
+                  let b = numericOSCValue(args[1]) else { break }
+            let clampedA = min(max(a, 0), duree)
+            let clampedB = min(max(b, 0), duree)
+            loopZoneStart = min(clampedA, clampedB)
+            loopZoneEnd = max(clampedA, clampedB)
+            enBoucle = true
         default:
             break
+        }
+    }
+
+    // Reads a numeric OSC argument regardless of whether the sender typed
+    // it as a float or an int — most OSC clients aren't picky about which
+    // one they emit for a plain number.
+    private func numericOSCValue(_ value: OSCValue) -> Double? {
+        switch value {
+        case .float(let v): return Double(v)
+        case .int(let v): return Double(v)
+        case .string: return nil
         }
     }
 
