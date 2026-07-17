@@ -103,12 +103,12 @@ struct OSCcourierApp: App {
                 .keyboardShortcut("x", modifiers: .command)
 
                 Button("Copy") {
-                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                    NotificationCenter.default.post(name: .OSCcourierCopy, object: nil)
                 }
                 .keyboardShortcut("c", modifiers: .command)
 
                 Button("Paste") {
-                    NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                    NotificationCenter.default.post(name: .OSCcourierPaste, object: nil)
                 }
                 .keyboardShortcut("v", modifiers: .command)
 

@@ -233,22 +233,24 @@ extension ContentView {
         centerOnPlayhead()
     }
 
-    func goToMarkerByName(_ name: String) {
+    @discardableResult
+    func goToMarkerByName(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             showGoToMarkerNoMatch = true
-            return
+            return false
         }
         let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
         let exactMatch = sorted.first(where: { $0.label.caseInsensitiveCompare(trimmed) == .orderedSame })
         let partialMatch = sorted.first(where: { $0.label.range(of: trimmed, options: .caseInsensitive) != nil })
         guard let match = exactMatch ?? partialMatch else {
             showGoToMarkerNoMatch = true
-            return
+            return false
         }
         position = match.time
         sendOSCMessagesForPosition(position)
         centerOnPlayhead()
+        return true
     }
 
     func goToTime(_ text: String) {
@@ -256,6 +258,34 @@ extension ContentView {
         position = min(max(parsed, 0), duree)
         sendOSCMessagesForPosition(position)
         centerOnPlayhead()
+    }
+
+    // Used by the "Go to Position" sheet's single Go button (and Return in
+    // either field): acts on whichever field currently has focus, falling
+    // back to the time field if focus was lost some other way (e.g. the
+    // user clicked directly on the Go button without tabbing through).
+    func goToChosenPlayheadPosition() {
+        // Decided by field *content*, not focus: clicking the "Go" button
+        // transiently moves keyboard focus away from whichever TextField
+        // had it, so a focus-based decision was unreliable. If a marker
+        // name was typed, that's an unambiguous signal to search by marker;
+        // otherwise fall back to the time field.
+        let trimmedMarker = goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedMarker.isEmpty {
+            // Presenting the "No match" alert while this sheet is
+            // simultaneously dismissing doesn't reliably show in SwiftUI —
+            // so on failure, keep the sheet open and surface it inline
+            // instead of dismissing blindly.
+            if goToMarkerByName(goToMarkerNameString) {
+                playheadMarkerNotFound = false
+                showPlayheadPositionChoice = false
+            } else {
+                playheadMarkerNotFound = true
+            }
+        } else {
+            goToTime(goToTimeString)
+            showPlayheadPositionChoice = false
+        }
     }
 
     func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {

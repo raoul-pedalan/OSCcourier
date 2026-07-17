@@ -27,4 +27,6 @@ extension Notification.Name {
     static let OSCcourierMuteUnmuteAll = Notification.Name("OSCcourierMuteUnmuteAll")
     static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
     static let OSCcourierDeleteSelectedPoints = Notification.Name("OSCcourierDeleteSelectedPoints")
+    static let OSCcourierCopy = Notification.Name("OSCcourierCopy")
+    static let OSCcourierPaste = Notification.Name("OSCcourierPaste")
 }

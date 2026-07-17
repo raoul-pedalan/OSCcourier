@@ -109,6 +109,7 @@ struct ContentView: View {
     @State var pointClipboardTrackType: TrackType?
     @State var isPasteModeActive: Bool = false
     @State var showDifferentTypePasteAlert: Bool = false
+    @State var showPlayheadPositionChoice: Bool = false
     // The source track's amplitude range, remembered alongside the clipboard
     // so paste can detect a mismatch with the destination track and offer to
     // rescale (curve/step tracks only — the only types where Y is meaningful).
@@ -174,6 +175,16 @@ struct ContentView: View {
         case duree, oscAddress
     }
     @FocusState var focusedField: ToolbarField?
+    enum PlayheadPositionField: Hashable {
+        case time, marker
+    }
+    @FocusState var playheadPositionFocusedField: PlayheadPositionField?
+    @State var playheadMarkerNotFound: Bool = false
+    // The time field always has a pre-filled default (the current
+    // position), so "has content" alone can't signal that the user
+    // actually means to use it — captured on open, compared against the
+    // live value to tell "still the default" from "the user typed here".
+    @State var goToTimeInitialValue: String = ""
     @State var draggedTrackIndex: Int?
     // Which track's Clear/Duplicate button the cursor is currently over —
     // ⌥ only swaps that specific button to "duplicate", not every track's
@@ -2214,15 +2225,13 @@ struct ContentView: View {
                                 )
                                 .simultaneousGesture(
                                     TapGesture(count: 2).onEnded {
-                                        // Same "Go to time" dialog the Play menu command opens —
-                                        // one keyboard-driven way to enter a position, whether
-                                        // triggered from the menu or straight off the handle.
                                         // simultaneousGesture (not .onTapGesture): the drag
                                         // above uses minimumDistance 0, which would otherwise
                                         // win exclusive recognition and swallow every tap
                                         // before a double-tap could ever be detected.
                                         goToTimeString = formattedDuration(position)
-                                        showGoToTimeDialog = true
+                                        goToMarkerNameString = ""
+                                        showPlayheadPositionChoice = true
                                     }
                                 )
                                 .onHover { isHovering in
@@ -2392,6 +2401,26 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteSelectedPoints)) { _ in
             deleteSelectedPoints()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierCopy)) { _ in
+            // The menu's Copy item: copy the point selection if there is
+            // one (and we're not mid-edit in some other text field);
+            // otherwise fall back to the standard system text copy.
+            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                copySelectedPoints()
+            } else {
+                NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPaste)) { _ in
+            // The menu's Paste item: enter point paste mode if the point
+            // clipboard has something (and we're not mid-edit elsewhere);
+            // otherwise fall back to the standard system text paste.
+            if !pointClipboard.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                isPasteModeActive = true
+            } else {
+                NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+            }
+        }
 
         let withAlerts = withReceives
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
@@ -2413,6 +2442,53 @@ struct ContentView: View {
             }
         } message: {
             Text("This will delete every track except /markers. This can't be undone.")
+        }
+        .sheet(isPresented: $showPlayheadPositionChoice) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Go to Position")
+                    .font(.headline)
+
+                TextField("mm:ss", text: $goToTimeString)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($playheadPositionFocusedField, equals: .time)
+                    .onSubmit { goToChosenPlayheadPosition() }
+                    .disabled(!goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                TextField("Marker name", text: $goToMarkerNameString)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($playheadPositionFocusedField, equals: .marker)
+                    .onSubmit { goToChosenPlayheadPosition() }
+                    .onChange(of: goToMarkerNameString) { _, _ in
+                        playheadMarkerNotFound = false
+                    }
+                    .disabled(goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              && goToTimeString != goToTimeInitialValue)
+                if playheadMarkerNotFound {
+                    Text("No marker with that name was found.")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        showPlayheadPositionChoice = false
+                    }
+                    .keyboardShortcut(.escape)
+                    Button("Go") {
+                        goToChosenPlayheadPosition()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 300)
+            .onAppear {
+                playheadPositionFocusedField = .time
+                playheadMarkerNotFound = false
+                goToTimeInitialValue = goToTimeString
+            }
         }
         .alert("Go to time", isPresented: $showGoToTimeDialog) {
             TextField("mm:ss", text: $goToTimeString)
