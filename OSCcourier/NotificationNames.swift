@@ -17,6 +17,8 @@ extension Notification.Name {
     static let OSCcourierGoToTime = Notification.Name("OSCcourierGoToTime")
     static let OSCcourierGoToMarker = Notification.Name("OSCcourierGoToMarker")
     static let OSCcourierGoToPreviousMarker = Notification.Name("OSCcourierGoToPreviousMarker")
+    static let OSCcourierEditLoopZone = Notification.Name("OSCcourierEditLoopZone")
+    static let OSCcourierClearLoopZone = Notification.Name("OSCcourierClearLoopZone")
     static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
     static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
     static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
@@ -28,5 +30,6 @@ extension Notification.Name {
     static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
     static let OSCcourierDeleteSelectedPoints = Notification.Name("OSCcourierDeleteSelectedPoints")
     static let OSCcourierCopy = Notification.Name("OSCcourierCopy")
+    static let OSCcourierCut = Notification.Name("OSCcourierCut")
     static let OSCcourierPaste = Notification.Name("OSCcourierPaste")
 }

@@ -76,6 +76,20 @@ extension ContentView {
         }
     }
 
+    // Shared by the toolbar Play button and the Play/Pause menu command.
+    func togglePlayback() {
+        if !enLecture, enBoucle, let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd,
+           position < zoneStart || position > zoneEnd {
+            // Starting playback with an active loop zone: if the playhead
+            // isn't already inside it, jump straight to its start instead
+            // of playing through from wherever it currently sits until it
+            // eventually wanders into the zone.
+            position = zoneStart
+            sendOSCMessagesForPosition(position)
+        }
+        enLecture.toggle()
+    }
+
     func advancePlaybackTick() {
         guard enLecture else {
             // Reset so that resuming later doesn't compute a delta spanning
@@ -93,20 +107,30 @@ extension ContentView {
         let prev = position
         position += delta
         var justLooped = false
-        if position >= duree {
+        var wrapTarget = 0.0
+        if let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd, enBoucle, position >= zoneEnd {
+            // A loop zone exists and Loop is on: wrap within the zone
+            // instead of the whole timeline.
+            position = zoneStart
+            wrapTarget = zoneStart
+            lastSentEvents.removeAll()
+            justLooped = true
+        } else if position >= duree {
             position = 0.0
+            wrapTarget = 0.0
             if !enBoucle { enLecture = false }
             lastSentEvents.removeAll()
             justLooped = true
         }
-        // Right on the tick where playback wraps back to 0, `prev` still
-        // holds the old (near-`duree`) position — comparing it directly
-        // against early event times would make the crossing check
-        // (prev < event.time <= position) fail for anything near the
-        // start, since prev is much larger than those times. Substitute a
-        // value below 0 for that one tick so events from the very start of
-        // the loop are correctly treated as freshly crossed.
-        let effectivePrev = justLooped ? -1.0 : prev
+        // Right on the tick where playback wraps back to 0 (or to the loop
+        // zone's start), `prev` still holds the old (pre-wrap) position —
+        // comparing it directly against early event times would make the
+        // crossing check (prev < event.time <= position) fail for anything
+        // near the wrap target, since prev is much larger than those times.
+        // Substitute a value just below the wrap target for that one tick
+        // so events right at the start of the loop are correctly treated
+        // as freshly crossed.
+        let effectivePrev = justLooped ? wrapTarget - 1.0 : prev
 
         for piste in pistes {
             guard piste.type == .bang, !piste.isMuted else { continue }

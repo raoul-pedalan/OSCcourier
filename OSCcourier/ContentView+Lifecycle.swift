@@ -54,6 +54,14 @@ extension ContentView {
                     return nil
                 }
 
+                // ⌘X: cut = copy the current selection, then delete it.
+                if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "x" {
+                    guard !selectedPointIDs.isEmpty else { return event }
+                    copySelectedPoints()
+                    deleteSelectedPoints()
+                    return nil
+                }
+
                 // ⌘V: enter paste mode (red crosshair cursor) — the actual
                 // paste happens on click, handled by each track's own gesture.
                 if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "v" {

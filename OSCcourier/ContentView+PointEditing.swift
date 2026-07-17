@@ -233,7 +233,7 @@ extension ContentView {
         var newTime = (xPos / Double(largeurTimeline)) * duree
 
         if NSEvent.modifierFlags.contains(.command),
-           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline), excluding: id) {
             newTime = snapped
         } else if magneticGridSnap,
                   let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {

@@ -184,8 +184,14 @@ extension ContentView {
         return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 
-    func snapCandidateTimes(largeurTimeline: Double) -> [Double] {
-        var times = pistes[0].evenements.map { $0.time }
+    // `excluding` lets a point being dragged skip itself as a snap candidate.
+    // Without it, a marker being dragged would see its own (just-updated)
+    // position among the candidates each tick, effectively "snapping to
+    // wherever it was a moment ago" — a laggy, stuttery drag instead of a
+    // smooth one, since the marker never advances a full step ahead but
+    // trails the mouse in small catch-up jumps every frame.
+    func snapCandidateTimes(largeurTimeline: Double, excluding excludedID: UUID? = nil) -> [Double] {
+        var times = pistes[0].evenements.filter { $0.id != excludedID }.map { $0.time }
         if showGrid {
             times.append(contentsOf: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)))
         }
@@ -204,12 +210,12 @@ extension ContentView {
         return abs(closestXPos - xPos) < 7 ? closest : nil
     }
 
-    func nearestSnapTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline), xPos: xPos, largeurTimeline: largeurTimeline)
+    func nearestSnapTime(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
+        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline, excluding: excludedID), xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
-    func nearestMarkerTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: pistes[0].evenements.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
+    func nearestMarkerTime(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
+        nearestTime(among: pistes[0].evenements.filter { $0.id != excludedID }.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
     func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
@@ -217,8 +223,8 @@ extension ContentView {
         return nearestTime(among: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline)
     }
 
-    func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double) -> Bool {
-        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline)
+    func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
+        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID)
         let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
         guard let gridTime else { return false }
         guard let markerTime else { return true }
@@ -227,8 +233,8 @@ extension ContentView {
         return abs(gridX - xPos) < abs(markerX - xPos)
     }
 
-    func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
-        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline) != nil
+    func isNearMarker(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
+        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID) != nil
     }
 
     func updatePointCursor() {

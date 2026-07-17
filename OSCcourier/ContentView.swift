@@ -11,6 +11,34 @@ struct ContentView: View {
     @State var position: Double = 0.0
     @State var enLecture: Bool = false
     @AppStorage("enBoucle") var enBoucle: Bool = false
+    // A loop zone, drawn as a yellow band in the ruler. When set, looping
+    // wraps between these two times instead of the whole timeline. nil/nil
+    // means "no zone" — Loop then loops the entire timeline as before.
+    @State var loopZoneStart: Double?
+    @State var loopZoneEnd: Double?
+    // Tracks an in-progress ruler drag so the zone previews live as the
+    // user drags, rather than only appearing once they release.
+    @State var rulerDragStartTime: Double?
+    @State var rulerDragCurrentTime: Double?
+    enum LoopZoneEdge { case start, end }
+    // Set once a drag is confirmed to have started near an existing zone's
+    // edge — from then on that same drag resizes the zone instead of
+    // drawing a new one or moving the playhead.
+    @State var resizingLoopZoneEdge: LoopZoneEdge?
+    // Hover-only (not dragging) proximity, purely for the cursor.
+    @State var isNearLoopZoneEdge: Bool = false
+    // Dragging the zone's body (not an edge) translates the whole zone.
+    // The anchor is the time under the mouse at drag start, so the zone
+    // moves by the same delta as the cursor rather than snapping its start
+    // to the cursor position.
+    @State var isDraggingLoopZoneBody: Bool = false
+    @State var loopZoneDragOriginalStart: Double?
+    @State var loopZoneDragOriginalEnd: Double?
+    @State var loopZoneDragAnchorTime: Double?
+    // Double-click on the ruler opens this to edit start/end precisely.
+    @State var showLoopZoneEditor: Bool = false
+    @State var loopZoneEditStartString: String = ""
+    @State var loopZoneEditEndString: String = ""
     @State var timer: Timer?
     // Real wall-clock timestamp of the previous playback tick (monotonic
     // clock, in seconds). Used to advance `position` by the actual elapsed
@@ -766,7 +794,7 @@ struct ContentView: View {
                         .offset(y: 19)
                 }
                 .offset(x: -100)
-                Button(action: { enLecture.toggle() }) {
+                Button(action: { togglePlayback() }) {
                     Image(systemName: enLecture ? "pause.fill" : "play.fill")
                         .font(.title2)
                         .foregroundColor(.black)
@@ -1030,17 +1058,198 @@ struct ContentView: View {
                                 VStack(spacing: 0) {
                                     ZStack(alignment: .leading) {
                                         Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
+                                        // The loop zone band: matches the Loop button's own colors
+                                        // exactly (solid yellow active, gray when off), so the zone
+                                        // and the button read as one and the same "loop" state.
+                                        if let start = loopZoneStart, let end = loopZoneEnd {
+                                            let x1 = CGFloat(min(start, end) / duree) * largeurTimeline
+                                            let x2 = CGFloat(max(start, end) / duree) * largeurTimeline
+                                            Rectangle()
+                                                .fill(enBoucle ? Color.yellow : Color.gray.opacity(0.15))
+                                                .frame(width: max(x2 - x1, 1), height: 24)
+                                                .offset(x: 140 + x1)
+                                        } else if let dragStart = rulerDragStartTime, let dragCurrent = rulerDragCurrentTime {
+                                            // Live preview while dragging out a brand new zone.
+                                            let x1 = CGFloat(min(dragStart, dragCurrent) / duree) * largeurTimeline
+                                            let x2 = CGFloat(max(dragStart, dragCurrent) / duree) * largeurTimeline
+                                            Rectangle()
+                                                .fill(Color.yellow)
+                                                .frame(width: max(x2 - x1, 1), height: 24)
+                                                .offset(x: 140 + x1)
+                                        }
                                         if tracksLocked {
                                             Rectangle().fill(Color.black).frame(width: 140, height: 24)
                                         }
                                         Color.clear
                                             .contentShape(Rectangle())
                                             .frame(height: 24)
-                                            .onTapGesture { location in
-                                                guard location.x > 140 else { return }
-                                                let positionCliquee = (Double(location.x - 140) / Double(largeurTimeline)) * duree
-                                                position = min(max(positionCliquee, 0), duree)
-                                                sendOSCMessagesForPosition(position)
+                                            .onContinuousHover { phase in
+                                                switch phase {
+                                                case .active(let location):
+                                                    guard resizingLoopZoneEdge == nil,
+                                                          let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd else {
+                                                        if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
+                                                        return
+                                                    }
+                                                    let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
+                                                    let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
+                                                    let near = abs(location.x - startX) < 6 || abs(location.x - endX) < 6
+                                                    if isNearLoopZoneEdge != near { isNearLoopZoneEdge = near }
+                                                case .ended:
+                                                    if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
+                                                }
+                                            }
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        guard value.startLocation.x > 140 else { return }
+                                                        let startXPos = Double(value.startLocation.x - 140)
+
+                                                        // First tick of this drag: decide once whether it's grabbing
+                                                        // an existing zone's edge, moving its body, or starting a
+                                                        // brand new zone — checked against the drag's start point
+                                                        // only, never re-evaluated mid-drag (so crossing the other
+                                                        // edge or leaving the zone mid-drag doesn't change what's
+                                                        // being manipulated).
+                                                        if resizingLoopZoneEdge == nil, !isDraggingLoopZoneBody, rulerDragStartTime == nil,
+                                                           let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd {
+                                                            let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
+                                                            let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
+                                                            if abs(value.startLocation.x - startX) < 6 {
+                                                                resizingLoopZoneEdge = .start
+                                                            } else if abs(value.startLocation.x - endX) < 6 {
+                                                                resizingLoopZoneEdge = .end
+                                                            } else {
+                                                                let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
+                                                                if startTime > zoneStart && startTime < zoneEnd {
+                                                                    isDraggingLoopZoneBody = true
+                                                                    loopZoneDragOriginalStart = zoneStart
+                                                                    loopZoneDragOriginalEnd = zoneEnd
+                                                                    loopZoneDragAnchorTime = startTime
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if let edge = resizingLoopZoneEdge {
+                                                            // Same reason as the lasso/paste cursors: onContinuousHover
+                                                            // stops firing once the mouse is captured by this active
+                                                            // drag, so reassert the cursor by hand for its duration.
+                                                            cursor(fromSymbol: "chevron.left.chevron.right").set()
+                                                            let xPos = Double(value.location.x - 140)
+                                                            var newTime = (xPos / Double(largeurTimeline)) * duree
+                                                            if NSEvent.modifierFlags.contains(.command),
+                                                               let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                newTime = snapped
+                                                            } else if magneticGridSnap,
+                                                                      let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                newTime = snapped
+                                                            }
+                                                            newTime = min(max(newTime, 0), duree)
+                                                            switch edge {
+                                                            case .start:
+                                                                loopZoneStart = min(newTime, (loopZoneEnd ?? newTime) - 0.01)
+                                                            case .end:
+                                                                loopZoneEnd = max(newTime, (loopZoneStart ?? newTime) + 0.01)
+                                                            }
+                                                            return
+                                                        }
+
+                                                        if isDraggingLoopZoneBody,
+                                                           let origStart = loopZoneDragOriginalStart,
+                                                           let origEnd = loopZoneDragOriginalEnd,
+                                                           let anchor = loopZoneDragAnchorTime {
+                                                            let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                            let delta = currentTime - anchor
+                                                            let zoneLength = origEnd - origStart
+                                                            var newStart = origStart + delta
+                                                            var newEnd = origEnd + delta
+
+                                                            // Snap the zone's start (not the cursor) to the nearest
+                                                            // marker/grid line — the whole zone jumps into place as
+                                                            // one piece, keeping its length exactly.
+                                                            let startXPos = (newStart / duree) * Double(largeurTimeline)
+                                                            if NSEvent.modifierFlags.contains(.command),
+                                                               let snapped = nearestSnapTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                let snapDelta = snapped - newStart
+                                                                newStart += snapDelta
+                                                                newEnd += snapDelta
+                                                            } else if magneticGridSnap,
+                                                                      let snapped = nearestGridTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                let snapDelta = snapped - newStart
+                                                                newStart += snapDelta
+                                                                newEnd += snapDelta
+                                                            }
+
+                                                            if newStart < 0 {
+                                                                newStart = 0
+                                                                newEnd = zoneLength
+                                                            }
+                                                            if newEnd > duree {
+                                                                newEnd = duree
+                                                                newStart = duree - zoneLength
+                                                            }
+                                                            loopZoneStart = newStart
+                                                            loopZoneEnd = newEnd
+                                                            return
+                                                        }
+
+                                                        let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
+                                                        let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        rulerDragStartTime = startTime
+                                                        rulerDragCurrentTime = currentTime
+                                                    }
+                                                    .onEnded { value in
+                                                        defer {
+                                                            rulerDragStartTime = nil
+                                                            rulerDragCurrentTime = nil
+                                                            resizingLoopZoneEdge = nil
+                                                            isDraggingLoopZoneBody = false
+                                                            loopZoneDragOriginalStart = nil
+                                                            loopZoneDragOriginalEnd = nil
+                                                            loopZoneDragAnchorTime = nil
+                                                        }
+                                                        guard value.startLocation.x > 140 else { return }
+                                                        if resizingLoopZoneEdge != nil || isDraggingLoopZoneBody {
+                                                            // Already applied live in onChanged — nothing more to do.
+                                                            return
+                                                        }
+                                                        // A negligible drag is just a click on the ruler now that
+                                                        // moving the playhead lives in the strip above: Shift+click
+                                                        // erases the zone, a plain click does nothing.
+                                                        let dragDistance = abs(value.location.x - value.startLocation.x)
+                                                        if dragDistance < 3 {
+                                                            if NSEvent.modifierFlags.contains(.shift) {
+                                                                loopZoneStart = nil
+                                                                loopZoneEnd = nil
+                                                            }
+                                                            return
+                                                        }
+                                                        let startTime = min(max((Double(value.startLocation.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        let endTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        loopZoneStart = min(startTime, endTime)
+                                                        loopZoneEnd = max(startTime, endTime)
+                                                        // A freshly drawn zone is active right away.
+                                                        enBoucle = true
+                                                    }
+                                            )
+                                            .simultaneousGesture(
+                                                TapGesture(count: 2).onEnded {
+                                                    // Double-click opens the precise editor — never conflicts with
+                                                    // the single-click-moves-the-playhead behavior above, since
+                                                    // .simultaneousGesture lets both coexist without either
+                                                    // blocking the other's recognition.
+                                                    guard loopZoneStart != nil, loopZoneEnd != nil else { return }
+                                                    loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
+                                                    loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
+                                                    showLoopZoneEditor = true
+                                                }
+                                            )
+                                            .overlay {
+                                                CursorOverlay(
+                                                    isActive: isNearLoopZoneEdge || resizingLoopZoneEdge != nil,
+                                                    symbolName: "chevron.left.chevron.right"
+                                                )
+                                                .allowsHitTesting(false)
                                             }
                                         Button(action: { tracksLocked.toggle() }) {
                                             Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
@@ -1919,11 +2128,11 @@ struct ContentView: View {
                                                                 // Without Cmd, if "magnetic grid" is on, still snap onto
                                                                 // the nearest grid line alone (never a marker).
                                                                 let dragXPos = (newPosition / duree) * Double(largeurTimeline)
-                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
                                                                 isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
-                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
                                                                 if NSEvent.modifierFlags.contains(.command),
-                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id) {
                                                                     newPosition = snapTime
                                                                 } else if magneticGridSnap,
                                                                           let gridSnapTime = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
@@ -2241,6 +2450,26 @@ struct ContentView: View {
                                         NSCursor.arrow.set()
                                     }
                                 }
+
+                                // Moving the playhead by click now lives here, in a thin strip
+                                // right above the ruler (roughly the height of the playhead
+                                // triangle) — not on the ruler itself anymore, which is now
+                                // dedicated entirely to the loop zone (create/resize/move/erase)
+                                // without a plain click being reinterpreted as "jump the playhead".
+                                // Same full-width + x>140 guard pattern as the ruler's own gesture
+                                // (rather than a narrower frame + .offset), since .offset doesn't
+                                // reliably shift a gesture's reported location the same way it
+                                // shifts the view visually — this proven pattern avoids that trap.
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .frame(height: 15)
+                                    .offset(y: -15)
+                                    .onTapGesture { location in
+                                        guard location.x > 140 else { return }
+                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * duree
+                                        position = min(max(clicked, 0), duree)
+                                        sendOSCMessagesForPosition(position)
+                                    }
                             }
                             .padding(.top, 14) // room for the playhead triangle, which pokes above y=0
                         }
@@ -2324,7 +2553,7 @@ struct ContentView: View {
             openPDFWindow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPlayPause)) { _ in
-            enLecture.toggle()
+            togglePlayback()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierStop)) { _ in
             enLecture = false
@@ -2359,6 +2588,15 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToPreviousMarker)) { _ in
             goToPreviousMarker()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierEditLoopZone)) { _ in
+            loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
+            loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
+            showLoopZoneEditor = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearLoopZone)) { _ in
+            loopZoneStart = nil
+            loopZoneEnd = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarkerByName)) { _ in
             goToMarkerNameString = ""
@@ -2400,6 +2638,18 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteSelectedPoints)) { _ in
             deleteSelectedPoints()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierCut)) { _ in
+            // The menu's Cut item: cut = copy the point selection then
+            // delete it (same guard as Copy/Paste — only when there's a
+            // selection and we're not mid-edit in some other text field);
+            // otherwise fall back to the standard system text cut.
+            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                copySelectedPoints()
+                deleteSelectedPoints()
+            } else {
+                NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierCopy)) { _ in
             // The menu's Copy item: copy the point selection if there is
@@ -2489,6 +2739,50 @@ struct ContentView: View {
                 playheadMarkerNotFound = false
                 goToTimeInitialValue = goToTimeString
             }
+        }
+        .sheet(isPresented: $showLoopZoneEditor) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Edit Loop Zone")
+                    .font(.headline)
+
+                HStack {
+                    Text("Start")
+                        .frame(width: 50, alignment: .trailing)
+                        .foregroundColor(.secondary)
+                    TextField("mm:ss", text: $loopZoneEditStartString)
+                        .textFieldStyle(.roundedBorder)
+                }
+                HStack {
+                    Text("End")
+                        .frame(width: 50, alignment: .trailing)
+                        .foregroundColor(.secondary)
+                    TextField("mm:ss", text: $loopZoneEditEndString)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        showLoopZoneEditor = false
+                    }
+                    .keyboardShortcut(.escape)
+                    Button("Apply") {
+                        if let s = parseDuration(loopZoneEditStartString),
+                           let e = parseDuration(loopZoneEditEndString) {
+                            let clampedS = min(max(s, 0), duree)
+                            let clampedE = min(max(e, 0), duree)
+                            loopZoneStart = min(clampedS, clampedE)
+                            loopZoneEnd = max(clampedS, clampedE)
+                        }
+                        showLoopZoneEditor = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 280)
         }
         .alert("Go to time", isPresented: $showGoToTimeDialog) {
             TextField("mm:ss", text: $goToTimeString)

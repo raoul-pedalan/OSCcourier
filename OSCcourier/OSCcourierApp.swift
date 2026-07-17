@@ -98,7 +98,7 @@ struct OSCcourierApp: App {
                 // inside every text field in the app (renaming a track,
                 // Settings fields...) exactly as the default menu items did.
                 Button("Cut") {
-                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                    NotificationCenter.default.post(name: .OSCcourierCut, object: nil)
                 }
                 .keyboardShortcut("x", modifiers: .command)
 
@@ -181,6 +181,16 @@ struct OSCcourierApp: App {
                     NotificationCenter.default.post(name: .OSCcourierGoToPreviousMarker, object: nil)
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
+
+                Divider()
+
+                Button("Edit Loop Zone…") {
+                    NotificationCenter.default.post(name: .OSCcourierEditLoopZone, object: nil)
+                }
+
+                Button("Clear Loop Zone") {
+                    NotificationCenter.default.post(name: .OSCcourierClearLoopZone, object: nil)
+                }
             }
 
             // CommandGroup(after: .toolbar) inserts these items into macOS's
