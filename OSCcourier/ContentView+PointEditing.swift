@@ -74,6 +74,9 @@ extension ContentView {
 
     func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
         guard !tracksLocked else { return }
+        if !selectedPointIDs.isEmpty {
+            selectedPointIDs.removeAll()
+        }
         let piste = pistes[trackIndex]
         let rawTime = (Double(location.x) / Double(largeurTimeline)) * duree
         let time = min(max(rawTime, 0), duree)

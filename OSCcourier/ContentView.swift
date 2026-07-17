@@ -81,6 +81,27 @@ struct ContentView: View {
     // Option and Shift hover cursors.
     @State var isNearCurveControlZone: Bool = false
     @State var isOptionHeldForCursor: Bool = false
+    // Mirrors isOptionHeldForCursor for Shift, live-updated by the same
+    // flagsChanged monitor — needed so Shift+Option (the lasso trigger) can
+    // be told apart from plain Shift (erase-point cursor / toggle segment)
+    // in view-level (non-gesture-closure) contexts.
+    @State var isShiftHeldForCursor: Bool = false
+    // Points currently selected via the lasso, rendered white. Cleared by
+    // any ordinary click/drag elsewhere (creating a point, dragging or
+    // tapping an existing point).
+    @State var selectedPointIDs: Set<UUID> = []
+    // Lasso in progress: which track it started on (only that track's
+    // points are eligible — a lasso never spans multiple tracks), and its
+    // start/current location in that track's own local coordinate space.
+    @State var lassoTrackIndex: Int?
+    @State var lassoStartLocation: CGPoint?
+    @State var lassoCurrentLocation: CGPoint?
+    // Group-drag of a selection: original time of every selected point,
+    // captured on the first tick of a drag that starts on an already-
+    // selected point. Every point then moves by the same X delta as the
+    // dragged one — Y is untouched, only time shifts.
+    @State var groupDragBaseline: [UUID: Double] = [:]
+    @State var groupDragAnchorOriginalTime: Double?
     @State var curveDragSegmentID: UUID?
     @State var curveDragBaseline: Double?
     @State var curveDragBulgeBaseline: Double?
@@ -1471,6 +1492,10 @@ struct ContentView: View {
                                                         .gesture(
                                                             DragGesture(minimumDistance: 0)
                                                                 .onChanged { value in
+                                                                    // ⇧⌥ is the lasso-selection gesture (handled
+                                                                    // elsewhere as a .simultaneousGesture on this same
+                                                                    // track) — never create a point for it.
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -1509,6 +1534,7 @@ struct ContentView: View {
                                                                     // click on (or near) the curve line.
                                                                     let time = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                     if NSEvent.modifierFlags.contains(.shift),
+                                                                       !NSEvent.modifierFlags.contains(.option),
                                                                        let curveY = curveYPosition(forTime: time, trackIndex: index),
                                                                        abs(Double(value.location.y) - Double(curveY)) < 12 {
                                                                         toggleSegmentEnabled(forTime: time, trackIndex: index)
@@ -1544,7 +1570,7 @@ struct ContentView: View {
                                                                 // Direct, imperative cursor control tied to actual
                                                                 // mouse movement — no @State involved, so it works
                                                                 // regardless of SwiftUI's render cycle.
-                                                                if NSEvent.modifierFlags.contains(.shift) {
+                                                                if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
                                                                     applyShiftSegmentCursor(at: location, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                 }
                                                             case .ended:
@@ -1560,7 +1586,8 @@ struct ContentView: View {
                                                         .simultaneousGesture(
                                                             DragGesture(minimumDistance: 3)
                                                                 .onChanged { value in
-                                                                    guard NSEvent.modifierFlags.contains(.option) else { return }
+                                                                    guard NSEvent.modifierFlags.contains(.option),
+                                                                          !NSEvent.modifierFlags.contains(.shift) else { return }
                                                                     // onContinuousHover stops firing once a real drag begins
                                                                     // (the mouse is "captured" by the gesture), so the
                                                                     // CursorOverlay's isActive state would otherwise freeze
@@ -1609,7 +1636,7 @@ struct ContentView: View {
                                                     // Option held. allowsHitTesting(false) so it never intercepts
                                                     // clicks/drags — those stay on the Color.clear view above.
                                                     CursorOverlay(
-                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor,
+                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor && !isShiftHeldForCursor,
                                                         symbolName: "point.bottomleft.forward.to.point.topright.filled.scurvepath"
                                                     )
                                                     .frame(width: largeurTimeline, height: pistes[index].height)
@@ -1621,6 +1648,10 @@ struct ContentView: View {
                                                         .gesture(
                                                             DragGesture(minimumDistance: 0)
                                                                 .onChanged { value in
+                                                                    // ⇧⌥ is the lasso-selection gesture (handled
+                                                                    // elsewhere as a .simultaneousGesture on this same
+                                                                    // track) — never create a point for it.
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -1719,7 +1750,7 @@ struct ContentView: View {
                                                         if index == 0 {
                                                             ZStack {
                                                                 Rectangle()
-                                                                    .fill(pistes[index].couleur)
+                                                    .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 6, height: 6)
 
                                                                 if showPointCoordinates {
@@ -1753,7 +1784,7 @@ struct ContentView: View {
                                                                 ZStack {
                                                                     Text("T")
                                                                         .font(.system(size: 11, weight: .bold))
-                                                                        .foregroundColor(pistes[index].couleur)
+                                                                        .foregroundColor(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
 
                                                                     if showPointCoordinates {
                                                                         Text(String(format: "%.2f", event.time) + "s")
@@ -1764,7 +1795,7 @@ struct ContentView: View {
                                                                 }
                                                             } else if pistes[index].type == .bang {
                                                                 Rectangle()
-                                                                    .fill(pistes[index].couleur)
+                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 8, height: 8)
                                                                     .rotationEffect(.degrees(45))
 
@@ -1784,17 +1815,17 @@ struct ContentView: View {
                                                                     if pistes[index].type == .step {
                                                                         if pistes[index].isGate {
                                                                             Rectangle()
-                                                                                .stroke(pistes[index].couleur, lineWidth: 2.5)
+                                                                            .stroke(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur, lineWidth: 2.5)
                                                                                 .frame(width: 10, height: 10)
                                                                                 .contentShape(Rectangle())
                                                                         } else {
                                                                             ZStack {
                                                                                 Rectangle()
-                                                                                    .fill(pistes[index].couleur)
+                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(45))
                                                                                 Rectangle()
-                                                                                    .fill(pistes[index].couleur)
+                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(-45))
                                                                             }
@@ -1803,7 +1834,7 @@ struct ContentView: View {
                                                                         }
                                                                     } else {
                                                                         Circle()
-                                                                            .fill(pistes[index].couleur)
+                                                            .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                             .frame(width: 12, height: 12)
                                                                     }
                                                                 }
@@ -1839,6 +1870,21 @@ struct ContentView: View {
                                                         DragGesture(minimumDistance: 5)
                                                             .onChanged { value in
                                                                 guard !tracksLocked else { return }
+                                                                // ⇧⌥ starting directly on top of a point means the
+                                                                // lasso started there — don't also move the point out
+                                                                // from under it via this gesture.
+                                                                guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)) else { return }
+
+                                                                // Dragging a point that's part of the current selection
+                                                                // moves the whole selection together, in X only — Y stays
+                                                                // put for every point but the one under the cursor.
+                                                                // Dragging any other point clears the selection and
+                                                                // falls back to the ordinary single-point behavior.
+                                                                let isGroupDrag = selectedPointIDs.contains(event.id)
+                                                                if !isGroupDrag && !selectedPointIDs.isEmpty {
+                                                                    selectedPointIDs.removeAll()
+                                                                }
+
                                                                 var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                 isHoveringPoint = true
 
@@ -1858,8 +1904,26 @@ struct ContentView: View {
                                                                 }
                                                                 updatePointCursor()
 
-                                                                if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
-                                                                    pistes[index].evenements[eventIndex].time = min(max(newPosition, 0), duree)
+                                                                let clampedNewTime = min(max(newPosition, 0), duree)
+
+                                                                if isGroupDrag {
+                                                                    // Captured once, on the first tick — re-deriving from
+                                                                    // a moving baseline each frame would compound
+                                                                    // snapping/rounding error across the drag.
+                                                                    if groupDragBaseline.isEmpty {
+                                                                        groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                                                                            .filter { selectedPointIDs.contains($0.id) }
+                                                                            .map { ($0.id, $0.time) })
+                                                                        groupDragAnchorOriginalTime = groupDragBaseline[event.id]
+                                                                    }
+                                                                    guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
+                                                                    let delta = clampedNewTime - anchorOriginal
+                                                                    for (id, originalTime) in groupDragBaseline {
+                                                                        guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                                                                        pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), duree)
+                                                                    }
+                                                                } else if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
+                                                                    pistes[index].evenements[eventIndex].time = clampedNewTime
                                                                     if pistes[index].type == .curve || pistes[index].type == .step {
                                                                         let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
                                                                         let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
@@ -1870,15 +1934,21 @@ struct ContentView: View {
                                                             .onEnded { _ in
                                                                 pistes[index].evenements.sort()
                                                                 lastSentEvents.removeAll()
+                                                                groupDragBaseline.removeAll()
+                                                                groupDragAnchorOriginalTime = nil
                                                             }
                                                     )
                                                     .onTapGesture(count: 1) {
                                                         guard !tracksLocked else { return }
-                                                        if NSEvent.modifierFlags.contains(.shift) {
+                                                        if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
                                                             if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
                                                                 pistes[index].evenements.remove(at: eventIndex)
                                                                 lastSentEvents.removeAll()
                                                             }
+                                                        } else if !selectedPointIDs.isEmpty {
+                                                            // A plain click on a point (or anywhere else) clears
+                                                            // whatever the lasso had selected.
+                                                            selectedPointIDs.removeAll()
                                                         }
                                                     }
                                                     .onTapGesture(count: 2) {
@@ -1892,6 +1962,94 @@ struct ContentView: View {
                                             }
                                             .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                             .clipped()
+                                            .overlay(alignment: .topLeading) {
+                                                // Visual feedback while dragging — only drawn on the track the
+                                                // lasso actually started on.
+                                                if lassoTrackIndex == index,
+                                                   let start = lassoStartLocation,
+                                                   let current = lassoCurrentLocation {
+                                                    let rect = CGRect(
+                                                        x: min(start.x, current.x),
+                                                        y: min(start.y, current.y),
+                                                        width: abs(current.x - start.x),
+                                                        height: abs(current.y - start.y)
+                                                    )
+                                                    Rectangle()
+                                                        .fill(Color.white.opacity(0.15))
+                                                        .overlay(Rectangle().stroke(Color.white, lineWidth: 1))
+                                                        .frame(width: rect.width, height: rect.height)
+                                                        .position(x: rect.midX, y: rect.midY)
+                                                        .allowsHitTesting(false)
+                                                }
+                                            }
+                                            // Idle-hover cursor for lasso-selection mode (⇧⌥ held, not yet
+                                            // dragging) — the imperative .set() call inside the drag gesture
+                                            // above takes over once the drag actually starts.
+                                            .overlay {
+                                                CursorOverlay(
+                                                    isActive: isShiftHeldForCursor && isOptionHeldForCursor && !tracksLocked,
+                                                    symbolName: "dot.crosshair"
+                                                )
+                                                .allowsHitTesting(false)
+                                            }
+                                            // ⌥⇧-drag lassos points on THIS track only — attached as
+                                            // .simultaneousGesture (not .gesture) so it never blocks the
+                                            // ordinary click-to-create-point / drag-to-move-point gestures
+                                            // underneath; it only actually does anything once both modifiers
+                                            // are held.
+                                            .simultaneousGesture(
+                                                DragGesture(minimumDistance: 3, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        guard !tracksLocked,
+                                                              NSEvent.modifierFlags.contains(.shift),
+                                                              NSEvent.modifierFlags.contains(.option) else { return }
+                                                        // onContinuousHover (used below for the idle-hover cursor)
+                                                        // stops firing once a real drag begins, so reassert the
+                                                        // cursor manually for the duration of the lasso drag itself
+                                                        // — same pattern as the curve-bend cursor.
+                                                        cursor(fromSymbol: "dot.crosshair").set()
+                                                        if lassoTrackIndex == nil {
+                                                            lassoTrackIndex = index
+                                                            lassoStartLocation = value.startLocation
+                                                        }
+                                                        guard lassoTrackIndex == index else { return }
+                                                        lassoCurrentLocation = value.location
+                                                    }
+                                                    .onEnded { value in
+                                                        guard lassoTrackIndex == index, let start = lassoStartLocation else {
+                                                            lassoTrackIndex = nil
+                                                            lassoStartLocation = nil
+                                                            lassoCurrentLocation = nil
+                                                            return
+                                                        }
+                                                        let rect = CGRect(
+                                                            x: min(start.x, value.location.x),
+                                                            y: min(start.y, value.location.y),
+                                                            width: abs(value.location.x - start.x),
+                                                            height: abs(value.location.y - start.y)
+                                                        )
+                                                        let trackHeight = rowHeight(for: pistes[index])
+                                                        var newSelection: Set<UUID> = []
+                                                        for event in pistes[index].evenements {
+                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let pointY: CGFloat
+                                                            if pistes[index].type == .curve || pistes[index].type == .step {
+                                                                let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                                let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
+                                                                pointY = curveMargin + (trackHeight - 2 * curveMargin) * (1 - normalizedY)
+                                                            } else {
+                                                                pointY = index == 0 ? 22 : 15
+                                                            }
+                                                            if rect.contains(CGPoint(x: xPos, y: pointY)) {
+                                                                newSelection.insert(event.id)
+                                                            }
+                                                        }
+                                                        selectedPointIDs = newSelection
+                                                        lassoTrackIndex = nil
+                                                        lassoStartLocation = nil
+                                                        lassoCurrentLocation = nil
+                                                    }
+                                            )
                                         }
                                         .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
                                         .zIndex(reorderingIndex == index ? 1 : 0)

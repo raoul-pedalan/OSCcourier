@@ -25,6 +25,7 @@ extension ContentView {
             flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 updatePointCursor()
                 isOptionHeldForCursor = event.modifierFlags.contains(.option)
+                isShiftHeldForCursor = event.modifierFlags.contains(.shift)
                 return event
             }
         }
