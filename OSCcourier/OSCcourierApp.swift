@@ -92,6 +92,36 @@ struct OSCcourierApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
+            CommandGroup(replacing: .pasteboard) {
+                // Routed through the standard AppKit responder chain (not a
+                // custom closure) so Cut/Copy/Paste keep working normally
+                // inside every text field in the app (renaming a track,
+                // Settings fields...) exactly as the default menu items did.
+                Button("Cut") {
+                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("x", modifiers: .command)
+
+                Button("Copy") {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: .command)
+
+                Button("Paste") {
+                    NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("v", modifiers: .command)
+
+                Divider()
+
+                // No "Select All" here — deliberately omitted, since this
+                // app has no notion of "select all" outside the lasso.
+                Button("Delete Selection") {
+                    NotificationCenter.default.post(name: .OSCcourierDeleteSelectedPoints, object: nil)
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+            }
+
             CommandGroup(replacing: .saveItem) {
                 Button("Save") {
                     NotificationCenter.default.post(name: .OSCcourierSave, object: nil)
@@ -204,7 +234,7 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("m", modifiers: [])
 
-                Button("Points List") {
+                Button("Point List") {
                     NotificationCenter.default.post(name: .OSCcourierShowPointList, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: [])

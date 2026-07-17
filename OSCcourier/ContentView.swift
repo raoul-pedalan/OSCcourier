@@ -2300,6 +2300,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteAllTracks)) { _ in
             showDeleteAllTracksConfirmation = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteSelectedPoints)) { _ in
+            deleteSelectedPoints()
+        }
 
         let withAlerts = withReceives
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
