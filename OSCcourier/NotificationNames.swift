@@ -30,6 +30,7 @@ extension Notification.Name {
     static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
     static let OSCcourierDeleteSelectedPoints = Notification.Name("OSCcourierDeleteSelectedPoints")
     static let OSCcourierCopy = Notification.Name("OSCcourierCopy")
+    static let OSCcourierDuplicateSelection = Notification.Name("OSCcourierDuplicateSelection")
     static let OSCcourierCut = Notification.Name("OSCcourierCut")
     static let OSCcourierPaste = Notification.Name("OSCcourierPaste")
 }

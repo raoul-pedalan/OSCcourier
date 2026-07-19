@@ -70,6 +70,13 @@ extension ContentView {
                     return nil
                 }
 
+                // ⌘D: repeat the last paste at the same offset again.
+                if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "d" {
+                    guard !pointClipboard.isEmpty, lastPasteAnchorTime != nil else { return event }
+                    duplicateSelectionWithSameOffset()
+                    return nil
+                }
+
                 // Escape: cancel paste mode.
                 if event.keyCode == 53, isPasteModeActive {
                     isPasteModeActive = false

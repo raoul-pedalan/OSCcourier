@@ -125,6 +125,10 @@ extension ContentView {
         // The freshly pasted points become the new selection, so they can
         // immediately be nudged as a group if the placement needs tweaking.
         selectedPointIDs = newSelection
+        // Remembered so ⌘D can repeat this exact paste at the same offset,
+        // stepping forward again each time it's pressed.
+        lastPasteAnchorTime = anchorTime
+        lastPasteTrackIndex = trackIndex
         return true
     }
 
@@ -143,6 +147,34 @@ extension ContentView {
         guard pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step else { return false }
         guard let srcMin = pointClipboardSourceMinAmplitude, let srcMax = pointClipboardSourceMaxAmplitude else { return false }
         return srcMin != pistes[trackIndex].minAmplitude || srcMax != pistes[trackIndex].maxAmplitude
+    }
+
+    // ⌘D: repeats the last paste at the exact same offset from wherever it
+    // last landed — press it repeatedly to stamp out an evenly-spaced
+    // series from a single copy. Requires at least one paste to have
+    // happened since the last copy, since that's what establishes the
+    // offset to repeat; does nothing before that.
+    func duplicateSelectionWithSameOffset() {
+        guard !tracksLocked, !pointClipboard.isEmpty,
+              let prevAnchor = lastPasteAnchorTime,
+              let trackIndex = lastPasteTrackIndex,
+              pistes.indices.contains(trackIndex) else { return }
+
+        let offset: Double
+        if let fixedOffset = lastPasteOffset {
+            offset = fixedOffset
+        } else if let originalEarliest = pointClipboardOriginalEarliestTime {
+            // First ⌘D since the last manual paste: derive the offset once
+            // from how far that paste was from the original copy, then
+            // remember it — every later ⌘D press reuses this exact value.
+            offset = prevAnchor - originalEarliest
+            lastPasteOffset = offset
+        } else {
+            return
+        }
+
+        let newAnchor = prevAnchor + offset
+        _ = pasteClipboard(at: newAnchor, trackIndex: trackIndex, scaleToRange: false)
     }
 
     // The lasso only ever selects points on a single track, so the first
@@ -168,6 +200,12 @@ extension ContentView {
             pointClipboardTrackType = piste.type
             pointClipboardSourceMinAmplitude = piste.minAmplitude
             pointClipboardSourceMaxAmplitude = piste.maxAmplitude
+            pointClipboardOriginalEarliestTime = earliestTime
+            // A new copy invalidates whatever offset ⌘D was tracking —
+            // it needs a fresh paste before it has an offset to repeat.
+            lastPasteAnchorTime = nil
+            lastPasteTrackIndex = nil
+            lastPasteOffset = nil
             return
         }
     }

@@ -143,6 +143,18 @@ struct ContentView: View {
     // rescale (curve/step tracks only — the only types where Y is meaningful).
     @State var pointClipboardSourceMinAmplitude: Double?
     @State var pointClipboardSourceMaxAmplitude: Double?
+    // The earliest original time among the copied points (before they were
+    // ever pasted anywhere) — combined with where the most recent paste
+    // landed, this gives ⌘D the offset to repeat.
+    @State var pointClipboardOriginalEarliestTime: Double?
+    @State var lastPasteAnchorTime: Double?
+    @State var lastPasteTrackIndex: Int?
+    // Fixed the first time ⌘D is pressed (derived from the manual paste
+    // that preceded it), then reused as-is for every subsequent press —
+    // recomputing it from lastPasteAnchorTime each time would compound
+    // into a geometric progression (2, 4, 8, 16...) instead of a constant
+    // step (2, 4, 6, 8...), since the anchor keeps advancing.
+    @State var lastPasteOffset: Double?
     @State var pendingPasteAnchorTime: Double?
     @State var pendingPasteTrackIndex: Int?
     @State var showPasteScaleRangeAlert: Bool = false
@@ -2353,6 +2365,7 @@ struct ContentView: View {
                                                             pendingPasteTrackIndex = index
                                                             showPasteScaleRangeAlert = true
                                                         } else if pasteClipboard(at: anchorTime, trackIndex: index, scaleToRange: false) {
+                                                            lastPasteOffset = nil
                                                             isPasteModeActive = false
                                                         }
                                                     }
@@ -2684,6 +2697,13 @@ struct ContentView: View {
                 NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDuplicateSelection)) { _ in
+            // Silently does nothing if there's no offset to repeat yet
+            // (no clipboard, or no paste since the last copy) — same as
+            // pressing ⌘D itself in that situation.
+            guard !(NSApp.keyWindow?.firstResponder is NSTextView) else { return }
+            duplicateSelectionWithSameOffset()
+        }
 
         let withAlerts = withReceives
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
@@ -2824,6 +2844,7 @@ struct ContentView: View {
             Button("Adapt (Scale to Fit)") {
                 if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                    lastPasteOffset = nil
                 }
                 isPasteModeActive = false
                 pendingPasteAnchorTime = nil
@@ -2842,6 +2863,7 @@ struct ContentView: View {
             Button("Scale to Fit") {
                 if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                    lastPasteOffset = nil
                 }
                 isPasteModeActive = false
                 pendingPasteAnchorTime = nil
@@ -2850,6 +2872,7 @@ struct ContentView: View {
             Button("Keep As-Is") {
                 if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: false)
+                    lastPasteOffset = nil
                 }
                 isPasteModeActive = false
                 pendingPasteAnchorTime = nil

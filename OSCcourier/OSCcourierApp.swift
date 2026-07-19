@@ -112,6 +112,11 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("v", modifiers: .command)
 
+                Button("Duplicate") {
+                    NotificationCenter.default.post(name: .OSCcourierDuplicateSelection, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
                 Divider()
 
                 // No "Select All" here — deliberately omitted, since this
