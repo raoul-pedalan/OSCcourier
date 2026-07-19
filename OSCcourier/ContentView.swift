@@ -1537,26 +1537,18 @@ struct ContentView: View {
 
                                                         Button(action: {
                                                             guard !tracksLocked else { return }
-                                                            if isOptionHeldForCursor && duplicateHoverTrackIndex == index {
-                                                                duplicateTrack(at: index)
-                                                            } else {
-                                                                pistes[index].evenements.removeAll()
-                                                                lastSentEvents.removeAll()
-                                                            }
+                                                            // The /markers track can't be duplicated (or deleted) —
+                                                            // only hidden by folding — so ⌥-hover here never switches
+                                                            // this button into duplicate mode; it always just clears.
+                                                            pistes[index].evenements.removeAll()
+                                                            lastSentEvents.removeAll()
                                                         }) {
-                                                            // Fixed frame: swapping between the two SF Symbols (they have
-                                                            // slightly different intrinsic widths) must not nudge the
-                                                            // neighboring buttons in this row — only the icon inside
-                                                            // this fixed box changes, never the row's layout.
-                                                            Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
-                                                                .foregroundColor((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? .blue : .gray)
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .foregroundColor(.gray)
                                                                 .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
-                                                        .onHover { hovering in
-                                                            duplicateHoverTrackIndex = hovering ? index : (duplicateHoverTrackIndex == index ? nil : duplicateHoverTrackIndex)
-                                                        }
-                                                        .help((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
+                                                        .help("Clear all points on this track")
                                                     }
                                                     .offset(x: -20)
                                                     .padding(.trailing, 20)
@@ -1610,8 +1602,11 @@ struct ContentView: View {
                                                             // slightly different intrinsic widths) must not nudge the
                                                             // neighboring buttons in this row — only the icon inside
                                                             // this fixed box changes, never the row's layout.
+                                                            // Color stays gray in both modes — only the symbol itself
+                                                            // changes (plus the tooltip) — so there's no color to pick
+                                                            // that has to fight the track's own color for contrast.
                                                             Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
-                                                                .foregroundColor((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? .blue : .gray)
+                                                                .foregroundColor(.gray)
                                                                 .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
@@ -1648,14 +1643,16 @@ struct ContentView: View {
                                                         DiagonalStripes(stripeWidth: 3, spacing: 3)
                                                             .stroke(pistes[index].couleur, lineWidth: 3)
                                                             .background(
-                                                                // Curve tracks are yellow, and yellow-on-lightened-yellow
-                                                                // was too low-contrast to read at this 4px height — so
-                                                                // their stripes sit on a DARKENED (brown) version of the
-                                                                // track color instead. The other types keep the lightened
-                                                                // background, which reads fine against their darker hues.
+                                                                // Fixed background per type, independent of the track's
+                                                                // own color — both branches must be the same concrete
+                                                                // type (plain Color) or the compiler chokes trying to
+                                                                // type-check this ternary inside such a deeply nested
+                                                                // modifier chain. Curve gets a warm orange, step a
+                                                                // magenta/pink — user-picked to read clearly at this
+                                                                // 4px height regardless of the track's own color.
                                                                 pistes[index].type == .curve
-                                                                    ? pistes[index].couleur.overlay(Color.black.opacity(0.55))
-                                                                    : pistes[index].couleur.overlay(Color.white.opacity(0.5))
+                                                                    ? Color(red: 1.0, green: 0.58, blue: 0.004)
+                                                                    : Color(red: 1.0, green: 0.196, blue: 0.988)
                                                             )
                                                             .frame(width: 140, height: 4)
                                                             .clipped()
@@ -2419,7 +2416,7 @@ struct ContentView: View {
                                 // reliably shift a gesture's reported location the same way it
                                 // shifts the view visually — this proven pattern avoids that trap.
                                 DiagonalStripes(stripeWidth: 3, spacing: 3)
-                                    .stroke(Color.gray.opacity(0.3), lineWidth: 3)
+                                    .stroke(Color.gray.opacity(0.5), lineWidth: 3)
                                     .frame(height: 15)
                                     .offset(y: -15)
                                     .allowsHitTesting(false)
@@ -2442,6 +2439,15 @@ struct ContentView: View {
                                         .rotationEffect(.degrees(180))
                                         .offset(x: -6, y: -12)
                                 }
+                                // .offset() shifts the triangle's RENDERED position but not this
+                                // ZStack's own hit-testable bounds, which stay anchored to the
+                                // thin 2pt-wide line — so without this, dragging only worked from
+                                // the line itself, never from the triangle that visually pokes out
+                                // above and to the side of it. An explicit Path-based content
+                                // shape doesn't affect layout size/position (only which region
+                                // responds to gestures), so the existing offset/coordinate math
+                                // below is untouched.
+                                .contentShape(Path(CGRect(x: -8, y: -14, width: 16, height: CGFloat(totalHeight) + 14)))
                                 .offset(x: CGFloat(position / duree) * largeurTimeline + 140)
                                 .gesture(
                                     DragGesture(minimumDistance: 0)
