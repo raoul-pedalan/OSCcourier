@@ -1108,164 +1108,20 @@ struct ContentView: View {
                                             .contentShape(Rectangle())
                                             .frame(height: 24)
                                             .onContinuousHover { phase in
-                                                switch phase {
-                                                case .active(let location):
-                                                    guard resizingLoopZoneEdge == nil,
-                                                          let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd else {
-                                                        if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
-                                                        return
-                                                    }
-                                                    let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
-                                                    let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
-                                                    let near = abs(location.x - startX) < 6 || abs(location.x - endX) < 6
-                                                    if isNearLoopZoneEdge != near { isNearLoopZoneEdge = near }
-                                                case .ended:
-                                                    if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
-                                                }
+                                                handleRulerHover(phase: phase, largeurTimeline: largeurTimeline)
                                             }
                                             .gesture(
                                                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
                                                     .onChanged { value in
-                                                        guard value.startLocation.x > 140 else { return }
-                                                        let startXPos = Double(value.startLocation.x - 140)
-
-                                                        // First tick of this drag: decide once whether it's grabbing
-                                                        // an existing zone's edge, moving its body, or starting a
-                                                        // brand new zone — checked against the drag's start point
-                                                        // only, never re-evaluated mid-drag (so crossing the other
-                                                        // edge or leaving the zone mid-drag doesn't change what's
-                                                        // being manipulated).
-                                                        if resizingLoopZoneEdge == nil, !isDraggingLoopZoneBody, rulerDragStartTime == nil,
-                                                           let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd {
-                                                            let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
-                                                            let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
-                                                            if abs(value.startLocation.x - startX) < 6 {
-                                                                resizingLoopZoneEdge = .start
-                                                            } else if abs(value.startLocation.x - endX) < 6 {
-                                                                resizingLoopZoneEdge = .end
-                                                            } else {
-                                                                let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
-                                                                if startTime > zoneStart && startTime < zoneEnd {
-                                                                    isDraggingLoopZoneBody = true
-                                                                    loopZoneDragOriginalStart = zoneStart
-                                                                    loopZoneDragOriginalEnd = zoneEnd
-                                                                    loopZoneDragAnchorTime = startTime
-                                                                }
-                                                            }
-                                                        }
-
-                                                        if let edge = resizingLoopZoneEdge {
-                                                            // Same reason as the lasso/paste cursors: onContinuousHover
-                                                            // stops firing once the mouse is captured by this active
-                                                            // drag, so reassert the cursor by hand for its duration.
-                                                            cursor(fromSymbol: "chevron.left.chevron.right").set()
-                                                            let xPos = Double(value.location.x - 140)
-                                                            var newTime = (xPos / Double(largeurTimeline)) * duree
-                                                            if NSEvent.modifierFlags.contains(.command),
-                                                               let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-                                                                newTime = snapped
-                                                            } else if magneticGridSnap,
-                                                                      let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-                                                                newTime = snapped
-                                                            }
-                                                            newTime = min(max(newTime, 0), duree)
-                                                            switch edge {
-                                                            case .start:
-                                                                loopZoneStart = min(newTime, (loopZoneEnd ?? newTime) - 0.01)
-                                                            case .end:
-                                                                loopZoneEnd = max(newTime, (loopZoneStart ?? newTime) + 0.01)
-                                                            }
-                                                            return
-                                                        }
-
-                                                        if isDraggingLoopZoneBody,
-                                                           let origStart = loopZoneDragOriginalStart,
-                                                           let origEnd = loopZoneDragOriginalEnd,
-                                                           let anchor = loopZoneDragAnchorTime {
-                                                            let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
-                                                            let delta = currentTime - anchor
-                                                            let zoneLength = origEnd - origStart
-                                                            var newStart = origStart + delta
-                                                            var newEnd = origEnd + delta
-
-                                                            // Snap the zone's start (not the cursor) to the nearest
-                                                            // marker/grid line — the whole zone jumps into place as
-                                                            // one piece, keeping its length exactly.
-                                                            let startXPos = (newStart / duree) * Double(largeurTimeline)
-                                                            if NSEvent.modifierFlags.contains(.command),
-                                                               let snapped = nearestSnapTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
-                                                                let snapDelta = snapped - newStart
-                                                                newStart += snapDelta
-                                                                newEnd += snapDelta
-                                                            } else if magneticGridSnap,
-                                                                      let snapped = nearestGridTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
-                                                                let snapDelta = snapped - newStart
-                                                                newStart += snapDelta
-                                                                newEnd += snapDelta
-                                                            }
-
-                                                            if newStart < 0 {
-                                                                newStart = 0
-                                                                newEnd = zoneLength
-                                                            }
-                                                            if newEnd > duree {
-                                                                newEnd = duree
-                                                                newStart = duree - zoneLength
-                                                            }
-                                                            loopZoneStart = newStart
-                                                            loopZoneEnd = newEnd
-                                                            return
-                                                        }
-
-                                                        let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
-                                                        let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
-                                                        rulerDragStartTime = startTime
-                                                        rulerDragCurrentTime = currentTime
+                                                        handleRulerDragChanged(value, largeurTimeline: largeurTimeline)
                                                     }
                                                     .onEnded { value in
-                                                        defer {
-                                                            rulerDragStartTime = nil
-                                                            rulerDragCurrentTime = nil
-                                                            resizingLoopZoneEdge = nil
-                                                            isDraggingLoopZoneBody = false
-                                                            loopZoneDragOriginalStart = nil
-                                                            loopZoneDragOriginalEnd = nil
-                                                            loopZoneDragAnchorTime = nil
-                                                        }
-                                                        guard value.startLocation.x > 140 else { return }
-                                                        if resizingLoopZoneEdge != nil || isDraggingLoopZoneBody {
-                                                            // Already applied live in onChanged — nothing more to do.
-                                                            return
-                                                        }
-                                                        // A negligible drag is just a click on the ruler now that
-                                                        // moving the playhead lives in the strip above: Shift+click
-                                                        // erases the zone, a plain click does nothing.
-                                                        let dragDistance = abs(value.location.x - value.startLocation.x)
-                                                        if dragDistance < 3 {
-                                                            if NSEvent.modifierFlags.contains(.shift) {
-                                                                loopZoneStart = nil
-                                                                loopZoneEnd = nil
-                                                            }
-                                                            return
-                                                        }
-                                                        let startTime = min(max((Double(value.startLocation.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
-                                                        let endTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
-                                                        loopZoneStart = min(startTime, endTime)
-                                                        loopZoneEnd = max(startTime, endTime)
-                                                        // A freshly drawn zone is active right away.
-                                                        enBoucle = true
+                                                        handleRulerDragEnded(value, largeurTimeline: largeurTimeline)
                                                     }
                                             )
                                             .simultaneousGesture(
                                                 TapGesture(count: 2).onEnded {
-                                                    // Double-click opens the precise editor — never conflicts with
-                                                    // the single-click-moves-the-playhead behavior above, since
-                                                    // .simultaneousGesture lets both coexist without either
-                                                    // blocking the other's recognition.
-                                                    guard loopZoneStart != nil, loopZoneEnd != nil else { return }
-                                                    loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
-                                                    loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
-                                                    showLoopZoneEditor = true
+                                                    handleRulerDoubleClick()
                                                 }
                                             )
                                             .overlay {
@@ -1852,47 +1708,10 @@ struct ContentView: View {
                                                         .simultaneousGesture(
                                                             DragGesture(minimumDistance: 3)
                                                                 .onChanged { value in
-                                                                    guard NSEvent.modifierFlags.contains(.option),
-                                                                          !NSEvent.modifierFlags.contains(.shift) else { return }
-                                                                    // onContinuousHover stops firing once a real drag begins
-                                                                    // (the mouse is "captured" by the gesture), so the
-                                                                    // CursorOverlay's isActive state would otherwise freeze
-                                                                    // or drop — keep reasserting the cursor manually for
-                                                                    // the duration of the drag itself.
-                                                                    cursor(fromSymbol: "point.bottomleft.forward.to.point.topright.filled.scurvepath").set()
-
-                                                                    let sorted = pistes[index].evenements.sorted { $0.time < $1.time }
-                                                                    guard sorted.count > 1 else { return }
-
-                                                                    if curveDragSegmentID == nil {
-                                                                        let startTime = (Double(value.startLocation.x) / Double(largeurTimeline)) * duree
-                                                                        var chosenID = sorted[0].id
-                                                                        for i in 0..<(sorted.count - 1) {
-                                                                            if startTime >= sorted[i].time && startTime <= sorted[i + 1].time {
-                                                                                chosenID = sorted[i].id
-                                                                                break
-                                                                            }
-                                                                        }
-                                                                        curveDragSegmentID = chosenID
-                                                                        let chosenEvent = sorted.first(where: { $0.id == chosenID })
-                                                                        curveDragBaseline = chosenEvent?.segmentCurve ?? 0
-                                                                        curveDragBulgeBaseline = chosenEvent?.segmentBulge ?? 0
-                                                                    }
-
-                                                                    if let segmentID = curveDragSegmentID,
-                                                                       let baseline = curveDragBaseline,
-                                                                       let bulgeBaseline = curveDragBulgeBaseline,
-                                                                       let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == segmentID }) {
-                                                                        let newCurvature = min(max(baseline + Double(value.translation.width) * 0.0075, -6), 6)
-                                                                        let newBulge = min(max(bulgeBaseline - Double(value.translation.height) * 0.0075, -6), 6)
-                                                                        pistes[index].evenements[eventIndex].segmentCurve = newCurvature
-                                                                        pistes[index].evenements[eventIndex].segmentBulge = newBulge
-                                                                    }
+                                                                    handleCurveBendDragChanged(value, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                 }
                                                                 .onEnded { _ in
-                                                                    curveDragSegmentID = nil
-                                                                    curveDragBaseline = nil
-                                                                    curveDragBulgeBaseline = nil
+                                                                    handleCurveBendDragEnded()
                                                                 }
                                                         )
 
@@ -2135,119 +1954,14 @@ struct ContentView: View {
                                                     .gesture(
                                                         DragGesture(minimumDistance: 5)
                                                             .onChanged { value in
-                                                                guard !tracksLocked else { return }
-                                                                // ⇧⌥ starting directly on top of a point means the
-                                                                // lasso started there — don't also move the point out
-                                                                // from under it via this gesture.
-                                                                guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
-
-                                                                // Dragging a point that's part of the current selection
-                                                                // moves the whole selection together, in X only — Y stays
-                                                                // put for every point but the one under the cursor.
-                                                                // Dragging any other point clears the selection and
-                                                                // falls back to the ordinary single-point behavior.
-                                                                let isGroupDrag = selectedPointIDs.contains(event.id)
-                                                                if !isGroupDrag && !selectedPointIDs.isEmpty {
-                                                                    selectedPointIDs.removeAll()
-                                                                }
-
-                                                                var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
-                                                                isHoveringPoint = true
-
-                                                                // Cmd + within 7px of a marker or grid line: snap to it.
-                                                                // Without Cmd, if "magnetic grid" is on, still snap onto
-                                                                // the nearest grid line alone (never a marker).
-                                                                let dragXPos = (newPosition / duree) * Double(largeurTimeline)
-                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
-                                                                isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
-                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
-                                                                if NSEvent.modifierFlags.contains(.command),
-                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id) {
-                                                                    newPosition = snapTime
-                                                                } else if magneticGridSnap,
-                                                                          let gridSnapTime = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
-                                                                    newPosition = gridSnapTime
-                                                                }
-                                                                updatePointCursor()
-
-                                                                let clampedNewTime = min(max(newPosition, 0), duree)
-
-                                                                if isGroupDrag {
-                                                                    // Captured once, on the first tick — re-deriving from
-                                                                    // a moving baseline each frame would compound
-                                                                    // snapping/rounding error across the drag.
-                                                                    if groupDragBaseline.isEmpty {
-                                                                        groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
-                                                                            .filter { selectedPointIDs.contains($0.id) }
-                                                                            .map { ($0.id, $0.time) })
-                                                                        groupDragAnchorOriginalTime = groupDragBaseline[event.id]
-                                                                    }
-                                                                    guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
-                                                                    let delta = clampedNewTime - anchorOriginal
-                                                                    for (id, originalTime) in groupDragBaseline {
-                                                                        guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                                                                        pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), duree)
-                                                                    }
-
-                                                                    // Y moves too, but only where it means something.
-                                                                    if pistes[index].type == .curve || pistes[index].type == .step {
-                                                                        if groupDragYBaseline.isEmpty {
-                                                                            groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
-                                                                                .filter { selectedPointIDs.contains($0.id) }
-                                                                                .map { ($0.id, $0.y) })
-                                                                            groupDragAnchorOriginalY = groupDragYBaseline[event.id]
-                                                                        }
-                                                                        if let anchorOriginalY = groupDragAnchorOriginalY {
-                                                                            let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
-                                                                            let rawY = pistes[index].minAmplitude + normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude)
-                                                                            let rawYDelta = rawY - anchorOriginalY
-                                                                            // Group-preserving clamp: shrink the delta itself
-                                                                            // (rather than clamping each point separately)
-                                                                            // so the whole group stays in range without
-                                                                            // distorting the spacing between their values.
-                                                                            var minAllowedDelta = -Double.infinity
-                                                                            var maxAllowedDelta = Double.infinity
-                                                                            for (_, originalY) in groupDragYBaseline {
-                                                                                minAllowedDelta = max(minAllowedDelta, pistes[index].minAmplitude - originalY)
-                                                                                maxAllowedDelta = min(maxAllowedDelta, pistes[index].maxAmplitude - originalY)
-                                                                            }
-                                                                            let clampedYDelta = min(max(rawYDelta, minAllowedDelta), maxAllowedDelta)
-                                                                            for (id, originalY) in groupDragYBaseline {
-                                                                                guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                                                                                pistes[index].evenements[idx].y = gateSnappedY(originalY + clampedYDelta, forTrackIndex: index)
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                } else if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
-                                                                    pistes[index].evenements[eventIndex].time = clampedNewTime
-                                                                    if pistes[index].type == .curve || pistes[index].type == .step {
-                                                                        let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
-                                                                        let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
-                                                                        pistes[index].evenements[eventIndex].y = gateSnappedY(yValue, forTrackIndex: index)
-                                                                    }
-                                                                }
+                                                                handlePointDragChanged(value, eventID: event.id, trackIndex: index, largeurTimeline: largeurTimeline)
                                                             }
                                                             .onEnded { _ in
-                                                                pistes[index].evenements.sort()
-                                                                lastSentEvents.removeAll()
-                                                                groupDragBaseline.removeAll()
-                                                                groupDragAnchorOriginalTime = nil
-                                                                groupDragYBaseline.removeAll()
-                                                                groupDragAnchorOriginalY = nil
+                                                                handlePointDragEnded(trackIndex: index)
                                                             }
                                                     )
                                                     .onTapGesture(count: 1) {
-                                                        guard !tracksLocked else { return }
-                                                        if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
-                                                            if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
-                                                                pistes[index].evenements.remove(at: eventIndex)
-                                                                lastSentEvents.removeAll()
-                                                            }
-                                                        } else if !selectedPointIDs.isEmpty {
-                                                            // A plain click on a point (or anywhere else) clears
-                                                            // whatever the lasso had selected.
-                                                            selectedPointIDs.removeAll()
-                                                        }
+                                                        handlePointTap(eventID: event.id, trackIndex: index)
                                                     }
                                                     .onTapGesture(count: 2) {
                                                         beginEditingPoint(eventId: event.id)
@@ -2298,20 +2012,7 @@ struct ContentView: View {
                                             // candidates as a point drag) so the cursor reflects where a
                                             // click-up would actually land, before the user even clicks.
                                             .onContinuousHover { phase in
-                                                guard isPasteModeActive else { return }
-                                                switch phase {
-                                                case .active(let location):
-                                                    let xPos = Double(location.x)
-                                                    let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
-                                                        && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
-                                                    let willSnapToGrid = magneticGridSnap
-                                                        && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
-                                                    if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
-                                                    if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
-                                                case .ended:
-                                                    if isNearSnapZone { isNearSnapZone = false }
-                                                    if isNearGridSnapZone { isNearGridSnapZone = false }
-                                                }
+                                                handlePasteHover(phase: phase, largeurTimeline: largeurTimeline)
                                             }
                                             // ⌥⇧-drag lassos points on THIS track only — attached as
                                             // .simultaneousGesture (not .gesture) so it never blocks the
@@ -2321,54 +2022,10 @@ struct ContentView: View {
                                             .simultaneousGesture(
                                                 DragGesture(minimumDistance: 3, coordinateSpace: .local)
                                                     .onChanged { value in
-                                                        guard !tracksLocked, !isPasteModeActive,
-                                                              NSEvent.modifierFlags.contains(.shift),
-                                                              NSEvent.modifierFlags.contains(.option) else { return }
-                                                        // onContinuousHover (used below for the idle-hover cursor)
-                                                        // stops firing once a real drag begins, so reassert the
-                                                        // cursor manually for the duration of the lasso drag itself
-                                                        // — same pattern as the curve-bend cursor.
-                                                        cursor(fromSymbol: "dot.crosshair").set()
-                                                        if lassoTrackIndex == nil {
-                                                            lassoTrackIndex = index
-                                                            lassoStartLocation = value.startLocation
-                                                        }
-                                                        guard lassoTrackIndex == index else { return }
-                                                        lassoCurrentLocation = value.location
+                                                        handleLassoDragChanged(value, trackIndex: index, largeurTimeline: largeurTimeline)
                                                     }
                                                     .onEnded { value in
-                                                        guard lassoTrackIndex == index, let start = lassoStartLocation else {
-                                                            lassoTrackIndex = nil
-                                                            lassoStartLocation = nil
-                                                            lassoCurrentLocation = nil
-                                                            return
-                                                        }
-                                                        let rect = CGRect(
-                                                            x: min(start.x, value.location.x),
-                                                            y: min(start.y, value.location.y),
-                                                            width: abs(value.location.x - start.x),
-                                                            height: abs(value.location.y - start.y)
-                                                        )
-                                                        let trackHeight = rowHeight(for: pistes[index])
-                                                        var newSelection: Set<UUID> = []
-                                                        for event in pistes[index].evenements {
-                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
-                                                            let pointY: CGFloat
-                                                            if pistes[index].type == .curve || pistes[index].type == .step {
-                                                                let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
-                                                                let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
-                                                                pointY = curveMargin + (trackHeight - 2 * curveMargin) * (1 - normalizedY)
-                                                            } else {
-                                                                pointY = index == 0 ? 22 : 15
-                                                            }
-                                                            if rect.contains(CGPoint(x: xPos, y: pointY)) {
-                                                                newSelection.insert(event.id)
-                                                            }
-                                                        }
-                                                        selectedPointIDs = newSelection
-                                                        lassoTrackIndex = nil
-                                                        lassoStartLocation = nil
-                                                        lassoCurrentLocation = nil
+                                                        handleLassoDragEnded(value, trackIndex: index, largeurTimeline: largeurTimeline)
                                                     }
                                             )
                                             // Paste-mode click: minimumDistance 0 so a plain click and a
@@ -2378,49 +2035,10 @@ struct ContentView: View {
                                             .simultaneousGesture(
                                                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
                                                     .onChanged { value in
-                                                        // Same reason as the lasso's onChanged: the tracking-area-based
-                                                        // CursorOverlay stops driving the cursor once the mouse is
-                                                        // captured by an active drag, so keep the crosshair asserted
-                                                        // by hand for the whole mouse-down-to-up window — including
-                                                        // switching to the snap glyph as it comes into range.
-                                                        guard isPasteModeActive else { return }
-                                                        let xPos = Double(value.location.x)
-                                                        let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
-                                                            && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
-                                                        let willSnapToGrid = magneticGridSnap
-                                                            && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
-                                                        if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
-                                                        if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
-                                                        if willSnapToMarker || willSnapToGrid {
-                                                            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .red).set()
-                                                        } else {
-                                                            cursor(fromSymbol: "dot.crosshair", color: .red).set()
-                                                        }
+                                                        handlePasteDragChanged(value, largeurTimeline: largeurTimeline)
                                                     }
                                                     .onEnded { value in
-                                                        guard isPasteModeActive, pointClipboardTrackType != nil else { return }
-                                                        let xPos = Double(value.location.x)
-                                                        var anchorTime = (xPos / Double(largeurTimeline)) * duree
-                                                        if NSEvent.modifierFlags.contains(.command),
-                                                           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-                                                            anchorTime = snapped
-                                                        } else if magneticGridSnap,
-                                                                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-                                                            anchorTime = snapped
-                                                        }
-                                                        anchorTime = min(max(anchorTime, 0), duree)
-                                                        if pasteNeedsTypeChoice(trackIndex: index) {
-                                                            pendingPasteAnchorTime = anchorTime
-                                                            pendingPasteTrackIndex = index
-                                                            showDifferentTypePasteAlert = true
-                                                        } else if pasteNeedsRangeChoice(trackIndex: index) {
-                                                            pendingPasteAnchorTime = anchorTime
-                                                            pendingPasteTrackIndex = index
-                                                            showPasteScaleRangeAlert = true
-                                                        } else if pasteClipboard(at: anchorTime, trackIndex: index, scaleToRange: false) {
-                                                            lastPasteOffset = nil
-                                                            isPasteModeActive = false
-                                                        }
+                                                        handlePasteDragEnded(value, trackIndex: index, largeurTimeline: largeurTimeline)
                                                     }
                                             )
                                         }
