@@ -16,9 +16,9 @@ struct ModifierKeysHelpView: View {
               context: "Dragging a point, the playhead, or a loop zone edge/body"),
         Entry(keys: "⌥ drag", action: "Add curvature (simple or S-shaped)",
               context: "Dragging a curve segment (curve tracks only)"),
-        Entry(keys: "⌥ hover", action: "Switch to \u201cDuplicate track\u201d",
+        Entry(keys: "⌥ hover", action: "Switch to “Duplicate track”",
               context: "Hovering the Clear-points button in a track header"),
-        Entry(keys: "⌥ click", action: "Edit the grid's offset (\u03a6) and step (T)",
+        Entry(keys: "⌥ click", action: "Edit the grid's offset (Φ) and step (T)",
               context: "Clicking the Grid button in the command bar"),
         Entry(keys: "⇧ click", action: "Remove the point",
               context: "Clicking a point"),
@@ -40,32 +40,30 @@ struct ModifierKeysHelpView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(entries) { entry in
-                        HStack(alignment: .top, spacing: 12) {
-                            Text(entry.keys)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 80, alignment: .leading)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.action)
-                                    .font(.body)
-                                Text(entry.context)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
+            VStack(spacing: 0) {
+                ForEach(entries) { entry in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(entry.keys)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 80, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.action)
+                                .font(.body)
+                            Text(entry.context)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
 
-                        if entry.id != entries.last?.id {
-                            Divider().padding(.leading, 16)
-                        }
+                    if entry.id != entries.last?.id {
+                        Divider().padding(.leading, 16)
                     }
                 }
             }
         }
-        .frame(minWidth: 380, minHeight: 320)
+        .frame(width: 380)
     }
 }

@@ -210,6 +210,86 @@ extension ContentView {
         }
     }
 
+    // Arrow keys: nudge the current selection by exactly one screen pixel,
+    // in time (left/right) and/or value (up/down, curve/step only). Same
+    // group-preserving clamp as a mouse drag: the delta itself shrinks
+    // (rather than each point clamping independently) if it would push any
+    // selected point out of range, so relative spacing is never distorted.
+    func nudgeSelection(timePixels: Int, valuePixels: Int) {
+        guard !tracksLocked, !selectedPointIDs.isEmpty else { return }
+        for i in pistes.indices {
+            let selected = pistes[i].evenements.filter { selectedPointIDs.contains($0.id) }
+            guard !selected.isEmpty else { continue }
+
+            if timePixels != 0 {
+                // Mirrors largeurTimeline's own formula (geometry.size.width - 140,
+                // where that geometry is the zoomed content width).
+                let effectiveWidth = max((timelineAreaWidth * CGFloat(zoomX)) - 140, 1)
+                let secondsPerPixel = duree / Double(effectiveWidth)
+                let rawDelta = secondsPerPixel * Double(timePixels)
+                var minAllowedDelta = -Double.infinity
+                var maxAllowedDelta = Double.infinity
+                for e in selected {
+                    minAllowedDelta = max(minAllowedDelta, 0 - e.time)
+                    maxAllowedDelta = min(maxAllowedDelta, duree - e.time)
+                }
+                let delta = min(max(rawDelta, minAllowedDelta), maxAllowedDelta)
+                for id in selectedPointIDs {
+                    guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                    pistes[i].evenements[idx].time += delta
+                }
+            }
+
+            if valuePixels != 0, pistes[i].type == .curve || pistes[i].type == .step {
+                let goingUp = valuePixels > 0
+
+                if pistes[i].type == .step && pistes[i].isGate {
+                    // Only two levels exist — jump straight to the other one.
+                    let target = goingUp ? pistes[i].maxAmplitude : pistes[i].minAmplitude
+                    for id in selectedPointIDs {
+                        guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                        pistes[i].evenements[idx].y = target
+                    }
+                } else if pistes[i].quantizeActive {
+                    // Quantization on: each keystroke jumps every selected point
+                    // to the adjacent division above/below wherever it currently
+                    // sits — not a pixel-sized nudge that quantizedY would then
+                    // just round back down to nothing.
+                    let step = pistes[i].quantizeStep
+                    for id in selectedPointIDs {
+                        guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                        let currentY = pistes[i].evenements[idx].y
+                        let currentDivision = ((currentY - pistes[i].minAmplitude) / step).rounded()
+                        let newDivision = currentDivision + (goingUp ? 1 : -1)
+                        let newY = pistes[i].minAmplitude + newDivision * step
+                        pistes[i].evenements[idx].y = min(max(newY, pistes[i].minAmplitude), pistes[i].maxAmplitude)
+                    }
+                } else {
+                    // No quantization: a plain one-pixel nudge, same
+                    // group-preserving clamp as the time axis above.
+                    let range = pistes[i].maxAmplitude - pistes[i].minAmplitude
+                    let valuePerPixel = range / Double(max(pistes[i].height, 1))
+                    let rawDelta = valuePerPixel * Double(valuePixels)
+                    var minAllowedDelta = -Double.infinity
+                    var maxAllowedDelta = Double.infinity
+                    for e in selected {
+                        minAllowedDelta = max(minAllowedDelta, pistes[i].minAmplitude - e.y)
+                        maxAllowedDelta = min(maxAllowedDelta, pistes[i].maxAmplitude - e.y)
+                    }
+                    let delta = min(max(rawDelta, minAllowedDelta), maxAllowedDelta)
+                    for id in selectedPointIDs {
+                        guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                        pistes[i].evenements[idx].y = pistes[i].evenements[idx].y + delta
+                    }
+                }
+            }
+
+            pistes[i].evenements.sort()
+            lastSentEvents.removeAll()
+            break // the lasso only ever selects points on a single track
+        }
+    }
+
     // The lasso only ever selects points on the single track it started on,
     // so removing by id across every track's evenements is safe — at most
     // one track actually has any matches.

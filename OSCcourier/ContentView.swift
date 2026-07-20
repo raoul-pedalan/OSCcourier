@@ -130,6 +130,12 @@ struct ContentView: View {
     // dragged one — Y is untouched, only time shifts.
     @State var groupDragBaseline: [UUID: Double] = [:]
     @State var groupDragAnchorOriginalTime: Double?
+    // Same idea as the time baseline above, but for Y — lets a group drag
+    // move vertically too (curve/step only), with the delta shrunk (not
+    // each point clamped independently) if it would push any selected
+    // point out of range, so relative spacing between values is preserved.
+    @State var groupDragYBaseline: [UUID: Double] = [:]
+    @State var groupDragAnchorOriginalY: Double?
     @State var keyDownMonitor: Any?
     // Copy/paste of a point selection. The clipboard remembers the source
     // track's type, since paste is only allowed onto a same-type track.
@@ -206,6 +212,10 @@ struct ContentView: View {
     @State var isPointListWindowVisible: Bool = false
     @State var pointListCloseDelegate: OSCWindowCloseDelegate?
     @State var pdfWindowController: NSWindowController?
+    // Modifier Keys quick-reference window (same open/close toggle pattern).
+    @State var modifierKeysWindowController: NSWindowController?
+    @State var isModifierKeysWindowVisible: Bool = false
+    @State var modifierKeysCloseDelegate: OSCWindowCloseDelegate?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
     @State var savedFileURL: URL?
@@ -1040,6 +1050,8 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.top, isFullScreen ? 0 : 30)
             .frame(height: isFullScreen ? 70 : 100)
+
+            Spacer().frame(height: 10)
             } else {
                 compactControlBar
             }
@@ -1652,8 +1664,17 @@ struct ContentView: View {
                                                 if pistes[index].type == .curve || pistes[index].type == .step {
                                                     VStack(spacing: 0) {
                                                         Spacer()
-                                                        DiagonalStripes(stripeWidth: 3, spacing: 3)
-                                                            .stroke(pistes[index].couleur, lineWidth: 3)
+                                                        DiagonalStripes(stripeWidth: 1.5, spacing: 1.5)
+                                                            .stroke(
+                                                                // Curve gets a fixed, more-orange-leaning yellow for
+                                                                // the stripes themselves (rather than the track's own
+                                                                // pure yellow) — background stays as-is below. Step
+                                                                // keeps the dynamic track color for its stripes.
+                                                                pistes[index].type == .curve
+                                                                    ? Color(red: 1.0, green: 0.75, blue: 0.1)
+                                                                    : pistes[index].couleur,
+                                                                lineWidth: 1.5
+                                                            )
                                                             .background(
                                                                 // Fixed background per type, independent of the track's
                                                                 // own color — both branches must be the same concrete
@@ -2167,6 +2188,36 @@ struct ContentView: View {
                                                                         guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
                                                                         pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), duree)
                                                                     }
+
+                                                                    // Y moves too, but only where it means something.
+                                                                    if pistes[index].type == .curve || pistes[index].type == .step {
+                                                                        if groupDragYBaseline.isEmpty {
+                                                                            groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                                                                                .filter { selectedPointIDs.contains($0.id) }
+                                                                                .map { ($0.id, $0.y) })
+                                                                            groupDragAnchorOriginalY = groupDragYBaseline[event.id]
+                                                                        }
+                                                                        if let anchorOriginalY = groupDragAnchorOriginalY {
+                                                                            let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
+                                                                            let rawY = pistes[index].minAmplitude + normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude)
+                                                                            let rawYDelta = rawY - anchorOriginalY
+                                                                            // Group-preserving clamp: shrink the delta itself
+                                                                            // (rather than clamping each point separately)
+                                                                            // so the whole group stays in range without
+                                                                            // distorting the spacing between their values.
+                                                                            var minAllowedDelta = -Double.infinity
+                                                                            var maxAllowedDelta = Double.infinity
+                                                                            for (_, originalY) in groupDragYBaseline {
+                                                                                minAllowedDelta = max(minAllowedDelta, pistes[index].minAmplitude - originalY)
+                                                                                maxAllowedDelta = min(maxAllowedDelta, pistes[index].maxAmplitude - originalY)
+                                                                            }
+                                                                            let clampedYDelta = min(max(rawYDelta, minAllowedDelta), maxAllowedDelta)
+                                                                            for (id, originalY) in groupDragYBaseline {
+                                                                                guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                                                                                pistes[index].evenements[idx].y = gateSnappedY(originalY + clampedYDelta, forTrackIndex: index)
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 } else if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
                                                                     pistes[index].evenements[eventIndex].time = clampedNewTime
                                                                     if pistes[index].type == .curve || pistes[index].type == .step {
@@ -2181,6 +2232,8 @@ struct ContentView: View {
                                                                 lastSentEvents.removeAll()
                                                                 groupDragBaseline.removeAll()
                                                                 groupDragAnchorOriginalTime = nil
+                                                                groupDragYBaseline.removeAll()
+                                                                groupDragAnchorOriginalY = nil
                                                             }
                                                     )
                                                     .onTapGesture(count: 1) {
@@ -2577,6 +2630,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
             openPDFWindow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowModifierKeysHelp)) { _ in
+            openModifierKeysHelpWindow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPlayPause)) { _ in
             togglePlayback()

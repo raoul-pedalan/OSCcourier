@@ -92,6 +92,12 @@ extension ContentView {
         window.title = "Help"
         window.center()
         window.contentView = pdfView
+        // Without this, closing the window releases it (the default for a
+        // programmatically-created NSWindow), leaving pdfWindowController
+        // pointing at a dead window — so the menu item would appear to do
+        // nothing at all the next time, since it thinks the window still
+        // exists and just tries to re-show it instead of rebuilding one.
+        window.isReleasedWhenClosed = false
         pdfWindowController = NSWindowController(window: window)
         pdfWindowController?.showWindow(nil)
     }

@@ -47,6 +47,20 @@ extension ContentView {
                     return nil
                 }
 
+                // Arrow keys: nudge the selection by one screen pixel.
+                // 123=Left, 124=Right, 125=Down, 126=Up.
+                if [123, 124, 125, 126].contains(event.keyCode) {
+                    guard !selectedPointIDs.isEmpty else { return event }
+                    switch event.keyCode {
+                    case 123: nudgeSelection(timePixels: -1, valuePixels: 0)
+                    case 124: nudgeSelection(timePixels: 1, valuePixels: 0)
+                    case 125: nudgeSelection(timePixels: 0, valuePixels: -1)
+                    case 126: nudgeSelection(timePixels: 0, valuePixels: 1)
+                    default: break
+                    }
+                    return nil
+                }
+
                 // ⌘C: copy the current selection.
                 if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "c" {
                     guard !selectedPointIDs.isEmpty else { return event }

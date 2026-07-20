@@ -133,4 +133,52 @@ extension ContentView {
         isOSCWindowVisible = true
     }
 
+    func openModifierKeysHelpWindow() {
+        if let controller = modifierKeysWindowController {
+            if isModifierKeysWindowVisible {
+                controller.window?.close()
+                isModifierKeysWindowVisible = false
+            } else {
+                controller.showWindow(nil)
+                isModifierKeysWindowVisible = true
+            }
+            return
+        }
+
+        let hostingView = NSHostingView(rootView: ModifierKeysHelpView())
+        // Sized from the view's own natural (un-scrolled, fixed-content)
+        // size rather than a guessed constant — with no ScrollView inside,
+        // fittingSize reports the real height needed to show every entry
+        // at once, so the window opens at the right size the first time.
+        hostingView.frame = NSRect(x: 0, y: 0, width: 380, height: 420)
+        let fittingSize = hostingView.fittingSize
+        let contentWidth = max(fittingSize.width, 380)
+        let contentHeight = max(fittingSize.height, 240)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Modifier Keys"
+        window.setFrameAutosaveName("ModifierKeysWindow")
+        window.contentView = hostingView
+        window.minSize = NSSize(width: 380, height: 240)
+        window.isReleasedWhenClosed = false
+
+        let delegate = OSCWindowCloseDelegate()
+        delegate.onClose = {
+            isModifierKeysWindowVisible = false
+        }
+        window.delegate = delegate
+        modifierKeysCloseDelegate = delegate
+
+        window.center()
+
+        modifierKeysWindowController = NSWindowController(window: window)
+        modifierKeysWindowController?.showWindow(nil)
+        isModifierKeysWindowVisible = true
+    }
+
 }

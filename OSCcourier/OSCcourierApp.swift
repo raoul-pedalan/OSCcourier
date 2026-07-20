@@ -294,6 +294,10 @@ struct OSCcourierApp: App {
                     NotificationCenter.default.post(name: .OSCcourierShowHelp, object: nil)
                 }
                 .keyboardShortcut("?", modifiers: .command)
+
+                Button("Modifier Keys") {
+                    NotificationCenter.default.post(name: .OSCcourierShowModifierKeysHelp, object: nil)
+                }
             }
         }
 
