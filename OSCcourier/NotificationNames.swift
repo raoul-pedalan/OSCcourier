@@ -1,0 +1,37 @@
+import Foundation
+
+// Used by the File menu commands (defined in the App file) to trigger
+// save/load without ContentView needing to expose its private functions.
+extension Notification.Name {
+    static let OSCcourierSave = Notification.Name("OSCcourierSave")
+    static let OSCcourierSaveAs = Notification.Name("OSCcourierSaveAs")
+    static let OSCcourierLoad = Notification.Name("OSCcourierLoad")
+    static let OSCcourierShowHelp = Notification.Name("OSCcourierShowHelp")
+    static let OSCcourierShowModifierKeysHelp = Notification.Name("OSCcourierShowModifierKeysHelp")
+    static let OSCcourierPlayPause = Notification.Name("OSCcourierPlayPause")
+    static let OSCcourierStop = Notification.Name("OSCcourierStop")
+    static let OSCcourierAddBangTrack = Notification.Name("OSCcourierAddBangTrack")
+    static let OSCcourierAddCurveTrack = Notification.Name("OSCcourierAddCurveTrack")
+    static let OSCcourierAddMessageTrack = Notification.Name("OSCcourierAddMessageTrack")
+    static let OSCcourierAddStepTrack = Notification.Name("OSCcourierAddStepTrack")
+    static let OSCcourierClearAll = Notification.Name("OSCcourierClearAll")
+    static let OSCcourierGoToTime = Notification.Name("OSCcourierGoToTime")
+    static let OSCcourierGoToMarker = Notification.Name("OSCcourierGoToMarker")
+    static let OSCcourierGoToPreviousMarker = Notification.Name("OSCcourierGoToPreviousMarker")
+    static let OSCcourierEditLoopZone = Notification.Name("OSCcourierEditLoopZone")
+    static let OSCcourierClearLoopZone = Notification.Name("OSCcourierClearLoopZone")
+    static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
+    static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
+    static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
+    static let OSCcourierShowPointList = Notification.Name("OSCcourierShowPointList")
+    static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")
+    static let OSCcourierDefineGrid = Notification.Name("OSCcourierDefineGrid")
+    static let OSCcourierOpenOSCMessagesWindow = Notification.Name("OSCcourierOpenOSCMessagesWindow")
+    static let OSCcourierMuteUnmuteAll = Notification.Name("OSCcourierMuteUnmuteAll")
+    static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
+    static let OSCcourierDeleteSelectedPoints = Notification.Name("OSCcourierDeleteSelectedPoints")
+    static let OSCcourierCopy = Notification.Name("OSCcourierCopy")
+    static let OSCcourierDuplicateSelection = Notification.Name("OSCcourierDuplicateSelection")
+    static let OSCcourierCut = Notification.Name("OSCcourierCut")
+    static let OSCcourierPaste = Notification.Name("OSCcourierPaste")
+}

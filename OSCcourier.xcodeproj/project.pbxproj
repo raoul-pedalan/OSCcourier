@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DD03733930098F06003C0B89 /* ContentView.txt in Resources */ = {isa = PBXBuildFile; fileRef = DD03733830098F06003C0B89 /* ContentView.txt */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		DD03733830098F06003C0B89 /* ContentView.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ContentView.txt; sourceTree = "<group>"; };
 		DD170BAB2FEFB44B00A1283E /* OSCcourier.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OSCcourier.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DDAE899C2FFD6A11008556D7 /* OSCcourier.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = OSCcourier.xcodeproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -49,6 +54,7 @@
 				DD170BAC2FEFB44B00A1283E /* Products */,
 				DDAE89B52FFD6BB9008556D7 /* OSCcourier */,
 				DDAE899C2FFD6A11008556D7 /* OSCcourier.xcodeproj */,
+				DD03733830098F06003C0B89 /* ContentView.txt */,
 			);
 			sourceTree = "<group>";
 		};
@@ -135,6 +141,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DD03733930098F06003C0B89 /* ContentView.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

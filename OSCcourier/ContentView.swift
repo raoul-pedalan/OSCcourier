@@ -2,694 +2,103 @@ import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
 
-//Deliverer
-// A circle with smooth rounded "teeth" around its edge, like a gear or a
-// flower — used to give the RotaryKnob a notched/knurled look.
-struct NotchedKnobShape: Shape {
-    var lobes: Int = 8
-    var lobeDepth: CGFloat = 0.22 // fraction of the base radius
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let baseRadius = min(rect.width, rect.height) / 2
-        let segments = 240
-        for i in 0...segments {
-            let theta = (CGFloat(i) / CGFloat(segments)) * 2 * .pi
-            let r = baseRadius * (1 - lobeDepth / 2 + lobeDepth / 2 * cos(CGFloat(lobes) * theta))
-            let point = CGPoint(x: center.x + r * cos(theta), y: center.y + r * sin(theta))
-            if i == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-        path.closeSubpath()
-        return path
-    }
-}
-
-struct RotaryKnob: View {
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let onDoubleTap: () -> Void
-    // Drag distance -> value change. Defaults to the value tuned for a 30s
-    // track; callers with a range that scales with something else (like
-    // zoomX, whose usable span grows with the track duration) should pass a
-    // proportionally scaled sensitivity so the knob "feels" the same
-    // regardless of how wide the range currently is.
-    var sensitivity: Double = 0.05
-    @State private var initialValue: Double?
-    @State private var initialTranslation: CGFloat?
-
-    var body: some View {
-        ZStack {
-            NotchedKnobShape()
-                .fill(Color.gray.opacity(0.2))
-                .frame(width: 30, height: 30)
-
-            NotchedKnobShape()
-                .stroke(Color.gray, lineWidth: 2)
-                .frame(width: 30, height: 30)
-        }
-        .rotationEffect(.degrees(valueToAngle(value: value)))
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                .onChanged { gesture in
-                    if initialValue == nil {
-                        initialValue = value
-                        initialTranslation = gesture.translation.height
-                    } else {
-                        let translationDiff = initialTranslation! - gesture.translation.height
-                        let newValue = initialValue! + Double(translationDiff) * sensitivity
-                        value = min(max(newValue, range.lowerBound), range.upperBound)
-                    }
-                }
-                .onEnded { _ in
-                    initialValue = nil
-                    initialTranslation = nil
-                }
-        )
-        // Simultaneous (not exclusive) so it isn't swallowed by the drag
-        // gesture above, which claims the interaction immediately since it
-        // has minimumDistance: 0 — a plain .onTapGesture would never fire.
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded {
-                onDoubleTap()
-            }
-        )
-    }
-
-    private func valueToAngle(value: Double) -> Double {
-        let normalized = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        return normalized * 270 - 135
-    }
-}
-
-struct TimelineEvent: Identifiable, Comparable, Codable, Equatable {
-    let id: UUID
-    var time: Double
-    var label: String
-    var y: Double = 0.5
-    // Curvature of the curve segment that starts at this point and ends at
-    // the next point (curve tracks only). 0 = straight line. Positive values
-    // bend it into a symmetric S-curve (like Logic Pro's automation curve
-    // tool): stays close to this point's value, then transitions rapidly
-    // around the segment's midpoint, then flattens near the next point's value.
-    // Controlled by horizontal drag on the segment.
-    var segmentCurve: Double = 0
-    // Simple power-curve bulge for this segment (no inflection point, unlike
-    // segmentCurve's S-shape) — a plain concave/convex bow in one direction
-    // only. Controlled by vertical drag on the segment.
-    var segmentBulge: Double = 0
-    // Whether the segment starting at this point (curve tracks only) is
-    // drawn/played at all. Shift-clicking a segment's line toggles this,
-    // punching a silent "hole" in the curve — both endpoints stay exactly
-    // where they are, but nothing is drawn or sent between them.
-    var segmentEnabled: Bool = true
-    // Free-form multi-line note attached to this point. Purely informational:
-    // never sent over OSC, never drawn on the timeline — it only shows up in
-    // the point's edit sheet (double-click).
-    var comment: String = ""
-
-    init(id: UUID = UUID(), time: Double, label: String, y: Double = 0.5, segmentCurve: Double = 0, segmentBulge: Double = 0, segmentEnabled: Bool = true, comment: String = "") {
-        self.id = id
-        self.time = time
-        self.label = label
-        self.y = y
-        self.segmentCurve = segmentCurve
-        self.segmentBulge = segmentBulge
-        self.segmentEnabled = segmentEnabled
-        self.comment = comment
-    }
-
-    static func < (lhs: TimelineEvent, rhs: TimelineEvent) -> Bool {
-        lhs.time < rhs.time
-    }
-
-    // Custom decoding so projects saved before these fields existed still load:
-    // any key that's absent falls back to its default rather than throwing.
-    enum CodingKeys: String, CodingKey {
-        case id, time, label, y, segmentCurve, segmentBulge, segmentEnabled, comment
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        time = try c.decode(Double.self, forKey: .time)
-        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
-        y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0.5
-        segmentCurve = try c.decodeIfPresent(Double.self, forKey: .segmentCurve) ?? 0
-        segmentBulge = try c.decodeIfPresent(Double.self, forKey: .segmentBulge) ?? 0
-        segmentEnabled = try c.decodeIfPresent(Bool.self, forKey: .segmentEnabled) ?? true
-        comment = try c.decodeIfPresent(String.self, forKey: .comment) ?? ""
-    }
-}
-
-// SwiftUI's Color isn't natively Codable, so we go through plain RGBA
-// components to save/load it.
-struct CodableColor: Codable {
-    var red: Double
-    var green: Double
-    var blue: Double
-    var opacity: Double
-
-    init(color: Color) {
-        let nsColor = NSColor(color).usingColorSpace(.deviceRGB) ?? NSColor(color)
-        red = Double(nsColor.redComponent)
-        green = Double(nsColor.greenComponent)
-        blue = Double(nsColor.blueComponent)
-        opacity = Double(nsColor.alphaComponent)
-    }
-
-    var color: Color {
-        Color(red: red, green: green, blue: blue, opacity: opacity)
-    }
-}
-
-struct TimelineTrack: Identifiable, Codable, Equatable {
-    let id: UUID
-    var nom: String
-    var couleur: Color
-    var evenements: [TimelineEvent]
-    var type: TrackType
-    var isMuted: Bool = false
-    var minAmplitude: Double = 0.0
-    var maxAmplitude: Double = 1.0
-    var height: CGFloat = 60
-    // When true, the track's header is collapsed to just its name, the
-    // fold triangle, and the reorder handle — its points/curves are hidden.
-    var isFolded: Bool = false
-    // Step tracks only: when true, the track is in "Gate" mode (boolean
-    // 0/1 values, min/max locked to 0...1, no range editing) instead of
-    // "Float" mode (arbitrary min/max range). Unused by curve tracks.
-    var isGate: Bool = false
-    // Curve/step tracks: vertical quantization step, in track value units.
-    // 0 = off (free positioning). When > 0, point values snap to multiples of
-    // this step, offset from minAmplitude — for MIDI notes, preset indices,
-    // and other discrete-valued automation. Meaningless in Gate mode, where
-    // values are already constrained to 0/1.
-    var quantizeStep: Double = 0
-    // Kept separate from quantizeStep so switching quantization off preserves
-    // the step the user had dialled in — turning it back on restores it,
-    // instead of starting from zero every time.
-    var quantizeEnabled: Bool = false
-
-    // Quantization only actually applies when it's switched on AND has a
-    // usable step. Everything (snapping, ticks) keys off this.
-    var quantizeActive: Bool {
-        quantizeEnabled && quantizeStep > 0
-    }
-
-    init(id: UUID = UUID(), nom: String, couleur: Color, evenements: [TimelineEvent], type: TrackType, isMuted: Bool = false, minAmplitude: Double = 0.0, maxAmplitude: Double = 1.0, height: CGFloat = 60, isFolded: Bool = false, isGate: Bool = false, quantizeStep: Double = 0, quantizeEnabled: Bool = false) {
-        self.id = id
-        self.nom = nom
-        self.couleur = couleur
-        self.evenements = evenements
-        self.type = type
-        self.isMuted = isMuted
-        self.minAmplitude = minAmplitude
-        self.maxAmplitude = maxAmplitude
-        self.height = height
-        self.isFolded = isFolded
-        self.isGate = isGate
-        self.quantizeStep = quantizeStep
-        self.quantizeEnabled = quantizeEnabled
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, nom, couleur, evenements, type, isMuted, minAmplitude, maxAmplitude, height, isFolded, isGate, quantizeStep, quantizeEnabled
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        nom = try container.decode(String.self, forKey: .nom)
-        couleur = try container.decode(CodableColor.self, forKey: .couleur).color
-        evenements = try container.decode([TimelineEvent].self, forKey: .evenements)
-        type = try container.decode(TrackType.self, forKey: .type)
-        isMuted = try container.decode(Bool.self, forKey: .isMuted)
-        minAmplitude = try container.decode(Double.self, forKey: .minAmplitude)
-        maxAmplitude = try container.decode(Double.self, forKey: .maxAmplitude)
-        height = CGFloat(try container.decode(Double.self, forKey: .height))
-        // Absent from older save files — default to unfolded rather than failing to decode.
-        isFolded = try container.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
-        isGate = try container.decodeIfPresent(Bool.self, forKey: .isGate) ?? false
-        quantizeStep = try container.decodeIfPresent(Double.self, forKey: .quantizeStep) ?? 0
-        // Projects saved before this flag existed used "step > 0" to mean "on".
-        quantizeEnabled = try container.decodeIfPresent(Bool.self, forKey: .quantizeEnabled) ?? (quantizeStep > 0)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(nom, forKey: .nom)
-        try container.encode(CodableColor(color: couleur), forKey: .couleur)
-        try container.encode(evenements, forKey: .evenements)
-        try container.encode(type, forKey: .type)
-        try container.encode(isMuted, forKey: .isMuted)
-        try container.encode(minAmplitude, forKey: .minAmplitude)
-        try container.encode(maxAmplitude, forKey: .maxAmplitude)
-        try container.encode(Double(height), forKey: .height)
-        try container.encode(isFolded, forKey: .isFolded)
-        try container.encode(isGate, forKey: .isGate)
-        try container.encode(quantizeStep, forKey: .quantizeStep)
-        try container.encode(quantizeEnabled, forKey: .quantizeEnabled)
-    }
-}
-
-enum TrackType: String, Codable {
-    case bang, curve, step, message, normal
-}
-
-// Top-level project file format. `_comment` is a real field (not a stripped
-// // comment — plain JSON doesn't support those) so the file stays
-// self-documenting if someone opens it in a text editor, while remaining
-// strictly valid JSON.
-struct SaveData: Codable {
-    var _comment: String = "OSCcourier project file. Contains all track/point data plus basic UI settings (duration, OSC address, zoom level)."
-    var duree: Double
-    var oscAddress: String
-    var zoomX: Double
-    var pistes: [TimelineTrack]
-}
-
-// MARK: - Direct-control horizontal scroll view (used to keep the zoom centered on screen)
-//
-// We don't use SwiftUI's ScrollViewReader/scrollTo here: it races against the
-// content-size change caused by zoomX, which makes programmatic recentering
-// unreliable. Driving an NSScrollView directly gives us a deterministic offset.
-
-// A transparent overlay that shows a custom SF-Symbol cursor over its whole
-// area when `isActive` is true, using an NSTrackingArea with .cursorUpdate —
-// the AppKit API specifically meant for dynamically customizing the cursor.
-// Unlike ad-hoc NSCursor.set() calls (which macOS silently overrides on
-// plain mouse-moved events outside of an active drag) or static cursor rects
-// (which didn't reliably activate in this deeply-nested SwiftUI hierarchy),
-// cursorUpdate(with:) is the callback AppKit itself invokes to let us decide
-// the cursor, so our .set() call inside it is respected.
-struct CursorOverlay: NSViewRepresentable {
-    var isActive: Bool
-    var symbolName: String
-
-    func makeNSView(context: Context) -> TrackingView {
-        let view = TrackingView()
-        view.symbolName = symbolName
-        view.isActive = isActive
-        return view
-    }
-
-    func updateNSView(_ nsView: TrackingView, context: Context) {
-        let activeChanged = nsView.isActive != isActive
-        let symbolChanged = nsView.symbolName != symbolName
-        nsView.symbolName = symbolName
-        nsView.isActive = isActive
-        // cursorUpdate/mouseEntered only fire on actual mouse movement (or on
-        // a tracking-area boundary crossing), so if isActive just flipped
-        // (e.g. Option pressed/released with the mouse sitting still) — or
-        // the symbol changed while already active (e.g. sliding from a live
-        // segment straight into a hole without leaving the zone) — force
-        // the cursor to update right now if the mouse happens to already be
-        // within this view.
-        guard (activeChanged || symbolChanged), let window = nsView.window, window.isKeyWindow else { return }
-        let mouseLocation = nsView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        guard nsView.bounds.contains(mouseLocation) else { return }
-        if isActive {
-            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
-
-    // Builds a cursor-sized NSImage for a system symbol name, falling back
-    // to a known-valid symbol (rather than a blank NSImage) if the name
-    // doesn't resolve — an invalid name would otherwise silently produce an
-    // invisible cursor, which is very hard to notice while testing.
-    static func symbolImage(named symbolName: String) -> NSImage {
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
-            ?? NSImage()
-        return base.withSymbolConfiguration(config) ?? base
-    }
-
-    class TrackingView: NSView {
-        var symbolName: String = ""
-        var isActive: Bool = false
-        private var trackingArea: NSTrackingArea?
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let existing = trackingArea {
-                removeTrackingArea(existing)
-            }
-            let area = NSTrackingArea(
-                rect: bounds,
-                options: [.activeAlways, .cursorUpdate, .mouseEnteredAndExited],
-                owner: self,
-                userInfo: nil
-            )
-            addTrackingArea(area)
-            trackingArea = area
-        }
-
-        override func cursorUpdate(with event: NSEvent) {
-            // When inactive, deliberately do NOTHING — don't force the
-            // arrow. This overlay sits stacked over the whole curve area,
-            // so an inactive overlay resetting to arrow on every
-            // cursorUpdate/mouseEntered was silently clobbering cursors
-            // set by other mechanisms underneath (e.g. the Shift
-            // erase/reconnect cursor applied from onContinuousHover).
-            guard isActive else { return }
-            NSCursor(image: CursorOverlay.symbolImage(named: symbolName), hotSpot: NSPoint(x: 8, y: 8)).set()
-        }
-
-        override func mouseEntered(with event: NSEvent) {
-            cursorUpdate(with: event)
-        }
-
-        override func mouseExited(with event: NSEvent) {
-            // Only reset if this overlay was the one that set a custom
-            // cursor (i.e. it's currently active) — an inactive overlay
-            // has no business resetting anything on the way out either.
-            if isActive {
-                NSCursor.arrow.set()
-            }
-        }
-    }
-}
-
-// NSScrollView subclass that intercepts Cmd+scroll (mouse wheel or two-finger
-// trackpad scroll) via a callback, instead of letting it pan the content —
-// used to zoom anchored on the cursor, mirroring the existing pinch-to-zoom
-// anchoring logic in TimelineScrollView's Coordinator.
-class CommandScrollZoomScrollView: NSScrollView {
-    var onCommandScroll: ((NSEvent) -> Void)?
-
-    override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            onCommandScroll?(event)
-        } else {
-            super.scrollWheel(with: event)
-        }
-    }
-}
-
-struct TimelineScrollView<Content: View>: NSViewRepresentable {
-    @Binding var offsetX: CGFloat
-    @Binding var zoomX: Double
-    @Binding var isPinchZooming: Bool
-    var zoomRange: ClosedRange<Double> = 1.0...10.0
-    var duree: Double
-    var contentWidth: CGFloat
-    var contentHeight: CGFloat
-    // Same per-pixel sensitivity used by the RotaryKnob (already scaled to
-    // feel consistent regardless of track duration), reused here so Cmd+scroll
-    // zooms at a comparable rate.
-    var zoomSensitivity: Double = 0.05
-    @ViewBuilder var content: () -> Content
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(offsetX: $offsetX, zoomX: $zoomX, isPinchZooming: $isPinchZooming, zoomRange: zoomRange)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = CommandScrollZoomScrollView()
-        scrollView.hasHorizontalScroller = true
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.horizontalScrollElasticity = .allowed
-        scrollView.verticalScrollElasticity = .allowed
-        scrollView.allowsMagnification = false // we drive zoomX ourselves, not NSScrollView's own magnification
-        scrollView.onCommandScroll = { [weak coordinator = context.coordinator] event in
-            coordinator?.handleCommandScroll(event, in: scrollView)
-        }
-
-        let hosting = NSHostingView(rootView: content())
-        hosting.frame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
-        scrollView.documentView = hosting
-
-        context.coordinator.hostingView = hosting
-        context.coordinator.scrollView = scrollView
-        scrollView.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.boundsChanged(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView
-        )
-
-        let magnificationRecognizer = NSMagnificationGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleMagnification(_:))
-        )
-        scrollView.addGestureRecognizer(magnificationRecognizer)
-
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.hostingView?.rootView = content()
-        context.coordinator.zoomRange = zoomRange
-        context.coordinator.duree = duree
-        context.coordinator.currentContentWidth = contentWidth
-        context.coordinator.zoomSensitivity = zoomSensitivity
-
-        let newFrame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
-        if context.coordinator.hostingView?.frame != newFrame {
-            context.coordinator.hostingView?.frame = newFrame
-        }
-
-        // Only push our own offset into the scroll view if it actually changed
-        // (i.e. it was set programmatically from outside, e.g. on zoom change).
-        // This avoids fighting with the user's own trackpad/scroll input.
-        if abs(context.coordinator.lastKnownOffset - offsetX) > 0.5 {
-            let maxX = max(0, contentWidth - scrollView.contentView.bounds.width)
-            let clampedX = max(0, min(offsetX, maxX))
-            scrollView.contentView.scroll(to: NSPoint(x: clampedX, y: 0))
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-            context.coordinator.lastKnownOffset = clampedX
-        }
-    }
-
-    class Coordinator: NSObject {
-        var offsetXBinding: Binding<CGFloat>
-        var zoomXBinding: Binding<Double>
-        var isPinchZoomingBinding: Binding<Bool>
-        var zoomRange: ClosedRange<Double>
-        var duree: Double = 30
-        var currentContentWidth: CGFloat = 0
-        var zoomSensitivity: Double = 0.05
-        weak var hostingView: NSHostingView<Content>?
-        weak var scrollView: NSScrollView?
-        var lastKnownOffset: CGFloat = 0
-        private var zoomAtGestureStart: Double = 1.0
-        // Debounces isPinchZoomingBinding back to false after Cmd+scroll
-        // activity stops, since discrete mouse-wheel events (unlike a real
-        // pinch gesture) don't carry an explicit .ended phase to rely on.
-        private var commandScrollResetWorkItem: DispatchWorkItem?
-
-        init(offsetX: Binding<CGFloat>, zoomX: Binding<Double>, isPinchZooming: Binding<Bool>, zoomRange: ClosedRange<Double>) {
-            self.offsetXBinding = offsetX
-            self.zoomXBinding = zoomX
-            self.isPinchZoomingBinding = isPinchZooming
-            self.zoomRange = zoomRange
-        }
-
-        @objc func boundsChanged(_ note: Notification) {
-            guard let clipView = note.object as? NSClipView else { return }
-            let x = clipView.bounds.origin.x
-            lastKnownOffset = x
-            DispatchQueue.main.async { [weak self] in
-                self?.offsetXBinding.wrappedValue = x
-            }
-        }
-
-        @objc func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
-            guard let scrollView = scrollView else { return }
-
-            switch recognizer.state {
-            case .began:
-                zoomAtGestureStart = zoomXBinding.wrappedValue
-                isPinchZoomingBinding.wrappedValue = true
-            case .changed:
-                let currentZoom = zoomXBinding.wrappedValue
-                let outerWidth = currentContentWidth / CGFloat(currentZoom)
-                let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
-                guard largeurAvant > 0 else { return }
-
-                // Where is the mouse right now, in viewport-local coordinates?
-                let locationX = recognizer.location(in: scrollView).x
-
-                // Which timeline instant is currently under the mouse?
-                let absoluteContentXBefore = offsetXBinding.wrappedValue + locationX
-                let anchorTime = min(max(Double((absoluteContentXBefore - 140) / largeurAvant) * duree, 0), duree)
-
-                // recognizer.magnification is cumulative since .began, e.g. 0.3 = pinched out 30%
-                let proposed = zoomAtGestureStart * (1 + recognizer.magnification)
-                let newZoom = min(max(proposed, zoomRange.lowerBound), zoomRange.upperBound)
-                zoomXBinding.wrappedValue = newZoom
-
-                // Recompute the offset so that same instant stays under the mouse
-                let largeurApres = outerWidth * CGFloat(newZoom) - 140
-                guard largeurApres > 0 else { return }
-                let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
-                let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
-                let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
-                offsetXBinding.wrappedValue = newOffsetX
-            case .ended, .cancelled, .failed:
-                isPinchZoomingBinding.wrappedValue = false
-            default:
-                break
-            }
-        }
-
-        // Cmd+scroll (mouse wheel or two-finger trackpad scroll): zooms
-        // anchored on the cursor position, same math as handleMagnification
-        // above but driven by scrollingDeltaY instead of a pinch gesture.
-        func handleCommandScroll(_ event: NSEvent, in scrollView: NSScrollView) {
-            let currentZoom = zoomXBinding.wrappedValue
-            let outerWidth = currentContentWidth / CGFloat(currentZoom)
-            let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
-            guard largeurAvant > 0 else { return }
-
-            // Where is the mouse right now, in viewport-local coordinates?
-            let locationInView = scrollView.convert(event.locationInWindow, from: nil)
-            let locationX = locationInView.x
-
-            // Which timeline instant is currently under the mouse?
-            let absoluteContentXBefore = offsetXBinding.wrappedValue + locationX
-            let anchorTime = min(max(Double((absoluteContentXBefore - 140) / largeurAvant) * duree, 0), duree)
-
-            let delta = Double(event.scrollingDeltaY)
-            let proposed = currentZoom + delta * zoomSensitivity
-            let newZoom = min(max(proposed, zoomRange.lowerBound), zoomRange.upperBound)
-            guard newZoom != currentZoom else { return }
-
-            // Suppress the SwiftUI-side playhead-anchored recentering
-            // (onChange(of: zoomX) in ContentView) for the duration of this
-            // gesture, same as during a real pinch — we're doing our own
-            // cursor-anchored recentering right here instead.
-            isPinchZoomingBinding.wrappedValue = true
-            commandScrollResetWorkItem?.cancel()
-            let resetItem = DispatchWorkItem { [weak self] in
-                self?.isPinchZoomingBinding.wrappedValue = false
-            }
-            commandScrollResetWorkItem = resetItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: resetItem)
-
-            zoomXBinding.wrappedValue = newZoom
-
-            // Recompute the offset so that same instant stays under the mouse
-            let largeurApres = outerWidth * CGFloat(newZoom) - 140
-            guard largeurApres > 0 else { return }
-            let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
-            let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
-            let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
-            offsetXBinding.wrappedValue = newOffsetX
-        }
-    }
-}
-
-// Used by the File menu commands (defined in the App file) to trigger
-// save/load without ContentView needing to expose its private functions.
-extension Notification.Name {
-    static let OSCcourierSave = Notification.Name("OSCcourierSave")
-    static let OSCcourierSaveAs = Notification.Name("OSCcourierSaveAs")
-    static let OSCcourierLoad = Notification.Name("OSCcourierLoad")
-    static let OSCcourierShowHelp = Notification.Name("OSCcourierShowHelp")
-    static let OSCcourierPlayPause = Notification.Name("OSCcourierPlayPause")
-    static let OSCcourierStop = Notification.Name("OSCcourierStop")
-    static let OSCcourierAddBangTrack = Notification.Name("OSCcourierAddBangTrack")
-    static let OSCcourierAddCurveTrack = Notification.Name("OSCcourierAddCurveTrack")
-    static let OSCcourierAddMessageTrack = Notification.Name("OSCcourierAddMessageTrack")
-    static let OSCcourierAddStepTrack = Notification.Name("OSCcourierAddStepTrack")
-    static let OSCcourierClearAll = Notification.Name("OSCcourierClearAll")
-    static let OSCcourierGoToTime = Notification.Name("OSCcourierGoToTime")
-    static let OSCcourierGoToMarker = Notification.Name("OSCcourierGoToMarker")
-    static let OSCcourierGoToPreviousMarker = Notification.Name("OSCcourierGoToPreviousMarker")
-    static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
-    static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
-    static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
-    static let OSCcourierShowPointList = Notification.Name("OSCcourierShowPointList")
-    static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")
-    static let OSCcourierDefineGrid = Notification.Name("OSCcourierDefineGrid")
-    static let OSCcourierOpenOSCMessagesWindow = Notification.Name("OSCcourierOpenOSCMessagesWindow")
-    static let OSCcourierMuteUnmuteAll = Notification.Name("OSCcourierMuteUnmuteAll")
-    static let OSCcourierDeleteAllTracks = Notification.Name("OSCcourierDeleteAllTracks")
-}
-
 struct ContentView: View {
-    @StateObject private var oscManager = OSCManager()
-    @StateObject private var messageStore = OSCMessageStore()
-    @StateObject private var pointListStore = PointListStore()
-    @State private var duree: Double = 30.0
-    @State private var dureeText: String = "00:30.00"
-    @State private var position: Double = 0.0
-    @State private var enLecture: Bool = false
-    @AppStorage("enBoucle") private var enBoucle: Bool = false
-    @State private var timer: Timer?
+    @StateObject var oscManager = OSCManager()
+    @StateObject var messageStore = OSCMessageStore()
+    @StateObject var pointListStore = PointListStore()
+    @State var duree: Double = 30.0
+    @State var dureeText: String = "00:30.00"
+    @State var position: Double = 0.0
+    @State var enLecture: Bool = false
+    @AppStorage("enBoucle") var enBoucle: Bool = false
+    // A loop zone, drawn as a yellow band in the ruler. When set, looping
+    // wraps between these two times instead of the whole timeline. nil/nil
+    // means "no zone" — Loop then loops the entire timeline as before.
+    @State var loopZoneStart: Double?
+    @State var loopZoneEnd: Double?
+    // Tracks an in-progress ruler drag so the zone previews live as the
+    // user drags, rather than only appearing once they release.
+    @State var rulerDragStartTime: Double?
+    @State var rulerDragCurrentTime: Double?
+    enum LoopZoneEdge { case start, end }
+    // Set once a drag is confirmed to have started near an existing zone's
+    // edge — from then on that same drag resizes the zone instead of
+    // drawing a new one or moving the playhead.
+    @State var resizingLoopZoneEdge: LoopZoneEdge?
+    // Hover-only (not dragging) proximity, purely for the cursor.
+    @State var isNearLoopZoneEdge: Bool = false
+    // Dragging the zone's body (not an edge) translates the whole zone.
+    // The anchor is the time under the mouse at drag start, so the zone
+    // moves by the same delta as the cursor rather than snapping its start
+    // to the cursor position.
+    @State var isDraggingLoopZoneBody: Bool = false
+    @State var loopZoneDragOriginalStart: Double?
+    @State var loopZoneDragOriginalEnd: Double?
+    @State var loopZoneDragAnchorTime: Double?
+    // Double-click on the ruler opens this to edit start/end precisely.
+    @State var showLoopZoneEditor: Bool = false
+    @State var loopZoneEditStartString: String = ""
+    @State var loopZoneEditEndString: String = ""
+    @State var timer: Timer?
     // Real wall-clock timestamp of the previous playback tick (monotonic
     // clock, in seconds). Used to advance `position` by the actual elapsed
     // time between ticks instead of an assumed fixed 0.05 — Timer doesn't
     // guarantee exact intervals, so assuming a fixed delta would let small
     // per-tick errors accumulate into real drift over a long playback session.
-    @State private var lastTickTimestamp: Double?
-    @State private var zoomX: Double = 1.0
-    @StateObject private var timelineStore = TimelineStore()
-    @Environment(\.undoManager) private var undoManager
+    @State var lastTickTimestamp: Double?
+    @State var zoomX: Double = 1.0
+    @StateObject var timelineStore = TimelineStore()
+    @Environment(\.undoManager) var undoManager
 
-    private var pistes: [TimelineTrack] {
+    var pistes: [TimelineTrack] {
         get { timelineStore.pistes }
         nonmutating set { timelineStore.setPistes(newValue) }
     }
-    @State private var lastSentEvents: Set<String> = []
-    @State private var indexPisteARenommer: Int?
-    @State private var nouveauNomPiste = ""
-    @State private var pointAEditer: (trackIndex: Int, eventId: UUID)?
-    @State private var nouvellePositionString = ""
-    @State private var nouveauLabel = "M"
-    @State private var nouveauComment = ""
-    @State private var nouvelleYString = "0.5"
-    @State private var amplitudeEditorTrackIndex: Int?
+    @State var lastSentEvents: Set<String> = []
+    @State var indexPisteARenommer: Int?
+    @State var nouveauNomPiste = ""
+    @State var pointAEditer: (trackIndex: Int, eventId: UUID)?
+    @State var nouvellePositionString = ""
+    @State var nouveauLabel = "M"
+    @State var nouveauComment = ""
+    @State var nouvelleYString = "0.5"
+    @State var amplitudeEditorTrackIndex: Int?
     // Autofill Rectangle popup (step tracks): generates a rectangular/pulse
     // pattern of step events across the track.
-    @State private var autofillTrackIndex: Int?
-    @State private var autofillPeriodString: String = "1.0"
-    @State private var autofillPhaseString: String = "0.0"
-    @State private var autofillPulseWidthString: String = "0.5"
-    @State private var autofillAmpMinString: String = "0.0"
-    @State private var autofillAmpMaxString: String = "1.0"
+    @State var autofillTrackIndex: Int?
+    @State var autofillPeriodString: String = "1.0"
+    @State var autofillPhaseString: String = "0.0"
+    @State var autofillPulseWidthString: String = "0.5"
+    @State var autofillAmpMinString: String = "0.0"
+    @State var autofillAmpMaxString: String = "1.0"
 
     // Autofill Wave popup (curve tracks): generates a sine or (skewed) sawtooth wave.
-    @State private var waveTrackIndex: Int?
-    @State private var waveIsSine: Bool = true // true = Sin, false = Saw
-    @State private var wavePeriodString: String = "1.0"
-    @State private var wavePhaseString: String = "0.0"
-    @State private var waveSkewString: String = "0.5"
-    @State private var waveAmpMinString: String = "0.0"
-    @State private var waveAmpMaxString: String = "1.0"
+    @State var waveTrackIndex: Int?
+    @State var waveIsSine: Bool = true // true = Sin, false = Saw
+    @State var wavePeriodString: String = "1.0"
+    @State var wavePhaseString: String = "0.0"
+    @State var waveSkewString: String = "0.5"
+    @State var waveAmpMinString: String = "0.0"
+    @State var waveAmpMaxString: String = "1.0"
 
     // Autofill Bang popup (bang/markers tracks): generates evenly spaced bangs.
-    @State private var bangTrackIndex: Int?
-    @State private var bangPeriodString: String = "1.0"
-    @State private var bangPhaseString: String = "0.0"
+    @State var bangTrackIndex: Int?
+    @State var bangPeriodString: String = "1.0"
+    @State var bangPhaseString: String = "0.0"
     // Message tracks only: prefix used for generated labels ("prefix_1",
     // "prefix_2", ...), replacing the previously hardcoded "key".
-    @State private var bangLabelPrefixString: String = "key"
+    @State var bangLabelPrefixString: String = "key"
     // Set when the pencil button is pressed on a track that already has
     // points, to show an "Overwrite track?" confirmation before opening
     // the actual autofill popup.
-    @State private var pendingAutofillIndex: Int?
-    @State private var showClearAllConfirmation = false
-    @State private var showDeleteAllTracksConfirmation = false
+    @State var pendingAutofillIndex: Int?
+    @State var showClearAllConfirmation = false
+    @State var showDeleteAllTracksConfirmation = false
     // Modifier-aware cursor over points: shift = delete cursor, cmd = snap cursor.
     // Tracks whether the mouse is currently over any point, and listens for
     // modifier key changes while hovering (since .onHover alone only fires on
     // enter/exit, not when a modifier key is pressed mid-hover).
-    @State private var isHoveringPoint: Bool = false
+    @State var isHoveringPoint: Bool = false
     // Option-drag on a curve segment (Logic Pro automation-curve style).
     // Whether the cursor is currently within the erase/bend zone (12px) of
     // this hovered curve track's line. Boolean on purpose: it only changes
@@ -698,117 +107,186 @@ struct ContentView: View {
     // a full body re-render per pixel — constantly rebuilding the hover
     // stream and tracking areas, which is what silently broke both the
     // Option and Shift hover cursors.
-    @State private var isNearCurveControlZone: Bool = false
-    @State private var isOptionHeldForCursor: Bool = false
-    @State private var curveDragSegmentID: UUID?
-    @State private var curveDragBaseline: Double?
-    @State private var curveDragBulgeBaseline: Double?
-    @State private var isNearSnapZone: Bool = false
+    @State var isNearCurveControlZone: Bool = false
+    @State var isOptionHeldForCursor: Bool = false
+    // Mirrors isOptionHeldForCursor for Shift, live-updated by the same
+    // flagsChanged monitor — needed so Shift+Option (the lasso trigger) can
+    // be told apart from plain Shift (erase-point cursor / toggle segment)
+    // in view-level (non-gesture-closure) contexts.
+    @State var isShiftHeldForCursor: Bool = false
+    // Points currently selected via the lasso, rendered white. Cleared by
+    // any ordinary click/drag elsewhere (creating a point, dragging or
+    // tapping an existing point).
+    @State var selectedPointIDs: Set<UUID> = []
+    // Lasso in progress: which track it started on (only that track's
+    // points are eligible — a lasso never spans multiple tracks), and its
+    // start/current location in that track's own local coordinate space.
+    @State var lassoTrackIndex: Int?
+    @State var lassoStartLocation: CGPoint?
+    @State var lassoCurrentLocation: CGPoint?
+    // Group-drag of a selection: original time of every selected point,
+    // captured on the first tick of a drag that starts on an already-
+    // selected point. Every point then moves by the same X delta as the
+    // dragged one — Y is untouched, only time shifts.
+    @State var groupDragBaseline: [UUID: Double] = [:]
+    @State var groupDragAnchorOriginalTime: Double?
+    // Same idea as the time baseline above, but for Y — lets a group drag
+    // move vertically too (curve/step only), with the delta shrunk (not
+    // each point clamped independently) if it would push any selected
+    // point out of range, so relative spacing between values is preserved.
+    @State var groupDragYBaseline: [UUID: Double] = [:]
+    @State var groupDragAnchorOriginalY: Double?
+    @State var keyDownMonitor: Any?
+    // Copy/paste of a point selection. The clipboard remembers the source
+    // track's type, since paste is only allowed onto a same-type track.
+    @State var pointClipboard: [PointClipboardEntry] = []
+    @State var pointClipboardTrackType: TrackType?
+    @State var isPasteModeActive: Bool = false
+    @State var showDifferentTypePasteAlert: Bool = false
+    @State var showPlayheadPositionChoice: Bool = false
+    // The source track's amplitude range, remembered alongside the clipboard
+    // so paste can detect a mismatch with the destination track and offer to
+    // rescale (curve/step tracks only — the only types where Y is meaningful).
+    @State var pointClipboardSourceMinAmplitude: Double?
+    @State var pointClipboardSourceMaxAmplitude: Double?
+    // The earliest original time among the copied points (before they were
+    // ever pasted anywhere) — combined with where the most recent paste
+    // landed, this gives ⌘D the offset to repeat.
+    @State var pointClipboardOriginalEarliestTime: Double?
+    @State var lastPasteAnchorTime: Double?
+    @State var lastPasteTrackIndex: Int?
+    // Fixed the first time ⌘D is pressed (derived from the manual paste
+    // that preceded it), then reused as-is for every subsequent press —
+    // recomputing it from lastPasteAnchorTime each time would compound
+    // into a geometric progression (2, 4, 8, 16...) instead of a constant
+    // step (2, 4, 6, 8...), since the anchor keeps advancing.
+    @State var lastPasteOffset: Double?
+    @State var pendingPasteAnchorTime: Double?
+    @State var pendingPasteTrackIndex: Int?
+    @State var showPasteScaleRangeAlert: Bool = false
+    @State var curveDragSegmentID: UUID?
+    @State var curveDragBaseline: Double?
+    @State var curveDragBulgeBaseline: Double?
+    @State var isNearSnapZone: Bool = false
     // Tracks proximity to a grid line specifically (not markers) — used to
     // show the snap cursor for "magnetic grid" auto-snap even without ⌘ held.
-    @State private var isNearGridSnapZone: Bool = false
+    @State var isNearGridSnapZone: Bool = false
     // Whether the closest ⌘-snap target (marker or grid line combined) is
     // specifically the grid line — used only to color the snap cursor.
-    @State private var isNearestSnapGrid: Bool = false
-    @State private var flagsChangedMonitor: Any?
+    @State var isNearestSnapGrid: Bool = false
+    @State var flagsChangedMonitor: Any?
     // Tracks whether the window is currently full screen, so the top
     // padding reserved to clear the title bar can be dropped once that
     // title bar itself is hidden (full screen has no title bar to avoid).
-    @State private var isFullScreen: Bool = false
-    @State private var fullScreenEnterObserver: Any?
-    @State private var fullScreenExitObserver: Any?
-    @State private var tempMinAmplitude: String = "0"
-    @State private var tempMaxAmplitude: String = "1"
-    @State private var tempIsGate: Bool = false
-    @State private var tempQuantizeStep: String = "0"
-    @State private var tempQuantizeEnabled: Bool = false
-    @Environment(\.colorScheme) private var colorScheme
+    @State var isFullScreen: Bool = false
+    @State var fullScreenEnterObserver: Any?
+    @State var fullScreenExitObserver: Any?
+    @State var tempMinAmplitude: String = "0"
+    @State var tempMaxAmplitude: String = "1"
+    @State var tempIsGate: Bool = false
+    @State var tempQuantizeStep: String = "0"
+    @State var tempQuantizeEnabled: Bool = false
+    @Environment(\.colorScheme) var colorScheme
 
     // Track background tint. The same 0.3 that looks right on a light
     // background reads as too saturated against a dark one, so it's pulled
     // back in dark mode.
-    private var trackBackgroundOpacity: Double {
+    var trackBackgroundOpacity: Double {
         colorScheme == .dark ? 0.18 : 0.3
     }
     // Point currently being placed by a press-drag-release on empty track
     // space: created on mouse-down, dragged while held, committed on release.
-    @State private var creatingPointId: UUID?
-    @State private var creatingPointTrackIndex: Int?
+    @State var creatingPointId: UUID?
+    @State var creatingPointTrackIndex: Int?
     // Set when the user commits a quantize step that had to be clamped, so we
     // can tell them rather than silently changing what they typed.
-    @State private var invalidQuantizeStepMessage: String? = nil
-    @State private var pendingGateSwitchIndex: Int? = nil
-    @State private var messagesWindowController: NSWindowController?
+    @State var invalidQuantizeStepMessage: String? = nil
+    @State var pendingGateSwitchIndex: Int? = nil
+    @State var messagesWindowController: NSWindowController?
     // Explicit visibility tracking for the OSC messages window's Open/Close
     // toggle — more reliable than reading NSWindow.isVisible directly.
-    @State private var isOSCWindowVisible: Bool = false
-    @State private var oscWindowCloseDelegate: OSCWindowCloseDelegate?
+    @State var isOSCWindowVisible: Bool = false
+    @State var oscWindowCloseDelegate: OSCWindowCloseDelegate?
     // Points list window (same open/close toggle pattern as the OSC one).
-    @State private var pointListWindowController: NSWindowController?
-    @State private var isPointListWindowVisible: Bool = false
-    @State private var pointListCloseDelegate: OSCWindowCloseDelegate?
-    @State private var pdfWindowController: NSWindowController?
+    @State var pointListWindowController: NSWindowController?
+    @State var isPointListWindowVisible: Bool = false
+    @State var pointListCloseDelegate: OSCWindowCloseDelegate?
+    @State var pdfWindowController: NSWindowController?
+    // Modifier Keys quick-reference window (same open/close toggle pattern).
+    @State var modifierKeysWindowController: NSWindowController?
+    @State var isModifierKeysWindowVisible: Bool = false
+    @State var modifierKeysCloseDelegate: OSCWindowCloseDelegate?
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
-    @State private var savedFileURL: URL?
+    @State var savedFileURL: URL?
     // Managing focus explicitly (defaulting to nil) stops macOS from
     // automatically giving keyboard focus to the first text field at launch.
-    private enum ToolbarField: Hashable {
+    enum ToolbarField: Hashable {
         case duree, oscAddress
     }
-    @FocusState private var focusedField: ToolbarField?
-    @State private var draggedTrackIndex: Int?
-    @State private var dragStartHeight: CGFloat = 0
+    @FocusState var focusedField: ToolbarField?
+    enum PlayheadPositionField: Hashable {
+        case time, marker
+    }
+    @FocusState var playheadPositionFocusedField: PlayheadPositionField?
+    @State var playheadMarkerNotFound: Bool = false
+    // The time field always has a pre-filled default (the current
+    // position), so "has content" alone can't signal that the user
+    // actually means to use it — captured on open, compared against the
+    // live value to tell "still the default" from "the user typed here".
+    @State var goToTimeInitialValue: String = ""
+    @State var draggedTrackIndex: Int?
+    // Which track's Clear/Duplicate button the cursor is currently over —
+    // ⌥ only swaps that specific button to "duplicate", not every track's
+    // button at once just because ⌥ happens to be held somewhere.
+    @State var duplicateHoverTrackIndex: Int?
+    @State var dragStartHeight: CGFloat = 0
     // Duration trim handle, pinned to the right edge of the window: drag
     // horizontally to grow/shrink the track's total duration.
-    @State private var isDraggingDurationHandle: Bool = false
+    @State var isDraggingDurationHandle: Bool = false
     // Velocity-based drag: the horizontal offset from where the drag
     // started controls the *rate* of change (seconds of duree per second
     // held), rather than directly mapping to a duree delta. A repeating
     // timer applies that rate continuously while the drag is held.
-    @State private var durationDragCurrentDeltaX: CGFloat = 0
-    @State private var durationDragTimer: Timer?
+    @State var durationDragCurrentDeltaX: CGFloat = 0
+    @State var durationDragTimer: Timer?
     // Brief flash indicator for the compact command bar's "OSC" label,
     // lit up for a short moment each time an OSC message actually goes out.
-    @State private var isOSCFlashing: Bool = false
-    @State private var oscFlashTimer: Timer?
+    @State var isOSCFlashing: Bool = false
+    @State var oscFlashTimer: Timer?
     // How fast duree changes per second, per pixel of horizontal offset
     // from the drag's start point.
     // Non-linear speed curve: rate = sign(dx) * |dx|^exponent * scale.
     // exponent > 1 makes small offsets noticeably slower (more precise) and
     // large offsets noticeably faster than a plain linear mapping would.
-    private let durationDragVelocityExponent: Double = 1.8
-    private let durationDragVelocityScale: Double = 0.00126
+    let durationDragVelocityExponent: Double = 1.8
+    let durationDragVelocityScale: Double = 0.00126
     // Track reordering (drag handle in the header). "markers" (index 0) stays pinned.
-    @State private var reorderingIndex: Int?
-    @State private var reorderDragTranslation: CGFloat = 0
+    @State var reorderingIndex: Int?
+    @State var reorderDragTranslation: CGFloat = 0
     // Accumulates by ± the swapped neighbor's height each time a swap happens during
     // the same drag, so the raw (cumulative-since-start) gesture translation can be
     // corrected into the right visual offset without ever being overwritten wrong.
-    @State private var reorderBaselineOffset: CGFloat = 0
+    @State var reorderBaselineOffset: CGFloat = 0
 
     // Vertical margin (= circle radius) reserved at the top/bottom of a curve
     // track so that points at the extreme values (0 or 1) aren't half-clipped.
     // Shared by the ruler labels, the path, and the point positions so they
     // all stay consistent with each other.
-    private let curveMargin: CGFloat = 6
+    let curveMargin: CGFloat = 6
 
     // Height a folded track's row is reduced to: just enough for the name,
     // fold triangle, and reorder handle.
-    private let foldedTrackHeight: CGFloat = 24
+    let foldedTrackHeight: CGFloat = 24
 
     // Width of the duration trim handle strip pinned to the window's right
     // edge. Shared so the timeline drawing width can reserve exactly this
     // much, keeping the end of the tracks aligned with the handle's bar.
-    private let durationHandleWidth: CGFloat = 18
+    let durationHandleWidth: CGFloat = 18
 
     // The actual row height to use for a given track: folded tracks always
     // collapse to foldedTrackHeight, regardless of type; otherwise bang/message
     // tracks are a fixed 45, and curve/step tracks use their own `height`.
-    private func rowHeight(for piste: TimelineTrack) -> CGFloat {
-        if piste.isFolded { return foldedTrackHeight }
-        return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
-    }
 
     // Applies whatever vertical constraint the track has to a raw y value.
     // Called from every point-creating/point-moving path (click, drag, editor),
@@ -816,60 +294,19 @@ struct ContentView: View {
     //
     // Gate takes priority: it's already a strict 0/1 quantization, so a step
     // value on top of it would be meaningless (and is hidden in the UI).
-    private func gateSnappedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
-
-        if piste.type == .step && piste.isGate {
-            let midpoint = (piste.minAmplitude + piste.maxAmplitude) / 2
-            return y >= midpoint ? piste.maxAmplitude : piste.minAmplitude
-        }
-
-        guard piste.type == .curve || piste.type == .step else { return y }
-        return quantizedY(y, forTrackIndex: index)
-    }
 
     // Snaps y to the nearest multiple of the track's quantizeStep, measured
     // from minAmplitude (so the range's own bounds are always reachable), then
     // clamps back into range — rounding could otherwise land just outside it.
-    private func quantizedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        guard piste.quantizeActive else { return y }
-        let offset = y - piste.minAmplitude
-        let snapped = piste.minAmplitude + (offset / step).rounded() * step
-        return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
-    }
 
     // The y values every quantization tick sits on, for a track. Empty when
     // quantization is off. Capped so an absurdly small step can't generate
     // thousands of ticks (the UI thins them out further; this is the hard
     // safety limit on the underlying set).
-    private func quantizeTickValues(forTrackIndex index: Int) -> [Double] {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        let range = piste.maxAmplitude - piste.minAmplitude
-        guard piste.quantizeActive, range > 0 else { return [] }
-        let count = Int((range / step).rounded(.down))
-        guard count >= 1, count <= 500 else { return [] }
-        return (0...count).map { piste.minAmplitude + Double($0) * step }
-    }
 
     // Which of those ticks to actually draw at the track's current height:
     // keeps every Nth one (N from a "nice" progression) so they never get
     // closer than a legible minimum, exactly like the horizontal grid does.
-    private func visibleQuantizeTicks(forTrackIndex index: Int) -> [Double] {
-        let all = quantizeTickValues(forTrackIndex: index)
-        guard all.count > 1 else { return all }
-        let usableHeight = pistes[index].height - 2 * curveMargin
-        guard usableHeight > 0 else { return [] }
-        let spacing = usableHeight / CGFloat(all.count - 1)
-        let minSpacing: CGFloat = 7
-        guard spacing < minSpacing else { return all }
-        let rawSkip = Double(minSpacing / spacing)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500]
-        let skip = Int(niceSteps.first(where: { $0 >= rawSkip }) ?? 500)
-        return all.enumerated().compactMap { i, v in i % skip == 0 ? v : nil }
-    }
 
     // A lightweight, non-interactive "ghost" preview of a folded track's
     // content — no point markers, no coordinate labels, no gestures, just a
@@ -877,104 +314,45 @@ struct ContentView: View {
     // collapsed. Curve/step segments are drawn as straight lines here
     // (ignoring segmentCurve/segmentBulge) since the folded row is too thin
     // for the curvature to read anyway.
-    @ViewBuilder
-    private func foldedGhostTrace(for piste: TimelineTrack, largeurTimeline: CGFloat) -> some View {
-        let h = foldedTrackHeight
-        let margin: CGFloat = 3
-        switch piste.type {
-        case .bang, .message:
-            ForEach(piste.evenements) { event in
-                let xPos = CGFloat(event.time / duree) * largeurTimeline
-                Rectangle()
-                    .fill(piste.couleur.opacity(0.7))
-                    .frame(width: 1, height: h * 0.6)
-                    .position(x: xPos, y: h / 2)
-            }
-            .allowsHitTesting(false)
-        case .curve:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for value: Double) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
-                        let point = CGPoint(x: xPos, y: yPos(for: event.y))
-                        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1)
-                .allowsHitTesting(false)
-            }
-        case .step:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for event: TimelineEvent) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (event.y - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
-                        let y = yPos(for: event)
-                        if i == 0 {
-                            path.move(to: CGPoint(x: xPos, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
-                            path.addLine(to: CGPoint(x: xPos, y: y))
-                        }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1.5)
-                .allowsHitTesting(false)
-            }
-        case .normal:
-            EmptyView()
-        }
-    }
 
     // MARK: - Zoom-centering state
-    @State private var scrollOffsetX: CGFloat = 0
+    @State var scrollOffsetX: CGFloat = 0
     // True while a pinch gesture is in progress: TimelineScrollView's Coordinator
     // handles its own mouse-anchored centering during a pinch, so the viewport-center
     // recentering below (used for the RotaryKnob) should stand down while this is true.
-    @State private var isPinchZooming: Bool = false
+    @State var isPinchZooming: Bool = false
     // Toggle for showing/hiding the "time, value" coordinate labels next to points.
-    @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
+    @AppStorage("showPointCoordinates") var showPointCoordinates: Bool = true
     // Toggle for showing/hiding the timeline grid overlay.
-    @AppStorage("showGrid") private var showGrid: Bool = false
-    @AppStorage("oscMessagesPerSecond") private var oscMessagesPerSecond: Int = 20
+    @AppStorage("showGrid") var showGrid: Bool = false
+    @AppStorage("oscMessagesPerSecond") var oscMessagesPerSecond: Int = 20
     // Toggles between the full command bar (toolbar with all controls) and
     // a compact, full-width control line (position + play/loop indicators).
-    @AppStorage("showCommandBar") private var showCommandBar: Bool = true
+    @AppStorage("showCommandBar") var showCommandBar: Bool = true
     // Shared with OSCcourierApp's menu commands via the same @AppStorage keys.
-    @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
+    @AppStorage("showMarkersTrack") var showMarkersTrack: Bool = true
+    @AppStorage("tracksLocked") var tracksLocked: Bool = false
     // "Go to (mm:ss)" dialog, triggered from the Play menu.
-    @State private var showGoToTimeDialog: Bool = false
-    @State private var goToTimeString: String = "00:00"
-    @State private var showGoToMarkerNameDialog: Bool = false
-    @State private var goToMarkerNameString: String = ""
-    @State private var showGoToMarkerNoMatch: Bool = false
+    @State var showGoToTimeDialog: Bool = false
+    @State var goToTimeString: String = "00:00"
+    @State var showGoToMarkerNameDialog: Bool = false
+    @State var goToMarkerNameString: String = ""
+    @State var showGoToMarkerNoMatch: Bool = false
     // Grid line generation: evenly spaced dashed vertical lines across all
     // tracks, same period/phase model as the bang autofill.
-    @State private var showGridSettingsPopup: Bool = false
-    @State private var gridPeriodString: String = "1.0"
-    @State private var gridPhaseString: String = "0.0"
-    @State private var gridPeriod: Double = 1.0
-    @State private var gridPhase: Double = 0.0
+    @State var showGridSettingsPopup: Bool = false
+    @State var gridPeriodString: String = "1.0"
+    @State var gridPhaseString: String = "0.0"
+    @State var gridPeriod: Double = 1.0
+    @State var gridPhase: Double = 0.0
     // Width of the timeline viewport (updated from the outer GeometryReader), used to
     // compute how much zoom is needed to reach the 1s = 1000px target regardless of `duree`.
-    @State private var timelineAreaWidth: CGFloat = 1500
+    @State var timelineAreaWidth: CGFloat = 1500
 
     // Maximum zoom factor such that at max zoom, 1 second of timeline = 1000px,
     // no matter how long the track (`duree`) is. Without this, a fixed max zoom
     // (e.g. 10x) isn't enough to reach that resolution once `duree` gets large.
-    private var maxZoomX: Double {
+    var maxZoomX: Double {
         let outerWidth = max(timelineAreaWidth, 1)
         let desiredLargeur = 1000.0 * duree // pixels needed so that 1s = 1000px
         let zoom = (desiredLargeur + 140) / outerWidth
@@ -984,7 +362,7 @@ struct ContentView: View {
     // maxZoomX computed as if duree were pinned at 30s (same outerWidth) —
     // used purely as a reference span for calibrating the zoom knob's
     // sensitivity below, not for the actual zoom range.
-    private var referenceMaxZoomX: Double {
+    var referenceMaxZoomX: Double {
         let outerWidth = max(timelineAreaWidth, 1)
         let desiredLargeur = 1000.0 * 30.0
         return max(1.0, (desiredLargeur + 140) / outerWidth)
@@ -996,7 +374,7 @@ struct ContentView: View {
     // longer tracks to reach the same zoom level. Scaling sensitivity by the
     // ratio of the current range's span to the 30s-reference span keeps the
     // same drag distance always covering the same *fraction* of the range.
-    private var zoomKnobSensitivity: Double {
+    var zoomKnobSensitivity: Double {
         let referenceSpan = max(referenceMaxZoomX - 1.0, 0.0001)
         let currentSpan = max(maxZoomX - 1.0, 0.0001)
         return 0.05 * (currentSpan / referenceSpan)
@@ -1004,7 +382,7 @@ struct ContentView: View {
 
     // Tracks actually shown in the timeline — all of them, unless the
     // "/markers" track (always index 0) is hidden via showMarkersTrack.
-    private var visiblePistes: [TimelineTrack] {
+    var visiblePistes: [TimelineTrack] {
         showMarkersTrack ? pistes : Array(pistes.dropFirst())
     }
 
@@ -1012,7 +390,7 @@ struct ContentView: View {
     // inside the inner GeometryReader), plus the top padding reserved for the playhead
     // triangle. Used as the document's actual height so vertical scrolling can reveal
     // tracks that would otherwise be clipped below the visible viewport.
-    private var totalTracksHeight: CGFloat {
+    var totalTracksHeight: CGFloat {
         24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5) + 14
     }
 
@@ -1020,7 +398,7 @@ struct ContentView: View {
     // track never reuses a number already taken by a track of the other color.
     // Based on the highest existing /track_N suffix rather than a raw count,
     // so it stays correct even after tracks have been deleted or reordered.
-    private var nextTrackName: String {
+    var nextTrackName: String {
         let existingNumbers = pistes.compactMap { piste -> Int? in
             guard piste.nom.hasPrefix("/track_") else { return nil }
             return Int(piste.nom.dropFirst("/track_".count))
@@ -1034,482 +412,64 @@ struct ContentView: View {
     // "mm:ss.cc" — centiseconds included because the duration trim handle
     // adjusts by 0.01s steps: rounding the display to whole seconds made the
     // field look frozen while trimming, and misreported the actual duration.
-    private func formattedDuration(_ seconds: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        return String(format: "%02d:%02d.%02d", minutes, secs, centis)
-    }
 
     // Parses a duration back into seconds. Deliberately permissive, so typing
     // a duration stays simple even though the display is precise: "30",
     // "30.5", "00:30" and "00:30.47" are all accepted.
-    private func parseDuration(_ text: String) -> Double? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let parts = trimmed.split(separator: ":")
-        if parts.count == 2, let minutes = Double(parts[0]), let seconds = Double(parts[1]) {
-            return minutes * 60 + seconds
-        } else if parts.count == 1, let seconds = Double(parts[0]) {
-            return seconds
-        }
-        return nil
-    }
 
     // Formats a ruler tick label. Ticks spaced 1s apart or more show plain
     // "mm:ss"; ticks spaced under 1s apart (zoomed in a lot) additionally
     // show centiseconds ("mm:ss.cc"), since otherwise consecutive sub-second
     // ticks would render identically.
-    private func formattedTick(_ seconds: Double, labelInterval: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        if labelInterval < 1 {
-            return String(format: "%02d:%02d.%02d", minutes, secs, centis)
-        } else {
-            return String(format: "%02d:%02d", minutes, secs)
-        }
-    }
 
     // Formats a duration in seconds as "mm:ss:cc" (minutes:seconds:centiseconds).
-    private func formattedPosition(_ seconds: Double) -> String {
-        let totalCentiseconds = Int((seconds * 100).rounded())
-        let minutes = totalCentiseconds / 6000
-        let secs = (totalCentiseconds / 100) % 60
-        let centis = totalCentiseconds % 100
-        return String(format: "%02d:%02d:%02d", minutes, secs, centis)
-    }
 
-    private func encodedProjectData() -> Data? {
-        let data = SaveData(duree: duree, oscAddress: oscManager.address, zoomX: zoomX, pistes: pistes)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try? encoder.encode(data)
-    }
 
-    private func saveProject() {
-        guard let jsonData = encodedProjectData() else { return }
-
-        if let url = savedFileURL {
-            try? jsonData.write(to: url)
-        } else {
-            promptAndSave(jsonData)
-        }
-    }
 
     // Always prompts for a new location, regardless of any previously saved file.
-    private func saveProjectAs() {
-        guard let jsonData = encodedProjectData() else { return }
-        promptAndSave(jsonData)
-    }
 
-    private func promptAndSave(_ jsonData: Data) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "OSCcourier.json"
-        panel.canCreateDirectories = true
-        if panel.runModal() == .OK, let url = panel.url {
-            savedFileURL = url
-            try? jsonData.write(to: url)
-        }
-    }
 
-    private func loadProject() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let jsonData = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
 
-        enLecture = false
-        position = 0
-        lastSentEvents.removeAll()
-        duree = decoded.duree
-        dureeText = formattedDuration(decoded.duree)
-        zoomX = decoded.zoomX
-        oscManager.address = decoded.oscAddress
-        oscManager.setupOSCConnection()
-        pistes = decoded.pistes
-        savedFileURL = url // further saves overwrite the file we just loaded
-    }
-
-    private func openPDFWindow() {
-        if pdfWindowController != nil {
-            pdfWindowController?.showWindow(nil)
-            return
-        }
-        guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
-        let document = PDFDocument(url: pdfURL)
-        let pdfView = PDFView()
-        pdfView.document = document
-        pdfView.autoScales = false
-        pdfView.scaleFactor = 1.5
-
-        // Size the window to fit the PDF's actual page at that same scale,
-        // instead of a fixed guess, so nothing gets cut off horizontally.
-        var contentWidth: CGFloat = 600
-        var contentHeight: CGFloat = 800
-        if let page = document?.page(at: 0) {
-            let pageBounds = page.bounds(for: .mediaBox)
-            contentWidth = pageBounds.width * pdfView.scaleFactor
-            contentHeight = pageBounds.height * pdfView.scaleFactor
-        }
-        if let screenFrame = NSScreen.main?.visibleFrame {
-            contentWidth = min(contentWidth, screenFrame.width * 0.9)
-            contentHeight = min(contentHeight, screenFrame.height * 0.9)
-        }
-
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight),
-                             styleMask: [.titled, .closable, .resizable],
-                             backing: .buffered,
-                             defer: false)
-        window.title = "Help"
-        window.center()
-        window.contentView = pdfView
-        pdfWindowController = NSWindowController(window: window)
-        pdfWindowController?.showWindow(nil)
-    }
 
     // Shared with SettingsView via the same @AppStorage key.
-    @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
-    @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
+    @AppStorage("oscAddressPrefix") var oscAddressPrefix: String = ""
+    @AppStorage("oscReceivePort") var oscReceivePort: Int = 7500
     // Grid snap mode: false = grid lines only snap like markers do, via
     // ⌘+drag; true = "magnetic grid", points snap to the nearest grid line
     // automatically while dragging, no ⌘ needed. Markers themselves always
     // require ⌘ either way — this setting only affects grid-line snapping.
-    @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
+    @AppStorage("magneticGridSnap") var magneticGridSnap: Bool = false
 
-    private func sendOSCMessage(_ message: String, color: Color = .primary) {
-        let fullMessage = oscAddressPrefix + message
-        oscManager.sendMessage(fullMessage)
-        messageStore.addMessage(fullMessage, color: color)
-        flashOSCIndicator()
-    }
 
-    private func flashOSCIndicator() {
-        isOSCFlashing = true
-        oscFlashTimer?.invalidate()
-        let t = Timer(timeInterval: 0.15, repeats: false) { _ in
-            DispatchQueue.main.async {
-                isOSCFlashing = false
-            }
-        }
-        // .common so the flash still resets promptly even if the user is
-        // mid-drag on something else when messages are sent.
-        RunLoop.main.add(t, forMode: .common)
-        oscFlashTimer = t
-    }
 
     // Rebuilds the points list snapshot into the shared store. Called whenever
     // the tracks change, so the (observing) list window stays live.
-    private func refreshPointList() {
-        var rows: [PointListRow] = []
-        for (trackIndex, piste) in pistes.enumerated() {
-            // Only markers and message tracks carry a meaningful label. Bang
-            // and curve/step points don't — any label they hold is leftover
-            // default state, so showing it (e.g. a stray "M") is just noise.
-            let hasLabel = trackIndex == 0 || piste.type == .message
-            let hasY = piste.type == .curve || piste.type == .step
-            for event in piste.evenements {
-                rows.append(PointListRow(
-                    id: event.id,
-                    trackName: piste.nom,
-                    trackColor: piste.couleur,
-                    time: event.time,
-                    label: hasLabel ? event.label : "",
-                    y: event.y,
-                    comment: event.comment,
-                    hasY: hasY,
-                    hasLabel: hasLabel,
-                    minAmplitude: piste.minAmplitude,
-                    maxAmplitude: piste.maxAmplitude
-                ))
-            }
-        }
-        pointListStore.rows = rows.sorted { $0.time < $1.time }
-        pointListStore.trackNames = pistes.map { $0.nom }
-    }
 
     // Applies an edit made in the points list window. Routed through the same
     // clamping and gateSnappedY the timeline uses, so a value typed there is
     // constrained exactly like one dragged here (range bounds, quantization,
     // Gate mode).
-    private func applyPointEdit(_ edit: PointEdit) {
-        guard !tracksLocked else { return }
-        for trackIndex in pistes.indices {
-            guard let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == edit.id }) else { continue }
-
-            if let time = edit.time {
-                pistes[trackIndex].evenements[eventIndex].time = min(max(time, 0), duree)
-            }
-            if let label = edit.label {
-                pistes[trackIndex].evenements[eventIndex].label = label
-            }
-            if let y = edit.y {
-                let piste = pistes[trackIndex]
-                let clamped = min(max(y, piste.minAmplitude), piste.maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(clamped, forTrackIndex: trackIndex)
-            }
-            if let comment = edit.comment {
-                pistes[trackIndex].evenements[eventIndex].comment = comment
-            }
-
-            pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
-            return
-        }
-    }
 
     // Opens the point editor for a given event, wherever it lives. Shared by
     // the timeline's double-click and the points list window, so both go
     // through exactly the same editing path.
-    private func beginEditingPoint(eventId: UUID) {
-        guard !tracksLocked else { return }
-        for (trackIndex, piste) in pistes.enumerated() {
-            guard let event = piste.evenements.first(where: { $0.id == eventId }) else { continue }
-            pointAEditer = (trackIndex, eventId)
-            nouvellePositionString = String(format: "%.2f", event.time)
-            nouvelleYString = String(format: "%.2f", event.y)
-            nouveauComment = event.comment
-            if trackIndex == 0 || piste.type == .message {
-                nouveauLabel = event.label
-            }
-            return
-        }
-    }
 
     // Press-drag-release point creation, shared by every track type. The point
     // is created on mouse-down and then follows the cursor until release, so
     // it can be positioned in one gesture instead of click-then-drag-again.
     // Snapping/quantization go through the same paths a normal drag uses, so
     // behaviour is identical whether a point is being created or moved.
-    private func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        guard !tracksLocked else { return }
-        let piste = pistes[trackIndex]
-        let rawTime = (Double(location.x) / Double(largeurTimeline)) * duree
-        let time = min(max(rawTime, 0), duree)
-
-        let label: String
-        let y: Double
-        switch piste.type {
-        case .bang:
-            label = "M"
-            y = 0.5
-        case .message:
-            label = "key"
-            y = 0.5
-        case .curve, .step:
-            label = ""
-            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
-            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            y = gateSnappedY(raw, forTrackIndex: trackIndex)
-        case .normal:
-            label = ""
-            y = 0.5
-        }
-
-        let event = TimelineEvent(time: time, label: label, y: y)
-        pistes[trackIndex].evenements.append(event)
-        pistes[trackIndex].evenements.sort()
-        lastSentEvents.removeAll()
-
-        creatingPointId = event.id
-        creatingPointTrackIndex = trackIndex
-    }
 
     // Moves the in-progress point as the cursor is dragged, applying the same
     // constraints (timeline bounds, ⌘/magnetic snapping, vertical
     // quantization) that dragging an existing point applies.
-    private func updateCreatingPoint(at location: CGPoint, largeurTimeline: CGFloat) {
-        guard !tracksLocked,
-              let id = creatingPointId,
-              let trackIndex = creatingPointTrackIndex,
-              pistes.indices.contains(trackIndex),
-              let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id })
-        else { return }
 
-        let xPos = Double(location.x)
-        var newTime = (xPos / Double(largeurTimeline)) * duree
 
-        if NSEvent.modifierFlags.contains(.command),
-           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-            newTime = snapped
-        } else if magneticGridSnap,
-                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
-            newTime = snapped
-        }
-        pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), duree)
 
-        let piste = pistes[trackIndex]
-        if piste.type == .curve || piste.type == .step {
-            let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
-            let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrackIndex: trackIndex)
-        }
-        lastSentEvents.removeAll()
-    }
-
-    private func finishCreatingPoint() {
-        if let trackIndex = creatingPointTrackIndex, pistes.indices.contains(trackIndex) {
-            pistes[trackIndex].evenements.sort()
-        }
-        creatingPointId = nil
-        creatingPointTrackIndex = nil
-    }
-
-    private func openPointListWindow() {
-        refreshPointList()
-
-        // Wired every time (cheap, and the closure captures fresh state) so
-        // the list window can hand its edits back to us.
-        pointListStore.onCommitEdit = { edit in
-            applyPointEdit(edit)
-        }
-
-        if let controller = pointListWindowController {
-            if isPointListWindowVisible {
-                controller.window?.close()
-                isPointListWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                isPointListWindowVisible = true
-            }
-            return
-        }
-
-        // The view observes pointListStore, so no need to rebuild the hosting
-        // view on reopen — it re-renders on its own whenever the store changes.
-        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore))
-        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 380),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Point List"
-        window.setFrameAutosaveName("PointListWindow")
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 520, height: 300)
-        window.isReleasedWhenClosed = false
-        // Deliberately NOT a floating window: a floating list parked in the
-        // middle of the screen would sit on top of every sheet the main window
-        // opens (point editor, autofill, grid settings...), hiding them.
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            isPointListWindowVisible = false
-        }
-        delegate.sharedUndoManager = timelineStore.undoManager
-        window.delegate = delegate
-        pointListCloseDelegate = delegate
-
-        window.center()
-
-        pointListWindowController = NSWindowController(window: window)
-        pointListWindowController?.showWindow(nil)
-        isPointListWindowVisible = true
-    }
-
-    private func openOSCMessagesWindow() {
-        // No per-window appearance handling here anymore: NSApp.appearance
-        // (set app-wide from the Appearance setting) already covers every
-        // window, including this one and its title bar.
-        if let controller = messagesWindowController {
-            if isOSCWindowVisible {
-                controller.window?.close()
-                isOSCWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                isOSCWindowVisible = true
-            }
-            return
-        }
-
-        let contentView = OSCMessagesView(messageStore: messageStore)
-        let hostingView = NSHostingView(rootView: contentView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 300)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 300),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Outgoing OSC Messages"
-        window.setFrameAutosaveName("OSCMessagesWindow")
-        window.setContentSize(NSSize(width: 220, height: 300))
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 50, height: 300)
-        // Without this, closing a manually-created NSWindow (not from a
-        // nib) can release it out from under us, leaving our controller
-        // holding a stale reference on the next toggle.
-        window.isReleasedWhenClosed = false
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            isOSCWindowVisible = false
-        }
-        window.delegate = delegate
-        oscWindowCloseDelegate = delegate
-
-        // Top-right of the screen, with a small margin from the edges —
-        // applied after setFrameAutosaveName so it always ends up there,
-        // rather than wherever a previously saved frame happened to be.
-        if let screenFrame = NSScreen.main?.visibleFrame {
-            let margin: CGFloat = 20
-            let origin = NSPoint(
-                x: screenFrame.maxX - window.frame.width - margin,
-                y: screenFrame.maxY - window.frame.height - margin
-            )
-            window.setFrameOrigin(origin)
-        }
-
-        messagesWindowController = NSWindowController(window: window)
-        messagesWindowController?.showWindow(nil)
-        isOSCWindowVisible = true
-    }
 
     // Generates a rectangular/pulse-train pattern of step events across [0, duree].
     // period: T in seconds. phase: fraction of the period (0...1) the pattern is
     // shifted by. pulseWidth: fraction of the period (0...1) spent at ampMax.
-    private func rectangleEvents(period: Double, phase: Double, pulseWidth: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        let highDuration = min(max(pulseWidth, 0), 1) * period
-
-        var events: [TimelineEvent] = []
-        let firstN = Int((-phaseOffset / period).rounded(.down)) - 1
-        var n = firstN
-        while true {
-            let cycleStart = Double(n) * period + phaseOffset
-            if cycleStart > duree { break }
-            let highEnd = cycleStart + highDuration
-            if cycleStart >= 0 && cycleStart <= duree {
-                events.append(TimelineEvent(time: cycleStart, label: "", y: ampMax))
-            }
-            if highEnd >= 0 && highEnd <= duree {
-                events.append(TimelineEvent(time: highEnd, label: "", y: ampMin))
-            }
-            n += 1
-        }
-
-        // Make sure playback starting at t=0 reflects the correct held value,
-        // even if the first generated edge falls after 0.
-        if !events.contains(where: { $0.time == 0 }) {
-            let containingN = Int(((0 - phaseOffset) / period).rounded(.down))
-            let cycleStart0 = Double(containingN) * period + phaseOffset
-            let highEnd0 = cycleStart0 + highDuration
-            let valueAtZero = (0 >= cycleStart0 && 0 < highEnd0) ? ampMax : ampMin
-            events.insert(TimelineEvent(time: 0, label: "", y: valueAtZero), at: 0)
-        }
-
-        return events.sorted { $0.time < $1.time }
-    }
 
     // Generates a sine or skewed-sawtooth wave for curve tracks (piecewise-linear
     // interpolation between the generated points, so a Sin wave needs many
@@ -1518,270 +478,73 @@ struct ContentView: View {
     // Warps a normalized progress value t (0...1) into a symmetric S-curve
     // shape based on a single curvature parameter, matching Logic Pro's
     // automation curve tool. curvature == 0 leaves t unchanged (straight line).
-    private func curvedProgress(_ t: Double, curvature: Double) -> Double {
-        guard curvature != 0 else { return t }
-        let k = pow(2, curvature)
-        if t < 0.5 {
-            return pow(t * 2, k) / 2
-        } else {
-            return 1 - pow((1 - t) * 2, k) / 2
-        }
-    }
 
     // A simple power-curve warp with no inflection point (single concave or
     // convex bow throughout, unlike curvedProgress's symmetric S-shape).
     // bulge == 0 leaves t unchanged (straight line).
-    private func bulgeProgress(_ t: Double, bulge: Double) -> Double {
-        guard bulge != 0 else { return t }
-        let k = pow(2, bulge)
-        return pow(t, k)
-    }
 
     // Combines both warps: horizontal drag (segmentCurve, S-shape) and
     // vertical drag (segmentBulge, simple bow) apply together.
-    private func combinedProgress(_ t: Double, curvature: Double, bulge: Double) -> Double {
-        curvedProgress(bulgeProgress(t, bulge: bulge), curvature: curvature)
-    }
 
     // The curve's rendered y-position (in track-local pixels), at a given
     // time, accounting for each segment's curvature. Returns nil if the time
     // falls outside the track's own point range (no curve there).
-    private func curveYPosition(forTime time: Double, trackIndex: Int) -> CGFloat? {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1, let first = sorted.first, let last = sorted.last,
-              time >= first.time, time <= last.time else { return nil }
-
-        for i in 0..<(sorted.count - 1) {
-            let a = sorted[i]
-            let b = sorted[i + 1]
-            guard time >= a.time && time <= b.time else { continue }
-            let t = (b.time - a.time) > 0 ? (time - a.time) / (b.time - a.time) : 0
-            let curvedT = combinedProgress(t, curvature: a.segmentCurve, bulge: a.segmentBulge)
-            let value = a.y + (b.y - a.y) * curvedT
-            let amplitudeRange = pistes[trackIndex].maxAmplitude - pistes[trackIndex].minAmplitude
-            let normalizedY = amplitudeRange > 0 ? (value - pistes[trackIndex].minAmplitude) / amplitudeRange : 0.5
-            return curveMargin + (pistes[trackIndex].height - 2 * curveMargin) * (1 - normalizedY)
-        }
-        return nil
-    }
 
     // Whether the segment containing `time` is currently a hole
     // (segmentEnabled == false). Used to pick the erase vs. reconnect
     // cursor symbol while hovering. Defaults to true (no hole) if there's
     // no such segment.
-    private func isSegmentEnabled(forTime time: Double, trackIndex: Int) -> Bool {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1 else { return true }
-        for i in 0..<(sorted.count - 1) {
-            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
-            return sorted[i].segmentEnabled
-        }
-        return true
-    }
 
     // Directly applies the Shift segment-erase/reconnect cursor for a given
     // mouse location, imperatively — called from the curve area's
     // onContinuousHover on every real mouse movement. No @State involved,
     // so it works regardless of SwiftUI's render cycle.
-    private func applyShiftSegmentCursor(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        let time = (Double(location.x) / Double(largeurTimeline)) * duree
-        if let curveY = curveYPosition(forTime: time, trackIndex: trackIndex),
-           abs(Double(location.y) - Double(curveY)) < 12 {
-            if isSegmentEnabled(forTime: time, trackIndex: trackIndex) {
-                cursor(fromSymbol: "eraser.fill").set()
-            } else {
-                cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
-            }
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
 
     // Toggles segmentEnabled on whichever segment (curve tracks only)
     // contains `time`, punching or filling a silent "hole" in the curve.
     // Both endpoints stay untouched — only the interpolation/OSC output
     // between them is switched on or off.
-    private func toggleSegmentEnabled(forTime time: Double, trackIndex: Int) {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1 else { return }
-        for i in 0..<(sorted.count - 1) {
-            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
-            if let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == sorted[i].id }) {
-                pistes[trackIndex].evenements[eventIndex].segmentEnabled.toggle()
-                lastSentEvents.removeAll()
-            }
-            return
-        }
-    }
 
-    private func waveEvents(isSine: Bool, period: Double, phase: Double, skew: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var events: [TimelineEvent] = []
-
-        if isSine {
-            // Only place control points at the peaks and troughs (where a sine's
-            // tangent is naturally horizontal), and let the existing curve
-            // interpolation (segmentCurve) compute the shape between them —
-            // instead of approximating the wave with many sampled points.
-            // curvature ≈ 1.0 was picked to closely match a real sine's shape
-            // between a peak and a trough (a symmetric S-curve is a good fit,
-            // since sine also has zero slope at the extremes and its steepest
-            // slope exactly at the midpoint).
-            let sineSegmentCurvature = 1.0
-            let halfPeriod = period / 2
-            let firstPeakTime = phaseOffset + period / 4
-            let firstN = Int(((0 - firstPeakTime) / halfPeriod).rounded(.down)) - 1
-            var n = firstN
-            while true {
-                let time = firstPeakTime + Double(n) * halfPeriod
-                if time > duree { break }
-                let parity = ((n % 2) + 2) % 2 // n=0 → first peak, alternating from there
-                let value = parity == 0 ? ampMax : ampMin
-                if time >= 0 && time <= duree {
-                    events.append(TimelineEvent(time: time, label: "", y: value, segmentCurve: sineSegmentCurvature))
-                }
-                n += 1
-            }
-        } else {
-            // Skew = fraction of the period spent rising (0...1). 0.5 = symmetric
-            // triangle; near 1 = classic rising sawtooth; near 0 = reversed sawtooth.
-            let riseDuration = min(max(skew, 0.01), 0.99) * period
-            let firstN = Int(((0 - phaseOffset) / period).rounded(.down)) - 1
-            var n = firstN
-            while true {
-                let cycleStart = Double(n) * period + phaseOffset
-                if cycleStart > duree { break }
-                let peakTime = cycleStart + riseDuration
-                if cycleStart >= 0 && cycleStart <= duree {
-                    events.append(TimelineEvent(time: cycleStart, label: "", y: ampMin))
-                }
-                if peakTime >= 0 && peakTime <= duree {
-                    events.append(TimelineEvent(time: peakTime, label: "", y: ampMax))
-                }
-                n += 1
-            }
-        }
-
-        return events.sorted { $0.time < $1.time }
-    }
 
     // Generates evenly spaced bang events for bang/markers tracks.
     // defaultLabel is empty by design: plain bang tracks have no meaningful
     // label (only markers and message tracks do, and those pass an explicit
     // numberedLabelPrefix). It used to default to "M", which silently stamped
     // every autofilled bang with a stray marker-style label.
-    private func bangEvents(period: Double, phase: Double, duree: Double, defaultLabel: String = "", numberedLabelPrefix: String? = nil) -> [TimelineEvent] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var events: [TimelineEvent] = []
-        var n = 0
-        var counter = 1
-        while true {
-            let time = Double(n) * period + phaseOffset
-            if time > duree { break }
-            if time >= 0 {
-                let label: String
-                if let prefix = numberedLabelPrefix {
-                    label = "\(prefix)_\(counter)"
-                    counter += 1
-                } else {
-                    label = defaultLabel
-                }
-                events.append(TimelineEvent(time: time, label: label, y: 0.5))
-            }
-            n += 1
-        }
-        return events
-    }
 
     // Called by the pencil button. Warns first if the track already has
     // points (since autofill replaces them entirely), otherwise opens the
     // relevant popup directly.
     // Builds an NSCursor from an SF Symbol image, tinted the given color.
-    private func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            .applying(.init(paletteColors: [color]))
-        // Falls back to a known-valid symbol (rather than an empty NSImage)
-        // if `name` doesn't resolve — an invalid SF Symbol name would
-        // otherwise silently produce an invisible cursor, which is exactly
-        // the kind of bug that's very hard to notice/debug from testing
-        // alone.
-        let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
-            ?? NSImage()
-        let image = baseImage.withSymbolConfiguration(config) ?? baseImage
-        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
-    }
 
     // All snap-target times currently available: marker positions, plus grid
     // lines when the grid is visible. Uses the same thinned-out set that's
     // actually rendered (visibleGridLineTimes), so snapping never lands on
     // a grid line that isn't visible on screen.
-    private func snapCandidateTimes(largeurTimeline: Double) -> [Double] {
-        var times = pistes[0].evenements.map { $0.time }
-        if showGrid {
-            times.append(contentsOf: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)))
-        }
-        return times
-    }
 
     // Finds the closest time to xPos among a given set of candidates, if any
     // falls within the 7px snap zone — nil otherwise.
-    private func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double) -> Double? {
-        guard !candidates.isEmpty, duree > 0 else { return nil }
-        let closest = candidates.min(by: { a, b in
-            let xA = (a / duree) * largeurTimeline
-            let xB = (b / duree) * largeurTimeline
-            return abs(xA - xPos) < abs(xB - xPos)
-        })
-        guard let closest = closest else { return nil }
-        let closestXPos = (closest / duree) * largeurTimeline
-        return abs(closestXPos - xPos) < 7 ? closest : nil
-    }
 
     // The closest snap-target time to xPos (in timeline pixels), if any
     // falls within the 7px snap zone — nil otherwise. Combines markers and
     // grid lines (used for the ⌘-driven snap, and the hover snap-cursor
     // indicator, which treat both the same way).
-    private func nearestSnapTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // Markers only (no grid lines) — the counterpart to nearestGridTime,
     // used to tell which of the two a combined ⌘-snap actually landed on.
-    private func nearestMarkerTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        nearestTime(among: pistes[0].evenements.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // Grid lines only (no markers) — used for "magnetic grid" auto-snap,
     // which should never pull a point onto a marker without ⌘. Matches the
     // thinned-out set actually rendered on screen (visibleGridLineTimes),
     // so you can never snap to a line you can't see.
-    private func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        guard showGrid else { return nil }
-        return nearestTime(among: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
 
     // When both a marker and a grid line are within the snap zone, which one
     // is actually closer to xPos? Used purely to pick the cursor color
     // (marker snap stays black, grid snap turns gray) — the actual snapping
     // logic elsewhere already picks the true closest via nearestSnapTime.
-    private func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double) -> Bool {
-        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline)
-        let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
-        guard let gridTime else { return false }
-        guard let markerTime else { return true }
-        let markerX = (markerTime / duree) * largeurTimeline
-        let gridX = (gridTime / duree) * largeurTimeline
-        return abs(gridX - xPos) < abs(markerX - xPos)
-    }
 
     // Is xPos (in timeline pixels) within the 7px snap zone of the nearest
     // marker line or grid line?
-    private func isNearMarker(xPos: Double, largeurTimeline: Double) -> Bool {
-        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline) != nil
-    }
 
     // Applies the right cursor for the current hover + modifier-key state
     // while hovering an actual point. Curve-segment hover (Option-bend,
@@ -1790,40 +553,11 @@ struct ContentView: View {
     // more reliable than ad-hoc NSCursor.set() calls during plain hover
     // (macOS silently overrides those outside an active drag), which is
     // why that logic doesn't live here.
-    private func updatePointCursor() {
-        guard isHoveringPoint else {
-            NSCursor.arrow.set()
-            return
-        }
-        if NSEvent.modifierFlags.contains(.shift) {
-            cursor(fromSymbol: "eraser.badge.xmark").set()
-        } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-            let color: NSColor = isNearestSnapGrid ? .gray : .black
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: color).set()
-        } else if magneticGridSnap && isNearGridSnapZone {
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
 
 
     // Generates evenly spaced grid line times across [0, duree] — same
     // period/phase model as bangEvents, but returning bare times (no labels
     // needed since grid lines are purely visual, not OSC-emitting events).
-    private func gridLineTimes(period: Double, phase: Double, duree: Double) -> [Double] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var times: [Double] = []
-        var n = 0
-        while true {
-            let time = Double(n) * period + phaseOffset
-            if time > duree { break }
-            if time >= 0 { times.append(time) }
-            n += 1
-        }
-        return times
-    }
 
     // For DISPLAY only (never for snapping, which stays at full granularity):
     // thins out the grid lines when their pixel spacing would be too dense
@@ -1832,394 +566,62 @@ struct ContentView: View {
     // Keeps every Nth line (N = smallest power-of-two-ish multiplier that
     // brings the spacing above a legible minimum) instead of changing the
     // actual period itself.
-    private func visibleGridLineTimes(largeurTimeline: CGFloat) -> [Double] {
-        let allTimes = gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree)
-        guard duree > 0, gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
-        let pixelsPerLine = largeurTimeline * CGFloat(gridPeriod / duree)
-        let minSpacing: CGFloat = 16
-        guard pixelsPerLine < minSpacing else { return allTimes }
-        // How many consecutive lines to fold into one to reach minSpacing —
-        // rounded up to a "nice" step (1, 2, 5, 10, 20, 50...) so the
-        // remaining visible lines still land on clean multiples of the
-        // original period rather than an arbitrary skip count.
-        let rawSkip = Double(minSpacing / pixelsPerLine)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
-        let skip = niceSteps.first(where: { $0 >= rawSkip }) ?? (niceSteps.last ?? 1000)
-        return allTimes.enumerated().compactMap { index, time in
-            index % Int(skip) == 0 ? time : nil
-        }
-    }
 
-    private func commitGridSettings() {
-        if let period = Double(gridPeriodString), let phase = Double(gridPhaseString) {
-            gridPeriod = period
-            gridPhase = phase
-        }
-        showGridSettingsPopup = false
-    }
 
-    private func openGridSettingsPopup() {
-        gridPeriodString = String(format: "%.2f", gridPeriod)
-        gridPhaseString = String(format: "%.2f", gridPhase)
-        showGridSettingsPopup = true
-    }
 
     // Scrolls the timeline horizontally so the playhead is centered in the
     // viewport, regardless of the current zoom level. Used after any "go to"
     // jump (time, next marker, marker by name) so the result is always
     // actually visible, not just updated off-screen.
-    private func centerOnPlayhead() {
-        let outerWidth = max(timelineAreaWidth, 1)
-        // timelineAreaWidth already excludes the duration handle (the whole
-        // timeline area is padded by its width), so no extra subtraction here
-        // — this must mirror the largeurTimeline used for drawing exactly.
-        let largeurTimeline = outerWidth * CGFloat(zoomX) - 140
-        guard largeurTimeline > 0 else { return }
-        let playheadX = 140 + CGFloat(position / duree) * largeurTimeline
-        scrollOffsetX = max(0, playheadX - outerWidth / 2)
-    }
 
     // Jumps the playhead to the next marker strictly after the current
     // position; wraps around to the earliest marker if there is none, or
     // does nothing if there are no markers at all.
-    private func goToNextMarker() {
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        guard !sorted.isEmpty else { return }
-        let target = sorted.first(where: { $0.time > position + 0.001 })?.time ?? sorted[0].time
-        position = target
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Jumps the playhead to the previous marker strictly before the current
     // position; wraps around to the latest marker if there is none, or does
     // nothing if there are no markers at all.
-    private func goToPreviousMarker() {
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        guard !sorted.isEmpty else { return }
-        let target = sorted.last(where: { $0.time < position - 0.001 })?.time ?? sorted[sorted.count - 1].time
-        position = target
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Jumps the playhead to the marker whose label matches `name`.
     // Tries an exact case-insensitive match first, then falls back to a
     // case-insensitive substring match (so a partial name, or one with a
     // stray extra space, still finds something reasonable). Shows a
     // "No match" alert if nothing matches either way.
-    private func goToMarkerByName(_ name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            showGoToMarkerNoMatch = true
-            return
-        }
-        let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
-        let exactMatch = sorted.first(where: { $0.label.caseInsensitiveCompare(trimmed) == .orderedSame })
-        let partialMatch = sorted.first(where: { $0.label.range(of: trimmed, options: .caseInsensitive) != nil })
-        guard let match = exactMatch ?? partialMatch else {
-            showGoToMarkerNoMatch = true
-            return
-        }
-        position = match.time
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Parses a "mm:ss" (or bare seconds) string and jumps the playhead
     // there, clamped to [0, duree]. Reuses the same parser as the duration
     // field.
-    private func goToTime(_ text: String) {
-        guard let parsed = parseDuration(text) else { return }
-        position = min(max(parsed, 0), duree)
-        sendOSCMessagesForPosition(position)
-        centerOnPlayhead()
-    }
 
     // Fold/unfold all tracks at once: if any track is currently unfolded,
     // fold everything; otherwise (everything already folded) unfold
     // everything. Mirrors the common "expand/collapse all" convention.
-    private func toggleFoldAll() {
-        let shouldFold = pistes.contains { !$0.isFolded }
-        for i in pistes.indices {
-            pistes[i].isFolded = shouldFold
-        }
-    }
 
     // Mute/unmute all tracks at once: if every track is already muted,
     // unmute everything; otherwise mute everything.
-    private func muteUnmuteAll() {
-        let shouldMute = !pistes.allSatisfy { $0.isMuted }
-        for i in pistes.indices {
-            pistes[i].isMuted = shouldMute
-        }
-    }
 
     // Removes every track except the pinned "/markers" track at index 0.
-    private func deleteAllTracks() {
-        guard !tracksLocked else { return }
-        pistes = [pistes[0]]
-        lastSentEvents.removeAll()
-    }
 
     // Centralizes track creation (used by both the toolbar buttons and the
     // Tracks menu commands) so the lock guard only needs to live in one place.
-    private func addTrack(couleur: Color, type: TrackType, height: CGFloat) {
-        guard !tracksLocked else { return }
-        pistes.append(TimelineTrack(nom: nextTrackName, couleur: couleur, evenements: [], type: type, height: height))
-    }
 
-    private func openAutofillPopup(for index: Int) {
-        guard !tracksLocked else { return }
-        if pistes[index].evenements.isEmpty {
-            proceedWithAutofill(for: index)
-        } else {
-            pendingAutofillIndex = index
-        }
-    }
 
-    private func proceedWithAutofill(for index: Int) {
-        switch pistes[index].type {
-        case .step:
-            autofillTrackIndex = index
-            autofillPeriodString = "1.0"
-            autofillPhaseString = "0.0"
-            autofillPulseWidthString = "0.5"
-            autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .curve:
-            waveTrackIndex = index
-            waveIsSine = true
-            wavePeriodString = "1.0"
-            wavePhaseString = "0.0"
-            waveSkewString = "0.5"
-            waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .bang, .message:
-            bangTrackIndex = index
-            bangPeriodString = "1.0"
-            bangPhaseString = "0.0"
-            bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
-        case .normal:
-            break
-        }
-    }
 
-    private func sendOSCMessagesForPosition(_ pos: Double) {
-        for piste in pistes where !piste.isMuted {
-            if piste.type == .bang {
-                let tol = 0.01
-                for event in piste.evenements {
-                    if abs(pos - event.time) < tol {
-                        if piste.nom == "/markers" {
-                            let label = event.label.isEmpty ? "marker" : event.label
-                            sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
-                        } else {
-                            sendOSCMessage(piste.nom + " bang", color: piste.couleur)
-                        }
-                    }
-                }
-            } else if piste.type == .message {
-                let tol = 0.01
-                for event in piste.evenements {
-                    if abs(pos - event.time) < tol {
-                        sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
-                    }
-                }
-            } else if piste.type == .curve {
-                // Only speaks where the curve is actually drawn — strictly
-                // between its first and last point. Before the first point
-                // or after the last one, the track stays silent instead of
-                // continuously repeating the nearest endpoint's value.
-                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-                if sortedEvents.isEmpty { continue }
-
-                let lastEventBefore = sortedEvents.last(where: { $0.time <= pos })
-                let nextEvent = sortedEvents.first(where: { $0.time > pos })
-
-                if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
-                    let ratio = (pos - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                    let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                    let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
-                }
-            } else if piste.type == .step {
-                // Zero-order hold: send the last event's value as-is, never interpolated.
-                let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-                if sortedEvents.isEmpty { continue }
-
-                if let lastEventBefore = sortedEvents.last(where: { $0.time <= pos }) {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y), color: piste.couleur)
-                } else if let firstEvent = sortedEvents.first {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y), color: piste.couleur)
-                }
-            }
-        }
-    }
 
     // Called every 50ms by the playback timer. Pulled out into its own
     // function (rather than a large inline closure) so Swift type-checks it
     // on its own, instead of as part of one giant expression tree together
     // with the rest of the view body — which was timing out the compiler.
-    private func advancePlaybackTick() {
-        guard enLecture else {
-            // Reset so that resuming later doesn't compute a delta spanning
-            // the whole time playback was paused/stopped.
-            lastTickTimestamp = nil
-            return
-        }
-
-        let now = Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
-        // First tick after starting/resuming: fall back to the nominal 0.05
-        // since there's no previous timestamp yet to compute a real delta from.
-        let delta = lastTickTimestamp.map { now - $0 } ?? 0.05
-        lastTickTimestamp = now
-
-        let prev = position
-        position += delta
-        var justLooped = false
-        if position >= duree {
-            position = 0.0
-            if !enBoucle { enLecture = false }
-            lastSentEvents.removeAll()
-            justLooped = true
-        }
-        // Right on the tick where playback wraps back to 0, `prev` still
-        // holds the old (near-`duree`) position — comparing it directly
-        // against early event times would make the crossing check
-        // (prev < event.time <= position) fail for anything near the
-        // start, since prev is much larger than those times. Substitute a
-        // value below 0 for that one tick so events from the very start of
-        // the loop are correctly treated as freshly crossed.
-        let effectivePrev = justLooped ? -1.0 : prev
-
-        for piste in pistes {
-            guard piste.type == .bang, !piste.isMuted else { continue }
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                if piste.nom == "/markers" {
-                    let label = event.label.isEmpty ? "marker" : event.label
-                    sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
-                } else {
-                    sendOSCMessage(piste.nom + " bang", color: piste.couleur)
-                }
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .message, !piste.isMuted else { continue }
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-message-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .curve, !piste.isMuted else { continue }
-            // Only speaks where the curve is actually drawn — see the same
-            // comment in sendOSCMessagesForPosition.
-            let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
-            if sortedEvents.isEmpty { continue }
-
-            let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
-            let nextEvent = sortedEvents.first(where: { $0.time > position })
-
-            if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
-                let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
-                let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
-                let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
-            }
-        }
-
-        for piste in pistes {
-            guard piste.type == .step, !piste.isMuted else { continue }
-            // Zero-order hold, but only send OSC when a new point is crossed —
-            // the value doesn't change between two points, so continuous sending
-            // (like every 50ms tick) would just flood the system uselessly.
-            let tol = 0.001
-            for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
-                let key = piste.nom + "-step-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
-                sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y), color: piste.couleur)
-            }
-        }
-    }
 
     // Everything that used to run inline in .onAppear's closure, pulled out
     // into its own function for the same reason as advancePlaybackTick():
     // large closures embedded directly in the view body get type-checked as
     // part of one giant expression tree together with the rest of `body`,
     // which was timing out the compiler.
-    private func setupOnAppear() {
-        // macOS assigns first responder to the first key-view-eligible
-        // NSTextField right after the window appears, regardless of
-        // FocusState's initial value — so we explicitly clear it again
-        // a beat later to actually win that race.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focusedField = nil
-        }
-
-        dureeText = formattedDuration(duree)
-
-        // Incoming OSC messages control transport from the outside.
-        oscManager.onOSCMessageReceived = handleReceivedOSCMessage
-        oscManager.startListening(port: oscReceivePort)
-
-        // .onHover alone only fires on enter/exit; this keeps the point
-        // cursor (shift/cmd) in sync if the modifier key changes while
-        // the mouse stays over the same point.
-        if flagsChangedMonitor == nil {
-            flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                updatePointCursor()
-                isOptionHeldForCursor = event.modifierFlags.contains(.option)
-                return event
-            }
-        }
-
-        if fullScreenEnterObserver == nil {
-            fullScreenEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: nil, queue: .main) { _ in
-                isFullScreen = true
-            }
-        }
-        if fullScreenExitObserver == nil {
-            fullScreenExitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main) { _ in
-                isFullScreen = false
-            }
-        }
-
-        startPlaybackTimer()
-    }
 
     // (Re)creates the playback timer at the interval implied by the current
     // oscMessagesPerSecond setting (interval = 1 / rate). Called on setup and
     // again whenever the rate changes mid-session, so the new rate takes
     // effect immediately without needing to stop/restart playback.
-    private func startPlaybackTimer() {
-        timer?.invalidate()
-        let rate = max(1, oscMessagesPerSecond)
-        let interval = 1.0 / Double(rate)
-        let playbackTimer = Timer(timeInterval: interval, repeats: true) { _ in
-            DispatchQueue.main.async {
-                advancePlaybackTick()
-            }
-        }
-        // .common (not just .default) so playback keeps ticking even while
-        // some other drag (a point, a track resize, the duration handle...)
-        // is actively being tracked elsewhere in the app.
-        RunLoop.main.add(playbackTimer, forMode: .common)
-        timer = playbackTimer
-    }
 
     // Parses whatever is currently in the duration text field and applies it
     // to `duree`, then resyncs the text field to the canonical "mm:ss.cc" form
@@ -2227,232 +629,24 @@ struct ContentView: View {
     // Typed durations are rounded to whole seconds on purpose: sub-second
     // precision is only ever meant to come from the trim handle, so there's no
     // need to think about centiseconds when typing a duration in.
-    private func commitDureeEdit() {
-        if let parsed = parseDuration(dureeText) {
-            duree = max(parsed.rounded(), 1)
-        }
-        dureeText = formattedDuration(duree)
-    }
 
-    private func handleReceivedOSCMessage(_ message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
-        switch normalized {
-        case "play":
-            enLecture = true
-        case "pause":
-            enLecture = false
-        case "stop":
-            enLecture = false
-            position = 0
-            lastSentEvents.removeAll()
-        default:
-            break
-        }
-    }
 
-    private func tearDownOnDisappear() {
-        timer?.invalidate()
-        timer = nil
-        oscManager.cancelConnection()
-        oscManager.stopListening()
-        if let monitor = flagsChangedMonitor {
-            NSEvent.removeMonitor(monitor)
-            flagsChangedMonitor = nil
-        }
-        if let observer = fullScreenEnterObserver {
-            NotificationCenter.default.removeObserver(observer)
-            fullScreenEnterObserver = nil
-        }
-        if let observer = fullScreenExitObserver {
-            NotificationCenter.default.removeObserver(observer)
-            fullScreenExitObserver = nil
-        }
-        stopDurationDragTimer()
-        oscFlashTimer?.invalidate()
-        oscFlashTimer = nil
-    }
 
     // Recenters the horizontal scroll so the playhead stays at the same
     // on-screen (viewport-relative) position before and after a zoom
     // change — i.e. the zoom appears to happen "around" the playhead.
     // (Pinch-zoom anchors on the mouse position instead, handled separately
     // in TimelineScrollView's Coordinator.)
-    private func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
-        guard !isPinchZooming else { return }
-        let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
-        guard largeurAvant > 0 else { return }
 
-        let anchorTime = min(max(position, 0), duree)
-        let absoluteContentXBefore = 140 + CGFloat(anchorTime / duree) * largeurAvant
-        let locationXInViewport = absoluteContentXBefore - scrollOffsetX
-
-        let largeurApres = outerWidth * CGFloat(newZoom) - 140
-        guard largeurApres > 0 else { return }
-        let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
-        let maxX = max(0, outerWidth * CGFloat(newZoom) - outerWidth)
-        let newOffsetX = max(0, min(absoluteContentXAfter - locationXInViewport, maxX))
-        scrollOffsetX = newOffsetX
-    }
-
-    private func commitPointEdit() {
-        if let (trackIndex, eventId) = pointAEditer,
-           let newPosition = Double(nouvellePositionString),
-           let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == eventId }) {
-            pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), duree)
-            if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(nouvelleYString) {
-                let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrackIndex: trackIndex)
-            }
-            if trackIndex == 0 || pistes[trackIndex].type == .message {
-                pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
-            }
-            pistes[trackIndex].evenements[eventIndex].comment = nouveauComment
-            pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
-        }
-        pointAEditer = nil
-    }
 
     // Actually performs the Float -> Gate switch: forces the 0...1 range and
     // snaps every existing point to strict boolean 0/1. Split out from
     // commitAmplitudeEdit so it can be deferred behind a confirmation when
     // there are existing points to redistribute.
-    private func applyGateModeSwitch(forTrackIndex index: Int) {
-        pistes[index].isGate = true
-        pistes[index].minAmplitude = 0
-        pistes[index].maxAmplitude = 1
-        // Gate is itself a 0/1 quantization, so quantization is switched off —
-        // but its step value is kept, so returning to Float restores it.
-        pistes[index].quantizeEnabled = false
-        for i in pistes[index].evenements.indices {
-            pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
-        }
-        lastSentEvents.removeAll()
-    }
 
-    private func commitAmplitudeEdit() {
-        guard let index = amplitudeEditorTrackIndex else {
-            amplitudeEditorTrackIndex = nil
-            return
-        }
-        if pistes[index].type == .step && tempIsGate {
-            // Switching FROM Float TO Gate with existing points would
-            // silently redistribute all their values to 0/1 — warn first
-            // instead, and only apply once the user confirms.
-            if !pistes[index].isGate && !pistes[index].evenements.isEmpty {
-                pendingGateSwitchIndex = index
-                amplitudeEditorTrackIndex = nil
-                return
-            }
-            applyGateModeSwitch(forTrackIndex: index)
-        } else {
-            if pistes[index].type == .step {
-                pistes[index].isGate = false
-            }
-            if let minVal = Double(tempMinAmplitude), let maxVal = Double(tempMaxAmplitude) {
-                pistes[index].minAmplitude = minVal
-                pistes[index].maxAmplitude = maxVal
-            }
-            // The step value is stored regardless of the on/off flag, so
-            // switching quantization off and back on restores what was dialled
-            // in rather than resetting to zero.
-            pistes[index].quantizeEnabled = tempQuantizeEnabled
-            if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
-                let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
-                let maxStep = range / 2
-                // A step bigger than half the range would leave fewer than three
-                // usable values (the track would collapse onto its endpoints), so
-                // it's clamped — and the user is told, rather than silently getting
-                // something other than what they typed. Only warn when it's
-                // actually in effect.
-                if range > 0 && stepVal > maxStep {
-                    pistes[index].quantizeStep = maxStep
-                    if tempQuantizeEnabled {
-                        invalidQuantizeStepMessage = String(
-                            format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
-                            stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
-                        )
-                    }
-                } else {
-                    pistes[index].quantizeStep = range > 0 ? stepVal : 0
-                }
-            }
-            // NOTE: existing points are deliberately NOT re-snapped onto the
-            // new grid. Unlike Gate — which is a mode change that forces every
-            // value to 0/1 — quantization is an input aid: it constrains points
-            // as they're created or dragged, but never silently rewrites work
-            // that's already been placed.
-        }
-        amplitudeEditorTrackIndex = nil
-    }
 
-    private func commitAutofillRectangle() {
-        if let index = autofillTrackIndex,
-           let period = Double(autofillPeriodString),
-           let phase = Double(autofillPhaseString),
-           let pulseWidth = Double(autofillPulseWidthString),
-           let ampMin = Double(autofillAmpMinString),
-           let ampMax = Double(autofillAmpMaxString) {
-            pistes[index].evenements = rectangleEvents(
-                period: period,
-                phase: phase,
-                pulseWidth: pulseWidth,
-                ampMin: ampMin,
-                ampMax: ampMax,
-                duree: duree
-            )
-            lastSentEvents.removeAll()
-        }
-        autofillTrackIndex = nil
-    }
 
-    private func commitAutofillWave() {
-        if let index = waveTrackIndex,
-           let period = Double(wavePeriodString),
-           let phase = Double(wavePhaseString),
-           let skew = Double(waveSkewString),
-           let ampMin = Double(waveAmpMinString),
-           let ampMax = Double(waveAmpMaxString) {
-            pistes[index].evenements = waveEvents(
-                isSine: waveIsSine,
-                period: period,
-                phase: phase,
-                skew: skew,
-                ampMin: ampMin,
-                ampMax: ampMax,
-                duree: duree
-            )
-            lastSentEvents.removeAll()
-        }
-        waveTrackIndex = nil
-    }
 
-    private func commitAutofillBang() {
-        if let index = bangTrackIndex,
-           let period = Double(bangPeriodString),
-           let phase = Double(bangPhaseString) {
-            let isMarkersTrack = index == 0
-            let isMessageTrack = pistes[index].type == .message
-            let trimmedPrefix = bangLabelPrefixString.trimmingCharacters(in: .whitespaces)
-            let numberedLabelPrefix: String?
-            if isMarkersTrack {
-                numberedLabelPrefix = trimmedPrefix.isEmpty ? "M" : trimmedPrefix
-            } else if isMessageTrack {
-                numberedLabelPrefix = trimmedPrefix.isEmpty ? "key" : trimmedPrefix
-            } else {
-                numberedLabelPrefix = nil
-            }
-            pistes[index].evenements = bangEvents(
-                period: period,
-                phase: phase,
-                duree: duree,
-                numberedLabelPrefix: numberedLabelPrefix
-            )
-            lastSentEvents.removeAll()
-        }
-        bangTrackIndex = nil
-    }
 
     // Compact alternative to the full toolbar (toggled via the View menu,
     // ⌘B): a full-width bar acting as an extended version of the position
@@ -2468,7 +662,7 @@ struct ContentView: View {
     // AttributedString rather than concatenating separate Text views with
     // `+` (deprecated since macOS 26 in favor of string interpolation /
     // AttributedString for per-segment styling).
-    private var durationLabelText: Text {
+    var durationLabelText: Text {
         var attributed = AttributedString("Duration ")
         attributed.foregroundColor = .gray
         var value = AttributedString(formattedDuration(duree))
@@ -2477,7 +671,7 @@ struct ContentView: View {
         return Text(attributed)
     }
 
-    private var compactControlBar: some View {
+    var compactControlBar: some View {
         ZStack {
             Rectangle().fill(Color.black)
             Text(formattedPosition(position))
@@ -2532,35 +726,9 @@ struct ContentView: View {
     // drag's current rate of change (see durationDragCurrentDeltaX) for as
     // long as the drag is held — this is what makes it velocity-based
     // rather than a one-shot position mapping.
-    private func startDurationDragTimer() {
-        durationDragTimer?.invalidate()
-        let tickInterval = 0.02
-        let newTimer = Timer(timeInterval: tickInterval, repeats: true) { _ in
-            DispatchQueue.main.async {
-                let dx = Double(durationDragCurrentDeltaX)
-                let magnitude = pow(abs(dx), durationDragVelocityExponent) * durationDragVelocityScale
-                let ratePerSecond = dx < 0 ? -magnitude : magnitude
-                let rawDuree = duree + ratePerSecond * tickInterval
-                let quantized = (rawDuree * 100).rounded() / 100
-                duree = max(0.1, quantized)
-                dureeText = formattedDuration(duree)
-            }
-        }
-        // Timer.scheduledTimer only runs in the .default run loop mode,
-        // which AppKit suspends while actively tracking a mouse drag (the
-        // run loop switches to .eventTracking mode during that time) — so
-        // the timer would silently never fire while the drag is held.
-        // Adding it in .common mode instead keeps it running throughout.
-        RunLoop.main.add(newTimer, forMode: .common)
-        durationDragTimer = newTimer
-    }
 
-    private func stopDurationDragTimer() {
-        durationDragTimer?.invalidate()
-        durationDragTimer = nil
-    }
 
-    private var durationDragHandle: some View {
+    var durationDragHandle: some View {
         ZStack(alignment: .top) {
             Rectangle()
                 .fill(Color.gray.opacity(0.07))
@@ -2617,7 +785,7 @@ struct ContentView: View {
     // (not centered) so the body always extends leftward into the window
     // instead of overflowing past the right edge, since the handle itself
     // sits right at that edge.
-    private var durationTooltip: some View {
+    var durationTooltip: some View {
         VStack(alignment: .trailing, spacing: 0) {
             UpPointingTriangle()
                 .fill(Color.black.opacity(0.85))
@@ -2648,7 +816,7 @@ struct ContentView: View {
                         .offset(y: 19)
                 }
                 .offset(x: -100)
-                Button(action: { enLecture.toggle() }) {
+                Button(action: { togglePlayback() }) {
                     Image(systemName: enLecture ? "pause.fill" : "play.fill")
                         .font(.title2)
                         .foregroundColor(.black)
@@ -2882,6 +1050,8 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.top, isFullScreen ? 0 : 30)
             .frame(height: isFullScreen ? 70 : 100)
+
+            Spacer().frame(height: 10)
             } else {
                 compactControlBar
             }
@@ -2912,17 +1082,198 @@ struct ContentView: View {
                                 VStack(spacing: 0) {
                                     ZStack(alignment: .leading) {
                                         Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
+                                        // The loop zone band: matches the Loop button's own colors
+                                        // exactly (solid yellow active, gray when off), so the zone
+                                        // and the button read as one and the same "loop" state.
+                                        if let start = loopZoneStart, let end = loopZoneEnd {
+                                            let x1 = CGFloat(min(start, end) / duree) * largeurTimeline
+                                            let x2 = CGFloat(max(start, end) / duree) * largeurTimeline
+                                            Rectangle()
+                                                .fill(enBoucle ? Color.yellow : Color.gray.opacity(0.15))
+                                                .frame(width: max(x2 - x1, 1), height: 24)
+                                                .offset(x: 140 + x1)
+                                        } else if let dragStart = rulerDragStartTime, let dragCurrent = rulerDragCurrentTime {
+                                            // Live preview while dragging out a brand new zone.
+                                            let x1 = CGFloat(min(dragStart, dragCurrent) / duree) * largeurTimeline
+                                            let x2 = CGFloat(max(dragStart, dragCurrent) / duree) * largeurTimeline
+                                            Rectangle()
+                                                .fill(Color.yellow)
+                                                .frame(width: max(x2 - x1, 1), height: 24)
+                                                .offset(x: 140 + x1)
+                                        }
                                         if tracksLocked {
                                             Rectangle().fill(Color.black).frame(width: 140, height: 24)
                                         }
                                         Color.clear
                                             .contentShape(Rectangle())
                                             .frame(height: 24)
-                                            .onTapGesture { location in
-                                                guard location.x > 140 else { return }
-                                                let positionCliquee = (Double(location.x - 140) / Double(largeurTimeline)) * duree
-                                                position = min(max(positionCliquee, 0), duree)
-                                                sendOSCMessagesForPosition(position)
+                                            .onContinuousHover { phase in
+                                                switch phase {
+                                                case .active(let location):
+                                                    guard resizingLoopZoneEdge == nil,
+                                                          let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd else {
+                                                        if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
+                                                        return
+                                                    }
+                                                    let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
+                                                    let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
+                                                    let near = abs(location.x - startX) < 6 || abs(location.x - endX) < 6
+                                                    if isNearLoopZoneEdge != near { isNearLoopZoneEdge = near }
+                                                case .ended:
+                                                    if isNearLoopZoneEdge { isNearLoopZoneEdge = false }
+                                                }
+                                            }
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        guard value.startLocation.x > 140 else { return }
+                                                        let startXPos = Double(value.startLocation.x - 140)
+
+                                                        // First tick of this drag: decide once whether it's grabbing
+                                                        // an existing zone's edge, moving its body, or starting a
+                                                        // brand new zone — checked against the drag's start point
+                                                        // only, never re-evaluated mid-drag (so crossing the other
+                                                        // edge or leaving the zone mid-drag doesn't change what's
+                                                        // being manipulated).
+                                                        if resizingLoopZoneEdge == nil, !isDraggingLoopZoneBody, rulerDragStartTime == nil,
+                                                           let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd {
+                                                            let startX = 140 + CGFloat(zoneStart / duree) * largeurTimeline
+                                                            let endX = 140 + CGFloat(zoneEnd / duree) * largeurTimeline
+                                                            if abs(value.startLocation.x - startX) < 6 {
+                                                                resizingLoopZoneEdge = .start
+                                                            } else if abs(value.startLocation.x - endX) < 6 {
+                                                                resizingLoopZoneEdge = .end
+                                                            } else {
+                                                                let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
+                                                                if startTime > zoneStart && startTime < zoneEnd {
+                                                                    isDraggingLoopZoneBody = true
+                                                                    loopZoneDragOriginalStart = zoneStart
+                                                                    loopZoneDragOriginalEnd = zoneEnd
+                                                                    loopZoneDragAnchorTime = startTime
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if let edge = resizingLoopZoneEdge {
+                                                            // Same reason as the lasso/paste cursors: onContinuousHover
+                                                            // stops firing once the mouse is captured by this active
+                                                            // drag, so reassert the cursor by hand for its duration.
+                                                            cursor(fromSymbol: "chevron.left.chevron.right").set()
+                                                            let xPos = Double(value.location.x - 140)
+                                                            var newTime = (xPos / Double(largeurTimeline)) * duree
+                                                            if NSEvent.modifierFlags.contains(.command),
+                                                               let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                newTime = snapped
+                                                            } else if magneticGridSnap,
+                                                                      let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                newTime = snapped
+                                                            }
+                                                            newTime = min(max(newTime, 0), duree)
+                                                            switch edge {
+                                                            case .start:
+                                                                loopZoneStart = min(newTime, (loopZoneEnd ?? newTime) - 0.01)
+                                                            case .end:
+                                                                loopZoneEnd = max(newTime, (loopZoneStart ?? newTime) + 0.01)
+                                                            }
+                                                            return
+                                                        }
+
+                                                        if isDraggingLoopZoneBody,
+                                                           let origStart = loopZoneDragOriginalStart,
+                                                           let origEnd = loopZoneDragOriginalEnd,
+                                                           let anchor = loopZoneDragAnchorTime {
+                                                            let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                            let delta = currentTime - anchor
+                                                            let zoneLength = origEnd - origStart
+                                                            var newStart = origStart + delta
+                                                            var newEnd = origEnd + delta
+
+                                                            // Snap the zone's start (not the cursor) to the nearest
+                                                            // marker/grid line — the whole zone jumps into place as
+                                                            // one piece, keeping its length exactly.
+                                                            let startXPos = (newStart / duree) * Double(largeurTimeline)
+                                                            if NSEvent.modifierFlags.contains(.command),
+                                                               let snapped = nearestSnapTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                let snapDelta = snapped - newStart
+                                                                newStart += snapDelta
+                                                                newEnd += snapDelta
+                                                            } else if magneticGridSnap,
+                                                                      let snapped = nearestGridTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                let snapDelta = snapped - newStart
+                                                                newStart += snapDelta
+                                                                newEnd += snapDelta
+                                                            }
+
+                                                            if newStart < 0 {
+                                                                newStart = 0
+                                                                newEnd = zoneLength
+                                                            }
+                                                            if newEnd > duree {
+                                                                newEnd = duree
+                                                                newStart = duree - zoneLength
+                                                            }
+                                                            loopZoneStart = newStart
+                                                            loopZoneEnd = newEnd
+                                                            return
+                                                        }
+
+                                                        let startTime = min(max((startXPos / Double(largeurTimeline)) * duree, 0), duree)
+                                                        let currentTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        rulerDragStartTime = startTime
+                                                        rulerDragCurrentTime = currentTime
+                                                    }
+                                                    .onEnded { value in
+                                                        defer {
+                                                            rulerDragStartTime = nil
+                                                            rulerDragCurrentTime = nil
+                                                            resizingLoopZoneEdge = nil
+                                                            isDraggingLoopZoneBody = false
+                                                            loopZoneDragOriginalStart = nil
+                                                            loopZoneDragOriginalEnd = nil
+                                                            loopZoneDragAnchorTime = nil
+                                                        }
+                                                        guard value.startLocation.x > 140 else { return }
+                                                        if resizingLoopZoneEdge != nil || isDraggingLoopZoneBody {
+                                                            // Already applied live in onChanged — nothing more to do.
+                                                            return
+                                                        }
+                                                        // A negligible drag is just a click on the ruler now that
+                                                        // moving the playhead lives in the strip above: Shift+click
+                                                        // erases the zone, a plain click does nothing.
+                                                        let dragDistance = abs(value.location.x - value.startLocation.x)
+                                                        if dragDistance < 3 {
+                                                            if NSEvent.modifierFlags.contains(.shift) {
+                                                                loopZoneStart = nil
+                                                                loopZoneEnd = nil
+                                                            }
+                                                            return
+                                                        }
+                                                        let startTime = min(max((Double(value.startLocation.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        let endTime = min(max((Double(value.location.x - 140) / Double(largeurTimeline)) * duree, 0), duree)
+                                                        loopZoneStart = min(startTime, endTime)
+                                                        loopZoneEnd = max(startTime, endTime)
+                                                        // A freshly drawn zone is active right away.
+                                                        enBoucle = true
+                                                    }
+                                            )
+                                            .simultaneousGesture(
+                                                TapGesture(count: 2).onEnded {
+                                                    // Double-click opens the precise editor — never conflicts with
+                                                    // the single-click-moves-the-playhead behavior above, since
+                                                    // .simultaneousGesture lets both coexist without either
+                                                    // blocking the other's recognition.
+                                                    guard loopZoneStart != nil, loopZoneEnd != nil else { return }
+                                                    loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
+                                                    loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
+                                                    showLoopZoneEditor = true
+                                                }
+                                            )
+                                            .overlay {
+                                                CursorOverlay(
+                                                    isActive: isNearLoopZoneEdge || resizingLoopZoneEdge != nil,
+                                                    symbolName: "chevron.left.chevron.right"
+                                                )
+                                                .allowsHitTesting(false)
                                             }
                                         Button(action: { tracksLocked.toggle() }) {
                                             Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
@@ -3208,8 +1559,17 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
-                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        Button(action: {
+                                                            guard !tracksLocked else { return }
+                                                            // The /markers track can't be duplicated (or deleted) —
+                                                            // only hidden by folding — so ⌥-hover here never switches
+                                                            // this button into duplicate mode; it always just clears.
+                                                            pistes[index].evenements.removeAll()
+                                                            lastSentEvents.removeAll()
+                                                        }) {
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .foregroundColor(.gray)
+                                                                .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
                                                         .help("Clear all points on this track")
@@ -3253,11 +1613,31 @@ struct ContentView: View {
                                                         .buttonStyle(.borderless)
                                                         .help(pistes[index].isMuted ? "Unmute track" : "Mute track")
 
-                                                        Button(action: { guard !tracksLocked else { return }; pistes[index].evenements.removeAll(); lastSentEvents.removeAll() }) {
-                                                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                                                        Button(action: {
+                                                            guard !tracksLocked else { return }
+                                                            if isOptionHeldForCursor && duplicateHoverTrackIndex == index {
+                                                                duplicateTrack(at: index)
+                                                            } else {
+                                                                pistes[index].evenements.removeAll()
+                                                                lastSentEvents.removeAll()
+                                                            }
+                                                        }) {
+                                                            // Fixed frame: swapping between the two SF Symbols (they have
+                                                            // slightly different intrinsic widths) must not nudge the
+                                                            // neighboring buttons in this row — only the icon inside
+                                                            // this fixed box changes, never the row's layout.
+                                                            // Color stays gray in both modes — only the symbol itself
+                                                            // changes (plus the tooltip) — so there's no color to pick
+                                                            // that has to fight the track's own color for contrast.
+                                                            Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
+                                                                .foregroundColor(.gray)
+                                                                .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
-                                                        .help("Clear all points on this track")
+                                                        .onHover { hovering in
+                                                            duplicateHoverTrackIndex = hovering ? index : (duplicateHoverTrackIndex == index ? nil : duplicateHoverTrackIndex)
+                                                        }
+                                                        .help((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
 
                                                         Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); lastSentEvents.removeAll() }) {
                                                             Image(systemName: "minus.circle.fill").foregroundColor(.red)
@@ -3284,17 +1664,28 @@ struct ContentView: View {
                                                 if pistes[index].type == .curve || pistes[index].type == .step {
                                                     VStack(spacing: 0) {
                                                         Spacer()
-                                                        DiagonalStripes(stripeWidth: 3, spacing: 3)
-                                                            .stroke(pistes[index].couleur, lineWidth: 3)
-                                                            .background(
-                                                                // Curve tracks are yellow, and yellow-on-lightened-yellow
-                                                                // was too low-contrast to read at this 4px height — so
-                                                                // their stripes sit on a DARKENED (brown) version of the
-                                                                // track color instead. The other types keep the lightened
-                                                                // background, which reads fine against their darker hues.
+                                                        DiagonalStripes(stripeWidth: 1.5, spacing: 1.5)
+                                                            .stroke(
+                                                                // Curve gets a fixed, more-orange-leaning yellow for
+                                                                // the stripes themselves (rather than the track's own
+                                                                // pure yellow) — background stays as-is below. Step
+                                                                // keeps the dynamic track color for its stripes.
                                                                 pistes[index].type == .curve
-                                                                    ? pistes[index].couleur.overlay(Color.black.opacity(0.55))
-                                                                    : pistes[index].couleur.overlay(Color.white.opacity(0.5))
+                                                                    ? Color(red: 1.0, green: 0.75, blue: 0.1)
+                                                                    : pistes[index].couleur,
+                                                                lineWidth: 1.5
+                                                            )
+                                                            .background(
+                                                                // Fixed background per type, independent of the track's
+                                                                // own color — both branches must be the same concrete
+                                                                // type (plain Color) or the compiler chokes trying to
+                                                                // type-check this ternary inside such a deeply nested
+                                                                // modifier chain. Curve gets a warm orange, step a
+                                                                // magenta/pink — user-picked to read clearly at this
+                                                                // 4px height regardless of the track's own color.
+                                                                pistes[index].type == .curve
+                                                                    ? Color(red: 1.0, green: 0.58, blue: 0.004)
+                                                                    : Color(red: 1.0, green: 0.196, blue: 0.988)
                                                             )
                                                             .frame(width: 140, height: 4)
                                                             .clipped()
@@ -3366,6 +1757,10 @@ struct ContentView: View {
                                                         .gesture(
                                                             DragGesture(minimumDistance: 0)
                                                                 .onChanged { value in
+                                                                    // ⇧⌥ is the lasso-selection gesture (handled
+                                                                    // elsewhere as a .simultaneousGesture on this same
+                                                                    // track) — never create a point for it.
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -3389,6 +1784,7 @@ struct ContentView: View {
                                                                     // should create a point.
                                                                     if NSEvent.modifierFlags.contains(.shift) { return }
                                                                     if NSEvent.modifierFlags.contains(.option) { return }
+                                                                    if isPasteModeActive { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -3404,6 +1800,7 @@ struct ContentView: View {
                                                                     // click on (or near) the curve line.
                                                                     let time = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                     if NSEvent.modifierFlags.contains(.shift),
+                                                                       !NSEvent.modifierFlags.contains(.option),
                                                                        let curveY = curveYPosition(forTime: time, trackIndex: index),
                                                                        abs(Double(value.location.y) - Double(curveY)) < 12 {
                                                                         toggleSegmentEnabled(forTime: time, trackIndex: index)
@@ -3439,7 +1836,7 @@ struct ContentView: View {
                                                                 // Direct, imperative cursor control tied to actual
                                                                 // mouse movement — no @State involved, so it works
                                                                 // regardless of SwiftUI's render cycle.
-                                                                if NSEvent.modifierFlags.contains(.shift) {
+                                                                if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
                                                                     applyShiftSegmentCursor(at: location, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                 }
                                                             case .ended:
@@ -3455,7 +1852,8 @@ struct ContentView: View {
                                                         .simultaneousGesture(
                                                             DragGesture(minimumDistance: 3)
                                                                 .onChanged { value in
-                                                                    guard NSEvent.modifierFlags.contains(.option) else { return }
+                                                                    guard NSEvent.modifierFlags.contains(.option),
+                                                                          !NSEvent.modifierFlags.contains(.shift) else { return }
                                                                     // onContinuousHover stops firing once a real drag begins
                                                                     // (the mouse is "captured" by the gesture), so the
                                                                     // CursorOverlay's isActive state would otherwise freeze
@@ -3504,7 +1902,7 @@ struct ContentView: View {
                                                     // Option held. allowsHitTesting(false) so it never intercepts
                                                     // clicks/drags — those stay on the Color.clear view above.
                                                     CursorOverlay(
-                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor,
+                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor && !isShiftHeldForCursor,
                                                         symbolName: "point.bottomleft.forward.to.point.topright.filled.scurvepath"
                                                     )
                                                     .frame(width: largeurTimeline, height: pistes[index].height)
@@ -3516,6 +1914,10 @@ struct ContentView: View {
                                                         .gesture(
                                                             DragGesture(minimumDistance: 0)
                                                                 .onChanged { value in
+                                                                    // ⇧⌥ is the lasso-selection gesture (handled
+                                                                    // elsewhere as a .simultaneousGesture on this same
+                                                                    // track) — never create a point for it.
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
                                                                     if creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
@@ -3614,7 +2016,7 @@ struct ContentView: View {
                                                         if index == 0 {
                                                             ZStack {
                                                                 Rectangle()
-                                                                    .fill(pistes[index].couleur)
+                                                    .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 6, height: 6)
 
                                                                 if showPointCoordinates {
@@ -3648,7 +2050,7 @@ struct ContentView: View {
                                                                 ZStack {
                                                                     Text("T")
                                                                         .font(.system(size: 11, weight: .bold))
-                                                                        .foregroundColor(pistes[index].couleur)
+                                                                        .foregroundColor(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
 
                                                                     if showPointCoordinates {
                                                                         Text(String(format: "%.2f", event.time) + "s")
@@ -3659,7 +2061,7 @@ struct ContentView: View {
                                                                 }
                                                             } else if pistes[index].type == .bang {
                                                                 Rectangle()
-                                                                    .fill(pistes[index].couleur)
+                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 8, height: 8)
                                                                     .rotationEffect(.degrees(45))
 
@@ -3679,17 +2081,17 @@ struct ContentView: View {
                                                                     if pistes[index].type == .step {
                                                                         if pistes[index].isGate {
                                                                             Rectangle()
-                                                                                .stroke(pistes[index].couleur, lineWidth: 2.5)
+                                                                            .stroke(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur, lineWidth: 2.5)
                                                                                 .frame(width: 10, height: 10)
                                                                                 .contentShape(Rectangle())
                                                                         } else {
                                                                             ZStack {
                                                                                 Rectangle()
-                                                                                    .fill(pistes[index].couleur)
+                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(45))
                                                                                 Rectangle()
-                                                                                    .fill(pistes[index].couleur)
+                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(-45))
                                                                             }
@@ -3698,7 +2100,7 @@ struct ContentView: View {
                                                                         }
                                                                     } else {
                                                                         Circle()
-                                                                            .fill(pistes[index].couleur)
+                                                            .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                             .frame(width: 12, height: 12)
                                                                     }
                                                                 }
@@ -3734,6 +2136,21 @@ struct ContentView: View {
                                                         DragGesture(minimumDistance: 5)
                                                             .onChanged { value in
                                                                 guard !tracksLocked else { return }
+                                                                // ⇧⌥ starting directly on top of a point means the
+                                                                // lasso started there — don't also move the point out
+                                                                // from under it via this gesture.
+                                                                guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
+
+                                                                // Dragging a point that's part of the current selection
+                                                                // moves the whole selection together, in X only — Y stays
+                                                                // put for every point but the one under the cursor.
+                                                                // Dragging any other point clears the selection and
+                                                                // falls back to the ordinary single-point behavior.
+                                                                let isGroupDrag = selectedPointIDs.contains(event.id)
+                                                                if !isGroupDrag && !selectedPointIDs.isEmpty {
+                                                                    selectedPointIDs.removeAll()
+                                                                }
+
                                                                 var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
                                                                 isHoveringPoint = true
 
@@ -3741,11 +2158,11 @@ struct ContentView: View {
                                                                 // Without Cmd, if "magnetic grid" is on, still snap onto
                                                                 // the nearest grid line alone (never a marker).
                                                                 let dragXPos = (newPosition / duree) * Double(largeurTimeline)
-                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
                                                                 isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
-                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline))
+                                                                isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id)
                                                                 if NSEvent.modifierFlags.contains(.command),
-                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
+                                                                   let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: event.id) {
                                                                     newPosition = snapTime
                                                                 } else if magneticGridSnap,
                                                                           let gridSnapTime = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
@@ -3753,8 +2170,56 @@ struct ContentView: View {
                                                                 }
                                                                 updatePointCursor()
 
-                                                                if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
-                                                                    pistes[index].evenements[eventIndex].time = min(max(newPosition, 0), duree)
+                                                                let clampedNewTime = min(max(newPosition, 0), duree)
+
+                                                                if isGroupDrag {
+                                                                    // Captured once, on the first tick — re-deriving from
+                                                                    // a moving baseline each frame would compound
+                                                                    // snapping/rounding error across the drag.
+                                                                    if groupDragBaseline.isEmpty {
+                                                                        groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                                                                            .filter { selectedPointIDs.contains($0.id) }
+                                                                            .map { ($0.id, $0.time) })
+                                                                        groupDragAnchorOriginalTime = groupDragBaseline[event.id]
+                                                                    }
+                                                                    guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
+                                                                    let delta = clampedNewTime - anchorOriginal
+                                                                    for (id, originalTime) in groupDragBaseline {
+                                                                        guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                                                                        pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), duree)
+                                                                    }
+
+                                                                    // Y moves too, but only where it means something.
+                                                                    if pistes[index].type == .curve || pistes[index].type == .step {
+                                                                        if groupDragYBaseline.isEmpty {
+                                                                            groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                                                                                .filter { selectedPointIDs.contains($0.id) }
+                                                                                .map { ($0.id, $0.y) })
+                                                                            groupDragAnchorOriginalY = groupDragYBaseline[event.id]
+                                                                        }
+                                                                        if let anchorOriginalY = groupDragAnchorOriginalY {
+                                                                            let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
+                                                                            let rawY = pistes[index].minAmplitude + normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude)
+                                                                            let rawYDelta = rawY - anchorOriginalY
+                                                                            // Group-preserving clamp: shrink the delta itself
+                                                                            // (rather than clamping each point separately)
+                                                                            // so the whole group stays in range without
+                                                                            // distorting the spacing between their values.
+                                                                            var minAllowedDelta = -Double.infinity
+                                                                            var maxAllowedDelta = Double.infinity
+                                                                            for (_, originalY) in groupDragYBaseline {
+                                                                                minAllowedDelta = max(minAllowedDelta, pistes[index].minAmplitude - originalY)
+                                                                                maxAllowedDelta = min(maxAllowedDelta, pistes[index].maxAmplitude - originalY)
+                                                                            }
+                                                                            let clampedYDelta = min(max(rawYDelta, minAllowedDelta), maxAllowedDelta)
+                                                                            for (id, originalY) in groupDragYBaseline {
+                                                                                guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                                                                                pistes[index].evenements[idx].y = gateSnappedY(originalY + clampedYDelta, forTrackIndex: index)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                } else if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
+                                                                    pistes[index].evenements[eventIndex].time = clampedNewTime
                                                                     if pistes[index].type == .curve || pistes[index].type == .step {
                                                                         let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
                                                                         let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
@@ -3765,15 +2230,23 @@ struct ContentView: View {
                                                             .onEnded { _ in
                                                                 pistes[index].evenements.sort()
                                                                 lastSentEvents.removeAll()
+                                                                groupDragBaseline.removeAll()
+                                                                groupDragAnchorOriginalTime = nil
+                                                                groupDragYBaseline.removeAll()
+                                                                groupDragAnchorOriginalY = nil
                                                             }
                                                     )
                                                     .onTapGesture(count: 1) {
                                                         guard !tracksLocked else { return }
-                                                        if NSEvent.modifierFlags.contains(.shift) {
+                                                        if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
                                                             if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == event.id }) {
                                                                 pistes[index].evenements.remove(at: eventIndex)
                                                                 lastSentEvents.removeAll()
                                                             }
+                                                        } else if !selectedPointIDs.isEmpty {
+                                                            // A plain click on a point (or anywhere else) clears
+                                                            // whatever the lasso had selected.
+                                                            selectedPointIDs.removeAll()
                                                         }
                                                     }
                                                     .onTapGesture(count: 2) {
@@ -3787,6 +2260,169 @@ struct ContentView: View {
                                             }
                                             .frame(width: largeurTimeline, height: rowHeight(for: pistes[index]))
                                             .clipped()
+                                            .overlay(alignment: .topLeading) {
+                                                // Visual feedback while dragging — only drawn on the track the
+                                                // lasso actually started on.
+                                                if lassoTrackIndex == index,
+                                                   let start = lassoStartLocation,
+                                                   let current = lassoCurrentLocation {
+                                                    let rect = CGRect(
+                                                        x: min(start.x, current.x),
+                                                        y: min(start.y, current.y),
+                                                        width: abs(current.x - start.x),
+                                                        height: abs(current.y - start.y)
+                                                    )
+                                                    Rectangle()
+                                                        .fill(Color.white.opacity(0.15))
+                                                        .overlay(Rectangle().stroke(Color.white, lineWidth: 1))
+                                                        .frame(width: rect.width, height: rect.height)
+                                                        .position(x: rect.midX, y: rect.midY)
+                                                        .allowsHitTesting(false)
+                                                }
+                                            }
+                                            // Idle-hover cursor for lasso-selection mode (⇧⌥ held, not yet
+                                            // dragging) — the imperative .set() call inside the drag gesture
+                                            // above takes over once the drag actually starts. Also doubles as
+                                            // the paste-mode cursor (red, no drag needed to trigger it).
+                                            .overlay {
+                                                CursorOverlay(
+                                                    isActive: (isShiftHeldForCursor && isOptionHeldForCursor && !tracksLocked) || isPasteModeActive,
+                                                    symbolName: isPasteModeActive && (isNearSnapZone || isNearGridSnapZone)
+                                                        ? "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left"
+                                                        : "dot.crosshair",
+                                                    color: isPasteModeActive ? .red : .black
+                                                )
+                                                .allowsHitTesting(false)
+                                            }
+                                            // While in paste mode, track snap proximity continuously (same
+                                            // candidates as a point drag) so the cursor reflects where a
+                                            // click-up would actually land, before the user even clicks.
+                                            .onContinuousHover { phase in
+                                                guard isPasteModeActive else { return }
+                                                switch phase {
+                                                case .active(let location):
+                                                    let xPos = Double(location.x)
+                                                    let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
+                                                        && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
+                                                    let willSnapToGrid = magneticGridSnap
+                                                        && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
+                                                    if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
+                                                    if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+                                                case .ended:
+                                                    if isNearSnapZone { isNearSnapZone = false }
+                                                    if isNearGridSnapZone { isNearGridSnapZone = false }
+                                                }
+                                            }
+                                            // ⌥⇧-drag lassos points on THIS track only — attached as
+                                            // .simultaneousGesture (not .gesture) so it never blocks the
+                                            // ordinary click-to-create-point / drag-to-move-point gestures
+                                            // underneath; it only actually does anything once both modifiers
+                                            // are held.
+                                            .simultaneousGesture(
+                                                DragGesture(minimumDistance: 3, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        guard !tracksLocked, !isPasteModeActive,
+                                                              NSEvent.modifierFlags.contains(.shift),
+                                                              NSEvent.modifierFlags.contains(.option) else { return }
+                                                        // onContinuousHover (used below for the idle-hover cursor)
+                                                        // stops firing once a real drag begins, so reassert the
+                                                        // cursor manually for the duration of the lasso drag itself
+                                                        // — same pattern as the curve-bend cursor.
+                                                        cursor(fromSymbol: "dot.crosshair").set()
+                                                        if lassoTrackIndex == nil {
+                                                            lassoTrackIndex = index
+                                                            lassoStartLocation = value.startLocation
+                                                        }
+                                                        guard lassoTrackIndex == index else { return }
+                                                        lassoCurrentLocation = value.location
+                                                    }
+                                                    .onEnded { value in
+                                                        guard lassoTrackIndex == index, let start = lassoStartLocation else {
+                                                            lassoTrackIndex = nil
+                                                            lassoStartLocation = nil
+                                                            lassoCurrentLocation = nil
+                                                            return
+                                                        }
+                                                        let rect = CGRect(
+                                                            x: min(start.x, value.location.x),
+                                                            y: min(start.y, value.location.y),
+                                                            width: abs(value.location.x - start.x),
+                                                            height: abs(value.location.y - start.y)
+                                                        )
+                                                        let trackHeight = rowHeight(for: pistes[index])
+                                                        var newSelection: Set<UUID> = []
+                                                        for event in pistes[index].evenements {
+                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let pointY: CGFloat
+                                                            if pistes[index].type == .curve || pistes[index].type == .step {
+                                                                let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
+                                                                let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
+                                                                pointY = curveMargin + (trackHeight - 2 * curveMargin) * (1 - normalizedY)
+                                                            } else {
+                                                                pointY = index == 0 ? 22 : 15
+                                                            }
+                                                            if rect.contains(CGPoint(x: xPos, y: pointY)) {
+                                                                newSelection.insert(event.id)
+                                                            }
+                                                        }
+                                                        selectedPointIDs = newSelection
+                                                        lassoTrackIndex = nil
+                                                        lassoStartLocation = nil
+                                                        lassoCurrentLocation = nil
+                                                    }
+                                            )
+                                            // Paste-mode click: minimumDistance 0 so a plain click and a
+                                            // click-drag both land here, using the release location either
+                                            // way — a plain click pastes right there, a click-drag pastes
+                                            // wherever it ended (with the same Cmd/grid snap as a point drag).
+                                            .simultaneousGesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                                                    .onChanged { value in
+                                                        // Same reason as the lasso's onChanged: the tracking-area-based
+                                                        // CursorOverlay stops driving the cursor once the mouse is
+                                                        // captured by an active drag, so keep the crosshair asserted
+                                                        // by hand for the whole mouse-down-to-up window — including
+                                                        // switching to the snap glyph as it comes into range.
+                                                        guard isPasteModeActive else { return }
+                                                        let xPos = Double(value.location.x)
+                                                        let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
+                                                            && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
+                                                        let willSnapToGrid = magneticGridSnap
+                                                            && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
+                                                        if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
+                                                        if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+                                                        if willSnapToMarker || willSnapToGrid {
+                                                            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .red).set()
+                                                        } else {
+                                                            cursor(fromSymbol: "dot.crosshair", color: .red).set()
+                                                        }
+                                                    }
+                                                    .onEnded { value in
+                                                        guard isPasteModeActive, pointClipboardTrackType != nil else { return }
+                                                        let xPos = Double(value.location.x)
+                                                        var anchorTime = (xPos / Double(largeurTimeline)) * duree
+                                                        if NSEvent.modifierFlags.contains(.command),
+                                                           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                            anchorTime = snapped
+                                                        } else if magneticGridSnap,
+                                                                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                                                            anchorTime = snapped
+                                                        }
+                                                        anchorTime = min(max(anchorTime, 0), duree)
+                                                        if pasteNeedsTypeChoice(trackIndex: index) {
+                                                            pendingPasteAnchorTime = anchorTime
+                                                            pendingPasteTrackIndex = index
+                                                            showDifferentTypePasteAlert = true
+                                                        } else if pasteNeedsRangeChoice(trackIndex: index) {
+                                                            pendingPasteAnchorTime = anchorTime
+                                                            pendingPasteTrackIndex = index
+                                                            showPasteScaleRangeAlert = true
+                                                        } else if pasteClipboard(at: anchorTime, trackIndex: index, scaleToRange: false) {
+                                                            lastPasteOffset = nil
+                                                            isPasteModeActive = false
+                                                        }
+                                                    }
+                                            )
                                         }
                                         .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
                                         .zIndex(reorderingIndex == index ? 1 : 0)
@@ -3834,6 +2470,33 @@ struct ContentView: View {
                                     }
                                 }
 
+                                // Moving the playhead by click lives here, in a thin strip right
+                                // above the ruler (roughly the height of the playhead triangle) —
+                                // not on the ruler itself, which is dedicated entirely to the loop
+                                // zone. Added BEFORE the triangle below so the triangle (added
+                                // later, on top in z-order) keeps first dibs on hit-testing over
+                                // its own small area — otherwise this band would swallow every
+                                // click/double-click meant for the triangle itself.
+                                // Same full-width + x>140 guard pattern as the ruler's own gesture
+                                // (rather than a narrower frame + .offset), since .offset doesn't
+                                // reliably shift a gesture's reported location the same way it
+                                // shifts the view visually — this proven pattern avoids that trap.
+                                DiagonalStripes(stripeWidth: 3, spacing: 3)
+                                    .stroke(Color.gray.opacity(0.5), lineWidth: 3)
+                                    .frame(height: 15)
+                                    .offset(y: -15)
+                                    .allowsHitTesting(false)
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .frame(height: 15)
+                                    .offset(y: -15)
+                                    .onTapGesture { location in
+                                        guard location.x > 140 else { return }
+                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * duree
+                                        position = min(max(clicked, 0), duree)
+                                        sendOSCMessagesForPosition(position)
+                                    }
+
                                 ZStack(alignment: .topLeading) {
                                     Rectangle().fill(Color.red).frame(width: 2, height: CGFloat(totalHeight))
                                     Image(systemName: "triangle.fill")
@@ -3842,6 +2505,15 @@ struct ContentView: View {
                                         .rotationEffect(.degrees(180))
                                         .offset(x: -6, y: -12)
                                 }
+                                // .offset() shifts the triangle's RENDERED position but not this
+                                // ZStack's own hit-testable bounds, which stay anchored to the
+                                // thin 2pt-wide line — so without this, dragging only worked from
+                                // the line itself, never from the triangle that visually pokes out
+                                // above and to the side of it. An explicit Path-based content
+                                // shape doesn't affect layout size/position (only which region
+                                // responds to gestures), so the existing offset/coordinate math
+                                // below is untouched.
+                                .contentShape(Path(CGRect(x: -8, y: -14, width: 16, height: CGFloat(totalHeight) + 14)))
                                 .offset(x: CGFloat(position / duree) * largeurTimeline + 140)
                                 .gesture(
                                     DragGesture(minimumDistance: 0)
@@ -3861,15 +2533,13 @@ struct ContentView: View {
                                 )
                                 .simultaneousGesture(
                                     TapGesture(count: 2).onEnded {
-                                        // Same "Go to time" dialog the Play menu command opens —
-                                        // one keyboard-driven way to enter a position, whether
-                                        // triggered from the menu or straight off the handle.
                                         // simultaneousGesture (not .onTapGesture): the drag
                                         // above uses minimumDistance 0, which would otherwise
                                         // win exclusive recognition and swallow every tap
                                         // before a double-tap could ever be detected.
                                         goToTimeString = formattedDuration(position)
-                                        showGoToTimeDialog = true
+                                        goToMarkerNameString = ""
+                                        showPlayheadPositionChoice = true
                                     }
                                 )
                                 .onHover { isHovering in
@@ -3961,8 +2631,11 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
             openPDFWindow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowModifierKeysHelp)) { _ in
+            openModifierKeysHelpWindow()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPlayPause)) { _ in
-            enLecture.toggle()
+            togglePlayback()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierStop)) { _ in
             enLecture = false
@@ -3997,6 +2670,15 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToPreviousMarker)) { _ in
             goToPreviousMarker()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierEditLoopZone)) { _ in
+            loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
+            loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
+            showLoopZoneEditor = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearLoopZone)) { _ in
+            loopZoneStart = nil
+            loopZoneEnd = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarkerByName)) { _ in
             goToMarkerNameString = ""
@@ -4036,6 +2718,48 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteAllTracks)) { _ in
             showDeleteAllTracksConfirmation = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteSelectedPoints)) { _ in
+            deleteSelectedPoints()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierCut)) { _ in
+            // The menu's Cut item: cut = copy the point selection then
+            // delete it (same guard as Copy/Paste — only when there's a
+            // selection and we're not mid-edit in some other text field);
+            // otherwise fall back to the standard system text cut.
+            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                copySelectedPoints()
+                deleteSelectedPoints()
+            } else {
+                NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierCopy)) { _ in
+            // The menu's Copy item: copy the point selection if there is
+            // one (and we're not mid-edit in some other text field);
+            // otherwise fall back to the standard system text copy.
+            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                copySelectedPoints()
+            } else {
+                NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierPaste)) { _ in
+            // The menu's Paste item: enter point paste mode if the point
+            // clipboard has something (and we're not mid-edit elsewhere);
+            // otherwise fall back to the standard system text paste.
+            if !pointClipboard.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                isPasteModeActive = true
+            } else {
+                NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDuplicateSelection)) { _ in
+            // Silently does nothing if there's no offset to repeat yet
+            // (no clipboard, or no paste since the last copy) — same as
+            // pressing ⌘D itself in that situation.
+            guard !(NSApp.keyWindow?.firstResponder is NSTextView) else { return }
+            duplicateSelectionWithSameOffset()
+        }
 
         let withAlerts = withReceives
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
@@ -4057,6 +2781,97 @@ struct ContentView: View {
             }
         } message: {
             Text("This will delete every track except /markers. This can't be undone.")
+        }
+        .sheet(isPresented: $showPlayheadPositionChoice) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Go to Position")
+                    .font(.headline)
+
+                TextField("mm:ss", text: $goToTimeString)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($playheadPositionFocusedField, equals: .time)
+                    .onSubmit { goToChosenPlayheadPosition() }
+                    .disabled(!goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                TextField("Marker name", text: $goToMarkerNameString)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($playheadPositionFocusedField, equals: .marker)
+                    .onSubmit { goToChosenPlayheadPosition() }
+                    .onChange(of: goToMarkerNameString) { _, _ in
+                        playheadMarkerNotFound = false
+                    }
+                    .disabled(goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              && goToTimeString != goToTimeInitialValue)
+                if playheadMarkerNotFound {
+                    Text("No marker with that name was found.")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        showPlayheadPositionChoice = false
+                    }
+                    .keyboardShortcut(.escape)
+                    Button("Go") {
+                        goToChosenPlayheadPosition()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 300)
+            .onAppear {
+                playheadPositionFocusedField = .time
+                playheadMarkerNotFound = false
+                goToTimeInitialValue = goToTimeString
+            }
+        }
+        .sheet(isPresented: $showLoopZoneEditor) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Edit Loop Zone")
+                    .font(.headline)
+
+                HStack {
+                    Text("Start")
+                        .frame(width: 50, alignment: .trailing)
+                        .foregroundColor(.secondary)
+                    TextField("mm:ss", text: $loopZoneEditStartString)
+                        .textFieldStyle(.roundedBorder)
+                }
+                HStack {
+                    Text("End")
+                        .frame(width: 50, alignment: .trailing)
+                        .foregroundColor(.secondary)
+                    TextField("mm:ss", text: $loopZoneEditEndString)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) {
+                        showLoopZoneEditor = false
+                    }
+                    .keyboardShortcut(.escape)
+                    Button("Apply") {
+                        if let s = parseDuration(loopZoneEditStartString),
+                           let e = parseDuration(loopZoneEditEndString) {
+                            let clampedS = min(max(s, 0), duree)
+                            let clampedE = min(max(e, 0), duree)
+                            loopZoneStart = min(clampedS, clampedE)
+                            loopZoneEnd = max(clampedS, clampedE)
+                        }
+                        showLoopZoneEditor = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 280)
         }
         .alert("Go to time", isPresented: $showGoToTimeDialog) {
             TextField("mm:ss", text: $goToTimeString)
@@ -4080,6 +2895,53 @@ struct ContentView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("No marker with that name was found.")
+        }
+        .alert("Different track type", isPresented: $showDifferentTypePasteAlert) {
+            Button("Adapt (Scale to Fit)") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                    lastPasteOffset = nil
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                // Dismiss only — stays in paste mode so the user can try a
+                // different spot, or press Escape to back out entirely.
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+        } message: {
+            Text("The copied points come from a different track type. Adapt them to this track (converting labels, rescaling values), or cancel?")
+        }
+        .alert("Different amplitude range", isPresented: $showPasteScaleRangeAlert) {
+            Button("Scale to Fit") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
+                    lastPasteOffset = nil
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Keep As-Is") {
+                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                    _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: false)
+                    lastPasteOffset = nil
+                }
+                isPasteModeActive = false
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                // Dismiss only — stays in paste mode so the user can try a
+                // different spot, or press Escape to back out entirely.
+                pendingPasteAnchorTime = nil
+                pendingPasteTrackIndex = nil
+            }
+        } message: {
+            Text("The copied points come from a track with a different amplitude range. Scale their values to fit this track's range, or paste them unchanged (clamped if out of range)?")
         }
 
         let withAlerts2 = withAlerts
@@ -4178,7 +3040,7 @@ struct ContentView: View {
     // deeply nested inline view trees can time out the type-checker;
     // pulling each sheet's content into its own typed computed property
     // gives it a much smaller, independent expression to check.
-    private var autofillRectangleSheet: some View {
+    var autofillRectangleSheet: some View {
         let isGateTrack = autofillTrackIndex.map { pistes[$0].isGate } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Rectangle")
@@ -4233,7 +3095,7 @@ struct ContentView: View {
         .frame(width: 280)
     }
 
-    private var autofillWaveSheet: some View {
+    var autofillWaveSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Curve")
                 .font(.headline)
@@ -4295,7 +3157,7 @@ struct ContentView: View {
     // Point editor. A sheet rather than an alert, because alerts on macOS can
     // only host single-line TextFields — the multi-line comment box needs a
     // TextEditor, which an alert won't render.
-    private var editPointSheet: some View {
+    var editPointSheet: some View {
         let trackIndex = pointAEditer?.trackIndex ?? 0
         let isMarkersTrack = trackIndex == 0
         let isMessageTrack = pistes.indices.contains(trackIndex) && pistes[trackIndex].type == .message
@@ -4359,7 +3221,7 @@ struct ContentView: View {
         .frame(width: 360)
     }
 
-    private var autofillBangSheet: some View {
+    var autofillBangSheet: some View {
         let isMarkersTrack = bangTrackIndex == 0
         let isMessageTrack = bangTrackIndex.map { pistes[$0].type == .message } ?? false
         let title = isMarkersTrack ? "Autofill Markers" : (isMessageTrack ? "Autofill Message" : "Autofill Bang")
@@ -4405,7 +3267,7 @@ struct ContentView: View {
         .frame(width: 280)
     }
 
-    private var gridSettingsSheet: some View {
+    var gridSettingsSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Grid")
                 .font(.headline)
@@ -4457,7 +3319,7 @@ struct ContentView: View {
     // min/max fields (Float behavior). Step tracks additionally get a
     // Float/Gate toggle: Gate locks the range to 0...1 (boolean on/off) and
     // hides the min/max fields entirely, since there's nothing to configure.
-    private var rangeEditorSheet: some View {
+    var rangeEditorSheet: some View {
         let isStepTrack = amplitudeEditorTrackIndex.map { pistes[$0].type == .step } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Range")
@@ -4554,88 +3416,6 @@ struct ContentView: View {
     }
 }
 
-// Small upward-pointing triangle used as the "tail" of the duration tooltip
-// bubble, so the bubble visually points up at the drag handle above it.
-struct UpPointingTriangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
-}
-
-// Tracks whether the outgoing-OSC-messages window is actually still open,
-// independent of NSWindow.isVisible (which can lag/misreport around
-// close()/showWindow() calls) — explicit state set via this delegate is
-// more reliable for the Open/Close toggle behavior.
-class OSCWindowCloseDelegate: NSObject, NSWindowDelegate {
-    var onClose: (() -> Void)?
-    // When set, this window's Undo/Redo (Cmd-Z / Cmd-Shift-Z) operate on this
-    // shared manager instead of the empty, separate one AppKit would create
-    // for the window by default — lets a secondary window (e.g. Points List)
-    // share the main window's undo history rather than silently having its
-    // own, unused one.
-    var sharedUndoManager: UndoManager?
-
-    func windowWillClose(_ notification: Notification) {
-        onClose?()
-    }
-
-    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
-        sharedUndoManager
-    }
-}
-
-// Diagonal hazard-stripe pattern, used for the track resize handles at the
-// bottom of curve/step headers. Draws a set of parallel 45° lines; stroking
-// this shape over a colored background gives the classic striped look.
-// The path is drawn wider than the frame (and clipped) so the slanted lines
-// reach the edges cleanly instead of leaving triangular gaps at the corners.
-struct DiagonalStripes: Shape {
-    var stripeWidth: CGFloat = 4
-    var spacing: CGFloat = 4
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let step = stripeWidth + spacing
-        // Start far enough left that the slanted lines still cover the top-left
-        // corner, and run past the right edge for the same reason.
-        var x = -rect.height
-        while x < rect.width + rect.height {
-            path.move(to: CGPoint(x: x, y: rect.maxY))
-            path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
-            x += step
-        }
-        return path
-    }
-}
-
-struct Polygon: Shape {
-    let sides: Int
-    let size: CGFloat
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let radius = size / 2
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let angle = (2 * .pi) / CGFloat(sides)
-        for i in 0..<sides {
-            let point = CGPoint(
-                x: center.x + radius * cos(angle * CGFloat(i) - .pi / 2),
-                y: center.y + radius * sin(angle * CGFloat(i) - .pi / 2)
-            )
-            if i == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-        path.closeSubpath()
-        return path
-    }
-}
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {

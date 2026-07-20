@@ -92,6 +92,41 @@ struct OSCcourierApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
+            CommandGroup(replacing: .pasteboard) {
+                // Routed through the standard AppKit responder chain (not a
+                // custom closure) so Cut/Copy/Paste keep working normally
+                // inside every text field in the app (renaming a track,
+                // Settings fields...) exactly as the default menu items did.
+                Button("Cut") {
+                    NotificationCenter.default.post(name: .OSCcourierCut, object: nil)
+                }
+                .keyboardShortcut("x", modifiers: .command)
+
+                Button("Copy") {
+                    NotificationCenter.default.post(name: .OSCcourierCopy, object: nil)
+                }
+                .keyboardShortcut("c", modifiers: .command)
+
+                Button("Paste") {
+                    NotificationCenter.default.post(name: .OSCcourierPaste, object: nil)
+                }
+                .keyboardShortcut("v", modifiers: .command)
+
+                Button("Duplicate") {
+                    NotificationCenter.default.post(name: .OSCcourierDuplicateSelection, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
+                Divider()
+
+                // No "Select All" here — deliberately omitted, since this
+                // app has no notion of "select all" outside the lasso.
+                Button("Delete Selection") {
+                    NotificationCenter.default.post(name: .OSCcourierDeleteSelectedPoints, object: nil)
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+            }
+
             CommandGroup(replacing: .saveItem) {
                 Button("Save") {
                     NotificationCenter.default.post(name: .OSCcourierSave, object: nil)
@@ -151,6 +186,16 @@ struct OSCcourierApp: App {
                     NotificationCenter.default.post(name: .OSCcourierGoToPreviousMarker, object: nil)
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
+
+                Divider()
+
+                Button("Edit Loop Zone…") {
+                    NotificationCenter.default.post(name: .OSCcourierEditLoopZone, object: nil)
+                }
+
+                Button("Clear Loop Zone") {
+                    NotificationCenter.default.post(name: .OSCcourierClearLoopZone, object: nil)
+                }
             }
 
             // CommandGroup(after: .toolbar) inserts these items into macOS's
@@ -204,7 +249,7 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("m", modifiers: [])
 
-                Button("Points List") {
+                Button("Point List") {
                     NotificationCenter.default.post(name: .OSCcourierShowPointList, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: [])
@@ -249,6 +294,10 @@ struct OSCcourierApp: App {
                     NotificationCenter.default.post(name: .OSCcourierShowHelp, object: nil)
                 }
                 .keyboardShortcut("?", modifiers: .command)
+
+                Button("Modifier Keys") {
+                    NotificationCenter.default.post(name: .OSCcourierShowModifierKeysHelp, object: nil)
+                }
             }
         }
 
