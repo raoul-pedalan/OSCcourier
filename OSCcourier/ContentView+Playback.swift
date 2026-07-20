@@ -25,6 +25,15 @@ extension ContentView {
     }
 
     func sendOSCMessagesForPosition(_ pos: Double) {
+        // Called whenever the playhead jumps to an arbitrary position
+        // (click, drag, Go to Time/Marker, next/previous marker, the OSC
+        // /goto command, a loop zone's start...) — never from the
+        // continuous per-tick playback loop, which tracks its own
+        // crossings separately. Clearing here means replaying back over
+        // points already sent earlier (e.g. play, pause, drag the playhead
+        // back, play again) re-sends them instead of silently treating
+        // them as "already sent" from a previous, unrelated pass.
+        lastSentEvents.removeAll()
         for piste in pistes where !piste.isMuted {
             if piste.type == .bang {
                 let tol = 0.01
