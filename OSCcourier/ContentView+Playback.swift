@@ -287,6 +287,22 @@ extension ContentView {
             loopZoneStart = min(clampedA, clampedB)
             loopZoneEnd = max(clampedA, clampedB)
             enBoucle = true
+        case "mute":
+            // First argument: the track's name (matched exactly first, then
+            // case-insensitively as a fallback — same leniency as marker
+            // lookup). Second argument, if present, sets the state
+            // explicitly (0/1, any nonzero counts as on); omit it to just
+            // toggle, matching /loop's own convention.
+            guard case .string(let trackName)? = args.first else { break }
+            let trimmedName = trackName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let idx = pistes.firstIndex(where: { $0.nom == trimmedName })
+                ?? pistes.firstIndex(where: { $0.nom.caseInsensitiveCompare(trimmedName) == .orderedSame })
+            else { break }
+            if args.count >= 2, let stateValue = numericOSCValue(args[1]) {
+                pistes[idx].isMuted = stateValue != 0
+            } else {
+                pistes[idx].isMuted.toggle()
+            }
         default:
             break
         }
