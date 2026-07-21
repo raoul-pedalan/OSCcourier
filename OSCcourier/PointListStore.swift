@@ -65,4 +65,9 @@ class PointListStore: ObservableObject {
     // ContentView applies it, with the same clamping/snapping/quantization the
     // timeline uses. Keeps a single source of truth.
     var onCommitEdit: ((PointEdit) -> Void)?
+    // The window never mutates the timeline itself — it just describes
+    // which points to remove, and ContentView does the actual removal
+    // (across whichever tracks they happen to live on, since this list can
+    // span every track at once).
+    var onDeletePoints: (([UUID]) -> Void)?
 }

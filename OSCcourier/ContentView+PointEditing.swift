@@ -31,6 +31,20 @@ extension ContentView {
         pointListStore.trackNames = pistes.map { $0.nom }
     }
 
+    // Unlike deleteSelectedPoints (the lasso's version, scoped to a single
+    // track since a lasso never spans more than one), the Point List shows
+    // every track's points flattened into one list — so a batch of ids
+    // selected there can legitimately span several tracks at once, and
+    // every track needs checking.
+    func deleteSpecificPoints(ids: [UUID]) {
+        guard !tracksLocked, !ids.isEmpty else { return }
+        let idSet = Set(ids)
+        for i in pistes.indices {
+            pistes[i].evenements.removeAll { idSet.contains($0.id) }
+        }
+        lastSentEvents.removeAll()
+    }
+
     func applyPointEdit(_ edit: PointEdit) {
         guard !tracksLocked else { return }
         for trackIndex in pistes.indices {
@@ -402,6 +416,9 @@ extension ContentView {
         // the list window can hand its edits back to us.
         pointListStore.onCommitEdit = { edit in
             applyPointEdit(edit)
+        }
+        pointListStore.onDeletePoints = { ids in
+            deleteSpecificPoints(ids: ids)
         }
 
         if let controller = pointListWindowController {

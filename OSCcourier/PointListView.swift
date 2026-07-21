@@ -5,7 +5,7 @@ struct PointListView: View {
     // Observed (not a plain array) so edits made on the timeline while this
     // window is open show up immediately.
     @ObservedObject var store: PointListStore
-    @State private var selection: UUID?
+    @State private var selection: Set<UUID> = []
     // nil = show every track. Otherwise, the name of the single track to show.
     @State private var trackFilter: String?
 
@@ -94,14 +94,22 @@ struct PointListView: View {
                     }
                     .width(min: 120, ideal: 260)
                 }
-                .contextMenu(forSelectionType: UUID.self) { _ in
-                    Button("Edit Point…") { beginEditSelected() }
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    if ids.count == 1 {
+                        Button("Edit Point…") { beginEditSelected() }
+                    }
+                    Button("Delete \(ids.count == 1 ? "Point" : "\(ids.count) Points")", role: .destructive) {
+                        deleteSelected(ids)
+                    }
                 } primaryAction: { ids in
                     // Table's own double-click hook: reliable, unlike tap
                     // gestures attached to individual cells.
                     if let id = ids.first, let row = store.rows.first(where: { $0.id == id }) {
                         beginEdit(row)
                     }
+                }
+                .onDeleteCommand {
+                    deleteSelected(selection)
                 }
 
                 Divider()
@@ -112,7 +120,9 @@ struct PointListView: View {
                         .foregroundColor(.secondary)
                     Spacer()
                     Button("Edit Point…") { beginEditSelected() }
-                        .disabled(selection == nil)
+                        .disabled(selection.count != 1)
+                    Button("Delete", role: .destructive) { deleteSelected(selection) }
+                        .disabled(selection.isEmpty)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -213,8 +223,15 @@ struct PointListView: View {
     }
 
     private func beginEditSelected() {
-        guard let id = selection, let row = store.rows.first(where: { $0.id == id }) else { return }
+        guard selection.count == 1, let id = selection.first,
+              let row = store.rows.first(where: { $0.id == id }) else { return }
         beginEdit(row)
+    }
+
+    private func deleteSelected(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        store.onDeletePoints?(Array(ids))
+        selection.removeAll()
     }
 
     private func beginEdit(_ row: PointListRow) {
