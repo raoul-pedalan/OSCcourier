@@ -12,6 +12,14 @@ extension ContentView {
             focusedField = nil
         }
 
+        // A window opened specifically to load a recent file (see
+        // OSCcourierApp's "Open Recent" handling) — cleared right after
+        // reading it, so a later, ordinary window doesn't load it again.
+        if let url = PendingFileLoad.url {
+            PendingFileLoad.url = nil
+            loadProject(from: url)
+        }
+
         dureeText = formattedDuration(duree)
 
         // Incoming OSC messages control transport from the outside.

@@ -64,6 +64,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// Holds a file to load for the next window that appears, when "Open
+// Recent" is used while no window currently exists to receive a direct
+// notification. Set right before requesting a new window, consumed (and
+// cleared) by that window's ContentView as soon as it appears — a plain
+// shared variable instead of passing data through the Scene/WindowGroup
+// system, since there's only ever one file in transit at a time.
+enum PendingFileLoad {
+    static var url: URL?
+}
+
 @main
 
 struct OSCcourierApp: App {
@@ -81,9 +91,37 @@ struct OSCcourierApp: App {
     // Shared with ContentView via the same @AppStorage key — updated there
     // on every save/load, read here to build the Open Recent submenu.
     @AppStorage("recentFilePaths") private var recentFilePathsData: String = ""
+    @Environment(\.openWindow) private var openWindow
+
+    // Recent-file clicks (and anything similar in the future) need to know
+    // whether there's an actual ContentView window to receive the load
+    // notification, or whether one needs to be (re)created first — closing
+    // the last window doesn't quit the app, but it does mean nothing is
+    // listening for that notification anymore. Distinguished from our own
+    // secondary windows (Point List, OSC Messages, etc.) by their known
+    // fixed titles, since none of them should count as "the main window."
+    private var isMainWindowOpen: Bool {
+        let auxiliaryTitles: Set<String> = ["Point List", "OSC Messages", "Modifier Keys", "Help"]
+        return NSApp.windows.contains { window in
+            window.isVisible && !auxiliaryTitles.contains(window.title)
+        }
+    }
+
+    private func openRecentFile(at path: String) {
+        let url = URL(fileURLWithPath: path)
+        if isMainWindowOpen {
+            NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: url)
+        } else {
+            // No window currently exists yet, so there's nothing listening
+            // for a notification — stash the URL where a freshly-created
+            // ContentView will find and consume it as soon as it appears.
+            PendingFileLoad.url = url
+            openWindow(id: "main")
+        }
+    }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .edgesIgnoringSafeArea(.top)
                 // Appearance is applied app-wide via NSApp.appearance (see
@@ -153,7 +191,7 @@ struct OSCcourierApp: App {
                     } else {
                         ForEach(recentPaths, id: \.self) { path in
                             Button(URL(fileURLWithPath: path).lastPathComponent) {
-                                NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: URL(fileURLWithPath: path))
+                                openRecentFile(at: path)
                             }
                         }
                         Divider()
