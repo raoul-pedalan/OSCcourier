@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Shared appearance setting: "Auto" follows the system, "Light"/"Dark" force
 // a specific scheme. Backed by a plain String @AppStorage (rather than a
@@ -120,6 +121,26 @@ struct OSCcourierApp: App {
         }
     }
 
+    // "Load…" used to just post a notification for ContentView to show its
+    // own NSOpenPanel — which had exactly the same problem as Open Recent:
+    // nothing listens when there's no window. Showing the panel directly
+    // from here (NSOpenPanel doesn't need a ContentView to run) and then
+    // routing the chosen URL through the same isMainWindowOpen /
+    // PendingFileLoad path as Open Recent fixes both at once.
+    private func loadFileFromMenu() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if isMainWindowOpen {
+            NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: url)
+        } else {
+            PendingFileLoad.url = url
+            openWindow(id: "main")
+        }
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView()
@@ -180,7 +201,7 @@ struct OSCcourierApp: App {
                 .keyboardShortcut("s", modifiers: [.command, .shift])
 
                 Button("Load…") {
-                    NotificationCenter.default.post(name: .OSCcourierLoad, object: nil)
+                    loadFileFromMenu()
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
