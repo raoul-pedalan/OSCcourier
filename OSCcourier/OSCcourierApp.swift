@@ -113,9 +113,12 @@ struct OSCcourierApp: App {
         if isMainWindowOpen {
             NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: url)
         } else {
-            // No window currently exists yet, so there's nothing listening
-            // for a notification — stash the URL where a freshly-created
-            // ContentView will find and consume it as soon as it appears.
+            // With zero visible windows, the app may no longer be the
+            // active/frontmost application — and some AppKit actions
+            // (opening a new window among them) can be silently dropped
+            // until it's explicitly reactivated. Running from Xcode masks
+            // this, since the debugger keeps the app active throughout.
+            NSApp.activate(ignoringOtherApps: true)
             PendingFileLoad.url = url
             openWindow(id: "main")
         }
@@ -128,6 +131,13 @@ struct OSCcourierApp: App {
     // routing the chosen URL through the same isMainWindowOpen /
     // PendingFileLoad path as Open Recent fixes both at once.
     private func loadFileFromMenu() {
+        if !isMainWindowOpen {
+            // Same reactivation as openRecentFile — needed here too, since
+            // NSOpenPanel itself can fail to appear at all while the app
+            // isn't active, which is exactly what was observed: nothing
+            // happened at all, not even the panel showing up.
+            NSApp.activate(ignoringOtherApps: true)
+        }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
