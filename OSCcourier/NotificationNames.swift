@@ -6,6 +6,7 @@ extension Notification.Name {
     static let OSCcourierSave = Notification.Name("OSCcourierSave")
     static let OSCcourierSaveAs = Notification.Name("OSCcourierSaveAs")
     static let OSCcourierLoad = Notification.Name("OSCcourierLoad")
+    static let OSCcourierLoadRecentFile = Notification.Name("OSCcourierLoadRecentFile")
     static let OSCcourierShowHelp = Notification.Name("OSCcourierShowHelp")
     static let OSCcourierShowModifierKeysHelp = Notification.Name("OSCcourierShowModifierKeysHelp")
     static let OSCcourierPlayPause = Notification.Name("OSCcourierPlayPause")

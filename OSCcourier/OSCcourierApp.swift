@@ -78,6 +78,9 @@ struct OSCcourierApp: App {
     @AppStorage("showCommandBar") private var showCommandBar: Bool = true
     @AppStorage("tracksLocked") private var tracksLocked: Bool = false
     @AppStorage("enBoucle") private var enBoucle: Bool = false
+    // Shared with ContentView via the same @AppStorage key — updated there
+    // on every save/load, read here to build the Open Recent submenu.
+    @AppStorage("recentFilePaths") private var recentFilePathsData: String = ""
 
     var body: some Scene {
         WindowGroup {
@@ -142,6 +145,23 @@ struct OSCcourierApp: App {
                     NotificationCenter.default.post(name: .OSCcourierLoad, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Menu("Open Recent") {
+                    let recentPaths = recentFilePathsData.split(separator: "\n").map(String.init)
+                    if recentPaths.isEmpty {
+                        Text("No Recent Files")
+                    } else {
+                        ForEach(recentPaths, id: \.self) { path in
+                            Button(URL(fileURLWithPath: path).lastPathComponent) {
+                                NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: URL(fileURLWithPath: path))
+                            }
+                        }
+                        Divider()
+                        Button("Clear Menu") {
+                            recentFilePathsData = ""
+                        }
+                    }
+                }
 
                 Divider()
 

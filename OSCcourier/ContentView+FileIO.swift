@@ -17,6 +17,7 @@ extension ContentView {
 
         if let url = savedFileURL {
             try? jsonData.write(to: url)
+            addToRecentFiles(url)
         } else {
             promptAndSave(jsonData)
         }
@@ -35,6 +36,7 @@ extension ContentView {
         if panel.runModal() == .OK, let url = panel.url {
             savedFileURL = url
             try? jsonData.write(to: url)
+            addToRecentFiles(url)
         }
     }
 
@@ -43,8 +45,14 @@ extension ContentView {
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let jsonData = try? Data(contentsOf: url),
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadProject(from: url)
+    }
+
+    // Shared by the "Load…" panel above and by clicking an entry in the
+    // File > Open Recent submenu — both just need a URL to load from.
+    func loadProject(from url: URL) {
+        guard let jsonData = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
 
         enLecture = false
@@ -57,6 +65,24 @@ extension ContentView {
         oscManager.setupOSCConnection()
         pistes = decoded.pistes
         savedFileURL = url // further saves overwrite the file we just loaded
+        addToRecentFiles(url)
+    }
+
+    // Recent files are shared with OSCcourierApp via the same @AppStorage
+    // key, so the "Open Recent" submenu updates reactively without any
+    // NotificationCenter plumbing for the list itself — only the click
+    // action (which needs to load into THIS window) goes through a
+    // notification. Stored as newline-separated POSIX paths (not full
+    // URLs) since that's simple to persist as a single String value.
+    func addToRecentFiles(_ url: URL) {
+        var paths = recentFilePathsData.split(separator: "\n").map(String.init)
+        let path = url.path
+        paths.removeAll { $0 == path }
+        paths.insert(path, at: 0)
+        if paths.count > 10 {
+            paths = Array(paths.prefix(10))
+        }
+        recentFilePathsData = paths.joined(separator: "\n")
     }
 
     func openPDFWindow() {
@@ -64,7 +90,7 @@ extension ContentView {
             pdfWindowController?.showWindow(nil)
             return
         }
-        guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
+        guard let pdfURL = Bundle.main.url(forResource: "help", withExtension: "pdf") else { return }
         let document = PDFDocument(url: pdfURL)
         let pdfView = PDFView()
         pdfView.document = document

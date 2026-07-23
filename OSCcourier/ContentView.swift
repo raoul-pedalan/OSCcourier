@@ -219,6 +219,9 @@ struct ContentView: View {
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
     @State var savedFileURL: URL?
+    // Shared with OSCcourierApp via the same @AppStorage key, so its "Open
+    // Recent" submenu updates reactively whenever this list changes here.
+    @AppStorage("recentFilePaths") var recentFilePathsData: String = ""
     // Managing focus explicitly (defaulting to nil) stops macOS from
     // automatically giving keyboard focus to the first text field at launch.
     enum ToolbarField: Hashable {
@@ -2245,6 +2248,10 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierLoad)) { _ in
             loadProject()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierLoadRecentFile)) { notification in
+            guard let url = notification.object as? URL else { return }
+            loadProject(from: url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
             openPDFWindow()
