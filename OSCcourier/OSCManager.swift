@@ -69,9 +69,40 @@ class OSCManager: ObservableObject {
         }
         serverAddress.sin_addr = inAddr
 
-        let addressData = padTo4(Data((message + "\0").utf8))
-        let typeTagData = padTo4(Data(",\0".utf8))
-        let data = addressData + typeTagData
+        // `message` arrives as "/address value" (or just "/address" for a
+        // bare trigger like a bang). Split it so the OSC address pattern and
+        // the argument are encoded as separate, properly-typed OSC fields —
+        // sending the whole string as the "address" with an empty type tag
+        // (the old behavior) produces a malformed packet that lenient
+        // receivers like Max tolerate but strict ones (e.g. Monitor OSC)
+        // silently reject.
+        let oscAddress: String
+        let argument: String?
+        if let spaceIdx = message.firstIndex(of: " ") {
+            oscAddress = String(message[message.startIndex..<spaceIdx])
+            argument = String(message[message.index(after: spaceIdx)...])
+        } else {
+            oscAddress = message
+            argument = nil
+        }
+
+        let addressData = padTo4(Data((oscAddress + "\0").utf8))
+
+        var typeTagData: Data
+        var argumentData = Data()
+
+        if let argument, argument != "bang", let floatValue = Float(argument) {
+            typeTagData = padTo4(Data(",f\0".utf8))
+            var bits = floatValue.bitPattern.bigEndian
+            argumentData = Data(bytes: &bits, count: 4)
+        } else if let argument, argument != "bang" {
+            typeTagData = padTo4(Data(",s\0".utf8))
+            argumentData = padTo4(Data((argument + "\0").utf8))
+        } else {
+            typeTagData = padTo4(Data(",\0".utf8))
+        }
+
+        let data = addressData + typeTagData + argumentData
 
         let bytesSent = data.withUnsafeBytes { buffer in
             var addr = sockaddr()
