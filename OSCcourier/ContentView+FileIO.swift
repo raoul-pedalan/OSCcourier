@@ -90,7 +90,7 @@ extension ContentView {
             pdfWindowController?.showWindow(nil)
             return
         }
-        guard let pdfURL = Bundle.main.url(forResource: "help", withExtension: "pdf") else { return }
+        guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
         let document = PDFDocument(url: pdfURL)
         let pdfView = PDFView()
         pdfView.document = document
