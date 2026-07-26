@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSCcourier — Multi-track OSC sequencer for macOS</title>
+<meta name="description" content="OSCcourier is a lightweight, DAW-style multi-track OSC message sequencer for macOS, built for Max/MSP and any OSC-compatible application.">
+<link rel="icon" href="assets/favicon.png">
+<style>
+  :root {
+    --bg: #0d0f12;
+    --bg-alt: #14171c;
+    --panel: #1a1e24;
+    --border: #262b33;
+    --text: #e8e9eb;
+    --text-dim: #9aa1ab;
+    --accent: #f5bb3f;
+    --accent-dim: #b88a1f;
+    --track1: #4fc3f7;
+    --track2: #81c784;
+    --track3: #ba68c8;
+    --track4: #ffd54f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  a { color: inherit; }
+
+  .container {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* NAV */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(13,15,18,0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+  }
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    display: block;
+  }
+  nav ul {
+    list-style: none;
+    display: flex;
+    gap: 28px;
+    font-size: 14px;
+  }
+  nav ul a {
+    text-decoration: none;
+    color: var(--text-dim);
+    transition: color .15s;
+  }
+  nav ul a:hover { color: var(--text); }
+  .nav-cta {
+    background: var(--accent);
+    color: #1a0e05 !important;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .nav-links-desktop { display: flex; align-items: center; gap: 28px; }
+  @media (max-width: 640px) {
+    nav ul.nav-menu { display: none; }
+  }
+
+  /* HERO */
+  header.hero {
+    padding: 96px 0 72px;
+    text-align: center;
+    background:
+      radial-gradient(ellipse 800px 400px at 50% -10%, rgba(245,187,63,0.15), transparent 70%),
+      var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(245,187,63,0.1);
+    border: 1px solid rgba(245,187,63,0.25);
+    padding: 5px 12px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 56px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.08;
+    margin-bottom: 20px;
+  }
+  h1 span { color: var(--accent); }
+  .hero p.lead {
+    max-width: 620px;
+    margin: 0 auto 36px;
+    color: var(--text-dim);
+    font-size: 18px;
+  }
+  .hero-ctas {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 13px 24px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    text-decoration: none;
+    transition: transform .15s, background .15s, border-color .15s;
+    border: 1px solid transparent;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary {
+    background: var(--accent);
+    color: #1a0e05;
+  }
+  .btn-primary:hover { background: #ffd166; }
+  .btn-secondary {
+    background: var(--panel);
+    border-color: var(--border);
+    color: var(--text);
+  }
+  .btn-secondary:hover { border-color: #3a4150; }
+  .hero-note {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  /* SCREENSHOT */
+  .screenshot-wrap {
+    max-width: 980px;
+    margin: 56px auto 0;
+    padding: 0 24px;
+  }
+  .screenshot-frame {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 30px 80px -20px rgba(0,0,0,0.6);
+  }
+  .screenshot-frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+    cursor: zoom-in;
+  }
+
+  /* LIGHTBOX */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(8,9,11,0.92);
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    cursor: zoom-out;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+    box-shadow: 0 30px 80px -20px rgba(0,0,0,0.7);
+  }
+  .lightbox-close {
+    position: fixed;
+    top: 24px;
+    right: 28px;
+    font-size: 32px;
+    color: var(--text);
+    background: none;
+    border: none;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  /* SECTIONS */
+  section { padding: 88px 0; }
+  section.alt { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .section-head {
+    text-align: center;
+    max-width: 620px;
+    margin: 0 auto 52px;
+  }
+  .section-head h2 {
+    font-size: clamp(26px, 4vw, 34px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 14px;
+  }
+  .section-head p { color: var(--text-dim); font-size: 16px; }
+
+  /* FEATURES GRID */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+  }
+  .feature-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 26px;
+  }
+  .feature-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+    font-size: 17px;
+  }
+  .feature-card h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .feature-card p {
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+
+  /* TRACK TYPES STRIP */
+  .track-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+    margin-top: 8px;
+  }
+  @media (max-width: 900px) {
+    .track-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .track-strip { grid-template-columns: 1fr; }
+  }
+  .track-chip {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .track-chip h4 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .track-chip p { font-size: 13px; color: var(--text-dim); }
+
+  /* GALLERY */
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .gallery-item {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--panel);
+  }
+  .gallery-item img {
+    display: block;
+    width: 100%;
+    height: 220px;
+    object-fit: cover;
+    object-position: top;
+    cursor: zoom-in;
+  }
+  .gallery-caption {
+    padding: 14px 18px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  @media (max-width: 900px) {
+    .gallery-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ABOUT */
+  .about-content {
+    max-width: 700px;
+    margin: 0 auto;
+    color: var(--text-dim);
+    font-size: 16px;
+  }
+  .about-content p { margin-bottom: 18px; }
+  .about-content strong { color: var(--text); }
+
+  /* DOWNLOAD */
+  .download-card {
+    max-width: 640px;
+    margin: 0 auto;
+    background: linear-gradient(180deg, var(--panel), var(--bg-alt));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 44px 40px;
+    text-align: center;
+  }
+  .download-card h2 { font-size: 26px; font-weight: 800; margin-bottom: 10px; }
+  .download-card p { color: var(--text-dim); margin-bottom: 28px; font-size: 15px; }
+  .req-list {
+    list-style: none;
+    text-align: left;
+    max-width: 380px;
+    margin: 28px auto 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    display: grid;
+    gap: 8px;
+  }
+  .req-list li { display: flex; gap: 8px; }
+  .req-list li::before { content: "—"; color: var(--accent); flex-shrink: 0; }
+  .warning-box {
+    margin-top: 24px;
+    text-align: left;
+    background: rgba(245,187,63,0.08);
+    border: 1px solid rgba(245,187,63,0.25);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .warning-box strong { color: var(--text); }
+
+  /* BETA BANNER */
+  .beta-banner {
+    background: rgba(245,187,63,0.1);
+    border-bottom: 1px solid rgba(245,187,63,0.25);
+    padding: 10px 24px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .beta-banner strong { color: var(--accent); }
+
+  /* FOOTER */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 40px 0;
+  }
+  footer .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  footer a { text-decoration: none; color: var(--text-dim); }
+  footer a:hover { color: var(--text); }
+  .footer-links { display: flex; gap: 20px; }
+</style>
+</head>
+<body>
+
+<div class="beta-banner">
+  <strong>Beta:</strong> OSCcourier is under active development, provided as-is with no warranty. Not recommended for production or live/critical environments yet.
+</div>
+
+<nav>
+  <div class="container">
+    <a href="#" class="brand">
+      <img class="brand-mark" src="assets/app-icon.png" alt="OSCcourier icon">
+      OSCcourier
+    </a>
+    <div class="nav-links-desktop">
+      <ul class="nav-menu">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#gallery">Gallery</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#download">Download</a></li>
+      </ul>
+      <a href="https://github.com/raoul-pedalan/OSCcourier" class="nav-cta">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <div class="eyebrow">macOS · Apple Silicon</div>
+    <h1>Score your OSC.<br><span>Message it.</span></h1>
+    <p class="lead">A timeline for your OSC messages — a kind of score. Lightweight and elegant, with a familiar, intuitive DAW-style workflow. Works great with Max/MSP and any OSC-compatible app.</p>
+    <div class="hero-ctas">
+      <a href="https://github.com/raoul-pedalan/OSCcourier/releases/latest" class="btn btn-primary">↓ Download latest release</a>
+      <a href="https://github.com/raoul-pedalan/OSCcourier" class="btn btn-secondary">View source</a>
+    </div>
+    <p class="hero-note">Free to use · Tested on macOS 26 Tahoe</p>
+  </div>
+
+  <div class="screenshot-wrap">
+    <div class="screenshot-frame">
+      <img src="assets/hero-baroque.jpg" alt="OSCcourier timeline with multiple curve, step and message tracks" onclick="openLightbox(this.src)">
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="container">
+    <div class="section-head">
+      <h2>Everything you need, nothing you don't</h2>
+      <p>OSCcourier does exactly — and only — what it was designed for: sending OSC messages, precisely and without friction.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(79,195,247,0.12); color:var(--track1);">〜</div>
+        <h3>Curve editing</h3>
+        <p>Linear, S-curve and bulge interpolation for expressive automations.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(129,199,132,0.12); color:var(--track2);">↕</div>
+        <h3>Per-track amplitude range</h3>
+        <p>Independent settings for every curve and step track.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(186,104,200,0.12); color:var(--track3);">⊞</div>
+        <h3>Advanced zoom & grid</h3>
+        <p>Navigate the timeline precisely, at any level of detail.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(255,213,79,0.12); color:var(--track4);">⟲</div>
+        <h3>Autofill</h3>
+        <p>Populate tracks with periodic patterns automatically.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(245,187,63,0.12); color:var(--accent);">☰</div>
+        <h3>Points List window</h3>
+        <p>Review every point at a glance and attach comments to individual points.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:rgba(79,195,247,0.12); color:var(--track1);">↺</div>
+        <h3>Unlimited undo/redo</h3>
+        <p>Point selection copy/paste, without ever fearing a mistake.</p>
+      </div>
+    </div>
+
+    <div class="section-head" style="margin-top:64px; margin-bottom:28px;">
+      <h2 style="font-size:22px;">Five track types</h2>
+    </div>
+    <div class="track-strip">
+      <div class="track-chip" style="border-left-color:#f7ce46;">
+        <h4>Curve</h4>
+        <p>Smooth, interpolated automations</p>
+      </div>
+      <div class="track-chip" style="border-left-color:#c23e79;">
+        <h4>Step</h4>
+        <p>Discrete, step-by-step values or gates</p>
+      </div>
+      <div class="track-chip" style="border-left-color:#a7ac35;">
+        <h4>Message</h4>
+        <p>Custom OSC messages</p>
+      </div>
+      <div class="track-chip" style="border-left-color:#3b86f7;">
+        <h4>Bang</h4>
+        <p>One-shot triggers</p>
+      </div>
+      <div class="track-chip" style="border-left-color:#9aa1ab;">
+        <h4>Markers</h4>
+        <p>Dedicated reference track for snap-to guides</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="gallery" class="alt">
+  <div class="container">
+    <div class="section-head">
+      <h2>A flexible, comprehensive UI</h2>
+      <p>From a single automation curve to a dense, many-track project — the same clear workflow throughout.</p>
+    </div>
+    <div class="gallery-grid">
+      <div class="gallery-item">
+        <img src="assets/gallery-dense.jpg" alt="A dense OSCcourier project with fourteen tracks of curves, steps and messages" onclick="openLightbox(this.src)">
+        <div class="gallery-caption">A 14-track sequence mixing curves, steps, messages and bangs.</div>
+      </div>
+      <div class="gallery-item">
+        <img src="assets/gallery-curve.jpg" alt="A single OSCcourier curve track with smooth automation" onclick="openLightbox(this.src)">
+        <div class="gallery-caption">A single curve track — clean, focused, easy to read at a glance.</div>
+      </div>
+      <div class="gallery-item">
+        <img src="assets/gallery-pointlist.jpg" alt="OSCcourier Points List window and Outgoing OSC Messages console" onclick="openLightbox(this.src)">
+        <div class="gallery-caption">The Points List window and live OSC output, side by side.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="about">
+  <div class="container">
+    <div class="section-head">
+      <h2>Why OSCcourier</h2>
+    </div>
+    <div class="about-content">
+      <p>OSCcourier was built in Swift for a native, well-integrated, polished feel on macOS. The goal: something <strong>lightweight and elegant</strong>, with a familiar DAW-style workflow, so nobody feels lost or disarmed by a long learning curve.</p>
+      <p>OSCcourier emits standard OSC messages, so it should work with any application able to receive them — Max/MSP included, which is what it was originally built for.</p>
+      <p>Sequences are saved as <strong>JSON</strong>, readable and easy to version.</p>
+    </div>
+  </div>
+</section>
+
+<section id="download" class="alt">
+  <div class="container">
+    <div class="download-card">
+      <h2>Ready to try it?</h2>
+      <p>Download the latest release from GitHub.</p>
+      <a href="https://github.com/raoul-pedalan/OSCcourier/releases/latest" class="btn btn-primary">↓ Download OSCcourier</a>
+
+      <ul class="req-list">
+        <li>macOS (tested on macOS 26 Tahoe, Apple Silicon)</li>
+        <li>Free to use</li>
+        <li>Sequences saved as JSON</li>
+      </ul>
+
+      <div class="warning-box">
+        <strong>Beta software:</strong> provided as-is, with no warranty. Expect rough edges and use with caution in production or live/critical setups.
+      </div>
+
+      <div class="warning-box">
+        <strong>Note:</strong> unsigned app (no paid Apple Developer account) — Gatekeeper will initially block it. If macOS says it "can't be opened," go to <strong>System Settings → Privacy & Security → Open Anyway</strong>.
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <span>© 2026 OSCcourier — OSC sequencer</span>
+    <div class="footer-links">
+      <a href="https://github.com/raoul-pedalan/OSCcourier">Source code</a>
+      <a href="https://github.com/raoul-pedalan/OSCcourier/issues">Issues</a>
+      <a href="https://github.com/raoul-pedalan/OSCcourier/releases">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
+  <img id="lightbox-img" src="" alt="">
+</div>
+
+<script>
+  function openLightbox(src) {
+    var lb = document.getElementById('lightbox');
+    document.getElementById('lightbox-img').src = src;
+    lb.classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeLightbox() {
+    var lb = document.getElementById('lightbox');
+    lb.classList.remove('open');
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
+</script>
+
+</body>
+</html>
