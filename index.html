@@ -1,3 +1,5 @@
+
+Index · HTML
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,13 +32,13 @@
     line-height: 1.6;
   }
   a { color: inherit; }
-
+ 
   .container {
     max-width: 1080px;
     margin: 0 auto;
     padding: 0 24px;
   }
-
+ 
   /* NAV */
   nav {
     position: sticky;
@@ -91,7 +93,7 @@
   @media (max-width: 640px) {
     nav ul.nav-menu { display: none; }
   }
-
+ 
   /* HERO */
   header.hero {
     padding: 96px 0 72px;
@@ -165,7 +167,7 @@
     font-size: 13px;
     color: var(--text-dim);
   }
-
+ 
   /* SCREENSHOT */
   .screenshot-wrap {
     max-width: 980px;
@@ -185,7 +187,7 @@
     height: auto;
     cursor: zoom-in;
   }
-
+ 
   /* LIGHTBOX */
   .lightbox {
     display: none;
@@ -216,7 +218,7 @@
     cursor: pointer;
     line-height: 1;
   }
-
+ 
   /* SECTIONS */
   section { padding: 88px 0; }
   section.alt { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
@@ -232,7 +234,7 @@
     margin-bottom: 14px;
   }
   .section-head p { color: var(--text-dim); font-size: 16px; }
-
+ 
   /* FEATURES GRID */
   .features-grid {
     display: grid;
@@ -264,7 +266,7 @@
     font-size: 14px;
     color: var(--text-dim);
   }
-
+ 
   /* TRACK TYPES STRIP */
   .track-strip {
     display: grid;
@@ -287,7 +289,7 @@
   }
   .track-chip h4 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
   .track-chip p { font-size: 13px; color: var(--text-dim); }
-
+ 
   /* GALLERY */
   .gallery-grid {
     display: grid;
@@ -316,7 +318,7 @@
   @media (max-width: 900px) {
     .gallery-grid { grid-template-columns: 1fr; }
   }
-
+ 
   /* ABOUT */
   .about-content {
     max-width: 700px;
@@ -326,7 +328,7 @@
   }
   .about-content p { margin-bottom: 18px; }
   .about-content strong { color: var(--text); }
-
+ 
   /* DOWNLOAD */
   .download-card {
     max-width: 640px;
@@ -362,7 +364,7 @@
     color: var(--text-dim);
   }
   .warning-box strong { color: var(--text); }
-
+ 
   /* BETA BANNER */
   .beta-banner {
     background: rgba(245,187,63,0.1);
@@ -373,7 +375,7 @@
     color: var(--text-dim);
   }
   .beta-banner strong { color: var(--accent); }
-
+ 
   /* FOOTER */
   footer {
     border-top: 1px solid var(--border);
@@ -394,11 +396,11 @@
 </style>
 </head>
 <body>
-
+ 
 <div class="beta-banner">
   <strong>Beta:</strong> OSCcourier is under active development, provided as-is with no warranty. Not recommended for production or live/critical environments yet.
 </div>
-
+ 
 <nav>
   <div class="container">
     <a href="#" class="brand">
@@ -416,33 +418,33 @@
     </div>
   </div>
 </nav>
-
+ 
 <header class="hero">
   <div class="container">
     <div class="eyebrow">macOS · Apple Silicon</div>
     <h1>Score your OSC.<br><span>Message it.</span></h1>
-    <p class="lead">A timeline for your OSC messages — a kind of score. Lightweight and elegant, with a familiar, intuitive DAW-style workflow. Works great with Max/MSP and any OSC-compatible app.</[...]
+    <p class="lead">A timeline for your OSC messages — a kind of score. Lightweight and elegant, with a familiar, intuitive DAW-style workflow. Works great with Max/MSP and any OSC-compatible app.</p>
     <div class="hero-ctas">
       <a href="https://github.com/raoul-pedalan/OSCcourier/releases/latest" class="btn btn-primary">↓ Download latest release</a>
       <a href="https://github.com/raoul-pedalan/OSCcourier" class="btn btn-secondary">View source</a>
     </div>
-    <p class="hero-note">Free to use · Tested on macOS 26 Tahoe, may work down to macOS Sonoma (untested)</p>
+    <p class="hero-note">Free to use · Tested on macOS 26 Tahoe</p>
   </div>
-
+ 
   <div class="screenshot-wrap">
     <div class="screenshot-frame">
       <img src="assets/hero-baroque.jpg" alt="OSCcourier timeline with multiple curve, step and message tracks" onclick="openLightbox(this.src)">
     </div>
   </div>
 </header>
-
+ 
 <section id="features">
   <div class="container">
     <div class="section-head">
       <h2>Everything you need, nothing you don't</h2>
       <p>OSCcourier does exactly — and only — what it was designed for: sending OSC messages, precisely and without friction.</p>
     </div>
-
+ 
     <div class="features-grid">
       <div class="feature-card">
         <div class="feature-icon" style="background:rgba(79,195,247,0.12); color:var(--track1);">〜</div>
@@ -475,7 +477,7 @@
         <p>Point selection copy/paste, without ever fearing a mistake.</p>
       </div>
     </div>
-
+ 
     <div class="section-head" style="margin-top:64px; margin-bottom:28px;">
       <h2 style="font-size:22px;">Five track types</h2>
     </div>
@@ -503,7 +505,7 @@
     </div>
   </div>
 </section>
-
+ 
 <section id="gallery" class="alt">
   <div class="container">
     <div class="section-head">
@@ -526,44 +528,44 @@
     </div>
   </div>
 </section>
-
+ 
 <section id="about">
   <div class="container">
     <div class="section-head">
       <h2>Why OSCcourier</h2>
     </div>
     <div class="about-content">
-      <p>OSCcourier was built in Swift for a native, well-integrated, polished feel on macOS. The goal: something <strong>lightweight and elegant</strong>, with a familiar DAW-style workflow, so nobod[...]
+      <p>OSCcourier was built in Swift for a native, well-integrated, polished feel on macOS. The goal: something <strong>lightweight and elegant</strong>, with a familiar DAW-style workflow, so nobody feels lost or disarmed by a long learning curve.</p>
       <p>OSCcourier emits standard OSC messages, so it should work with any application able to receive them — Max/MSP included, which is what it was originally built for.</p>
       <p>Sequences are saved as <strong>JSON</strong>, readable and easy to version.</p>
     </div>
   </div>
 </section>
-
+ 
 <section id="download" class="alt">
   <div class="container">
     <div class="download-card">
       <h2>Ready to try it?</h2>
       <p>Download the latest release from GitHub.</p>
       <a href="https://github.com/raoul-pedalan/OSCcourier/releases/latest" class="btn btn-primary">↓ Download OSCcourier</a>
-
+ 
       <ul class="req-list">
-        <li>macOS (tested on macOS 26 Tahoe, Apple Silicon; may work down to macOS Sonoma (untested))</li>
+        <li>macOS (tested on macOS 26 Tahoe, Apple Silicon)</li>
         <li>Free to use</li>
         <li>Sequences saved as JSON</li>
       </ul>
-
+ 
       <div class="warning-box">
         <strong>Beta software:</strong> provided as-is, with no warranty. Expect rough edges and use with caution in production or live/critical setups.
       </div>
-
+ 
       <div class="warning-box">
-        <strong>Note:</strong> unsigned app (no paid Apple Developer account) — Gatekeeper will initially block it. If macOS says it "can't be opened," go to System Settings → Privacy & Security → General and click "Open Anyway" for OSCcourier, or Control‑click the app in Finder and choose "Open".
+        <strong>Note:</strong> unsigned app (no paid Apple Developer account) — Gatekeeper will initially block it. If macOS says it "can't be opened," go to <strong>System Settings → Privacy & Security → Open Anyway</strong>.
       </div>
     </div>
   </div>
 </section>
-
+ 
 <footer>
   <div class="container">
     <span>© 2026 OSCcourier — OSC sequencer</span>
@@ -575,12 +577,12 @@
     </div>
   </div>
 </footer>
-
+ 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
   <button class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
   <img id="lightbox-img" src="" alt="">
 </div>
-
+ 
 <script>
   function openLightbox(src) {
     var lb = document.getElementById('lightbox');
@@ -597,6 +599,9 @@
     if (e.key === 'Escape') closeLightbox();
   });
 </script>
-
+ 
 </body>
 </html>
+ 
+
+
