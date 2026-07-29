@@ -119,6 +119,19 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
             self.zoomRange = zoomRange
         }
 
+        // Written explicitly (rather than relying on the compiler-synthesized
+        // deinit) to work around a Swift compiler crash (SILOptimizer /
+        // EarlyPerfInliner segfault) that only reproduces in Release/Archive
+        // builds targeting macOS 14.6 as the minimum deployment. @_optimize(none)
+        // keeps this one function out of that optimization pass. Also takes
+        // the opportunity to remove the NSView.boundsDidChangeNotification
+        // observer added in makeNSView, which was never being cleaned up.
+        @_optimize(none)
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+            commandScrollResetWorkItem?.cancel()
+        }
+
         @objc func boundsChanged(_ note: Notification) {
             guard let clipView = note.object as? NSClipView else { return }
             let x = clipView.bounds.origin.x
