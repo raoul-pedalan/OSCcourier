@@ -9,8 +9,8 @@ struct ContentView: View {
     // the midpoint between the edge and Play" just as constant: no need to
     // measure Play's actual on-screen position at runtime, half of its
     // fixed target distance IS that midpoint, always.
-    private let playButtonLeadingDistance: CGFloat = 140
-    private var zoomKnobLeadingDistance: CGFloat { playButtonLeadingDistance / 2 }
+    let playButtonLeadingDistance: CGFloat = 140
+    var zoomKnobLeadingDistance: CGFloat { playButtonLeadingDistance / 2 }
     @StateObject var oscManager = OSCManager()
     @StateObject var messageStore = OSCMessageStore()
     @StateObject var pointListStore = PointListStore()

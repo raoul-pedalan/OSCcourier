@@ -5,6 +5,7 @@ import SwiftUI
 // falling back to compactControlBar otherwise. Split out of `body`
 // verbatim — no logic changes.
 extension ContentView {
+    @ViewBuilder
     var toolbarBar: some View {
             if showCommandBar {
             HStack {

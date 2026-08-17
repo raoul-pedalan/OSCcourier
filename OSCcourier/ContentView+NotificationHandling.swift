@@ -9,7 +9,7 @@ import SwiftUI
 // one chain here changes nothing about registration order or behavior.
 extension ContentView {
     func applyNotificationReceivers<Content: View>(_ content: Content) -> some View {
-        content
+        let step1 = content
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSave)) { _ in
             saveProject()
         }
@@ -38,6 +38,7 @@ extension ContentView {
             lastSentEvents.removeAll()
         }
 
+        let step2 = step1
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierAddBangTrack)) { _ in
             addTrack(couleur: .blue, type: .bang, height: 45)
         }
@@ -54,6 +55,7 @@ extension ContentView {
             showClearAllConfirmation = true
         }
 
+        let step3 = step2
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToTime)) { _ in
             goToTimeString = formattedDuration(position)
             showGoToTimeDialog = true
@@ -69,6 +71,7 @@ extension ContentView {
             loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
             showLoopZoneEditor = true
         }
+        let step4 = step3
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearLoopZone)) { _ in
             loopZoneStart = nil
             loopZoneEnd = nil
@@ -103,6 +106,7 @@ extension ContentView {
             openOSCMessagesWindow()
         }
 
+        return step4
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierMuteUnmuteAll)) { _ in
             muteUnmuteAll()
         }

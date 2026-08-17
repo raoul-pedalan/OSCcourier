@@ -6,7 +6,7 @@ import SwiftUI
 // modifier chain — same reasoning as ContentView+NotificationHandling.swift.
 extension ContentView {
     func applyAlertsAndConfirmations<Content: View>(_ content: Content) -> some View {
-        content
+        let step1 = content
         .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Clear", role: .destructive) {
@@ -189,6 +189,7 @@ extension ContentView {
             Text("The copied points come from a track with a different amplitude range. Scale their values to fit this track's range, or paste them unchanged (clamped if out of range)?")
         }
 
+        return step1
         .alert("Overwrite track?", isPresented: Binding<Bool>(
             get: { pendingAutofillIndex != nil },
             set: { if !$0 { pendingAutofillIndex = nil } }
