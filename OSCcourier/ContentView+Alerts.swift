@@ -7,19 +7,19 @@ import SwiftUI
 extension ContentView {
     func applyAlertsAndConfirmations<Content: View>(_ content: Content) -> some View {
         let step1 = content
-        .alert("Clear all tracks?", isPresented: $showClearAllConfirmation) {
+        .alert("Clear all tracks?", isPresented: $autofill.showClearAllConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Clear", role: .destructive) {
                 guard !tracksLocked else { return }
                 for i in pistes.indices {
                     pistes[i].evenements.removeAll()
                 }
-                lastSentEvents.removeAll()
+                pointDrag.lastSentEvents.removeAll()
             }
         } message: {
             Text("This will erase every point on every track. This can't be undone.")
         }
-        .alert("Delete all tracks?", isPresented: $showDeleteAllTracksConfirmation) {
+        .alert("Delete all tracks?", isPresented: $autofill.showDeleteAllTracksConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
                 deleteAllTracks()
@@ -27,27 +27,27 @@ extension ContentView {
         } message: {
             Text("This will delete every track except /markers. This can't be undone.")
         }
-        .sheet(isPresented: $showPlayheadPositionChoice) {
+        .sheet(isPresented: $pasteClipboard.showPlayheadPositionChoice) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Go to Position")
                     .font(.headline)
 
-                TextField("mm:ss", text: $goToTimeString)
+                TextField("mm:ss", text: $uiChrome.goToTimeString)
                     .textFieldStyle(.roundedBorder)
                     .focused($playheadPositionFocusedField, equals: .time)
                     .onSubmit { goToChosenPlayheadPosition() }
-                    .disabled(!goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!uiChrome.goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                TextField("Marker name", text: $goToMarkerNameString)
+                TextField("Marker name", text: $uiChrome.goToMarkerNameString)
                     .textFieldStyle(.roundedBorder)
                     .focused($playheadPositionFocusedField, equals: .marker)
                     .onSubmit { goToChosenPlayheadPosition() }
-                    .onChange(of: goToMarkerNameString) { _, _ in
-                        playheadMarkerNotFound = false
+                    .onChange(of: uiChrome.goToMarkerNameString) { _, _ in
+                        uiChrome.playheadMarkerNotFound = false
                     }
-                    .disabled(goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              && goToTimeString != goToTimeInitialValue)
-                if playheadMarkerNotFound {
+                    .disabled(uiChrome.goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              && uiChrome.goToTimeString != uiChrome.goToTimeInitialValue)
+                if uiChrome.playheadMarkerNotFound {
                     Text("No marker with that name was found.")
                         .font(.caption)
                         .foregroundColor(.red)
@@ -57,7 +57,7 @@ extension ContentView {
                 HStack {
                     Spacer()
                     Button("Cancel", role: .cancel) {
-                        showPlayheadPositionChoice = false
+                        pasteClipboard.showPlayheadPositionChoice = false
                     }
                     .keyboardShortcut(.escape)
                     Button("Go") {
@@ -70,11 +70,11 @@ extension ContentView {
             .frame(width: 300)
             .onAppear {
                 playheadPositionFocusedField = .time
-                playheadMarkerNotFound = false
-                goToTimeInitialValue = goToTimeString
+                uiChrome.playheadMarkerNotFound = false
+                uiChrome.goToTimeInitialValue = uiChrome.goToTimeString
             }
         }
-        .sheet(isPresented: $showLoopZoneEditor) {
+        .sheet(isPresented: $loopZone.showLoopZoneEditor) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Edit Loop Zone")
                     .font(.headline)
@@ -83,14 +83,14 @@ extension ContentView {
                     Text("Start")
                         .frame(width: 50, alignment: .trailing)
                         .foregroundColor(.secondary)
-                    TextField("mm:ss", text: $loopZoneEditStartString)
+                    TextField("mm:ss", text: $loopZone.loopZoneEditStartString)
                         .textFieldStyle(.roundedBorder)
                 }
                 HStack {
                     Text("End")
                         .frame(width: 50, alignment: .trailing)
                         .foregroundColor(.secondary)
-                    TextField("mm:ss", text: $loopZoneEditEndString)
+                    TextField("mm:ss", text: $loopZone.loopZoneEditEndString)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -99,18 +99,18 @@ extension ContentView {
                 HStack {
                     Spacer()
                     Button("Cancel", role: .cancel) {
-                        showLoopZoneEditor = false
+                        loopZone.showLoopZoneEditor = false
                     }
                     .keyboardShortcut(.escape)
                     Button("Apply") {
-                        if let s = parseDuration(loopZoneEditStartString),
-                           let e = parseDuration(loopZoneEditEndString) {
-                            let clampedS = min(max(s, 0), duree)
-                            let clampedE = min(max(e, 0), duree)
-                            loopZoneStart = min(clampedS, clampedE)
-                            loopZoneEnd = max(clampedS, clampedE)
+                        if let s = parseDuration(loopZone.loopZoneEditStartString),
+                           let e = parseDuration(loopZone.loopZoneEditEndString) {
+                            let clampedS = min(max(s, 0), transport.duree)
+                            let clampedE = min(max(e, 0), transport.duree)
+                            loopZone.loopZoneStart = min(clampedS, clampedE)
+                            loopZone.loopZoneEnd = max(clampedS, clampedE)
                         }
-                        showLoopZoneEditor = false
+                        loopZone.showLoopZoneEditor = false
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -118,72 +118,72 @@ extension ContentView {
             .padding(20)
             .frame(width: 280)
         }
-        .alert("Go to time", isPresented: $showGoToTimeDialog) {
-            TextField("mm:ss", text: $goToTimeString)
+        .alert("Go to time", isPresented: $uiChrome.showGoToTimeDialog) {
+            TextField("mm:ss", text: $uiChrome.goToTimeString)
             Button("Cancel", role: .cancel) { }
             Button("Go") {
-                goToTime(goToTimeString)
+                goToTime(uiChrome.goToTimeString)
             }
         } message: {
             Text("Enter a time as mm:ss.")
         }
-        .alert("Go to marker", isPresented: $showGoToMarkerNameDialog) {
-            TextField("Marker name", text: $goToMarkerNameString)
+        .alert("Go to marker", isPresented: $uiChrome.showGoToMarkerNameDialog) {
+            TextField("Marker name", text: $uiChrome.goToMarkerNameString)
             Button("Cancel", role: .cancel) { }
             Button("Go") {
-                goToMarkerByName(goToMarkerNameString)
+                goToMarkerByName(uiChrome.goToMarkerNameString)
             }
         } message: {
             Text("Enter the name of a marker to jump to.")
         }
-        .alert("No match", isPresented: $showGoToMarkerNoMatch) {
+        .alert("No match", isPresented: $uiChrome.showGoToMarkerNoMatch) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("No marker with that name was found.")
         }
-        .alert("Different track type", isPresented: $showDifferentTypePasteAlert) {
+        .alert("Different track type", isPresented: $pasteClipboard.showDifferentTypePasteAlert) {
             Button("Adapt (Scale to Fit)") {
-                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                if let t = pasteClipboard.pendingPasteAnchorTime, let idx = pasteClipboard.pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
-                    lastPasteOffset = nil
+                    pasteClipboard.lastPasteOffset = nil
                 }
-                isPasteModeActive = false
-                pendingPasteAnchorTime = nil
-                pendingPasteTrackIndex = nil
+                pasteClipboard.isPasteModeActive = false
+                pasteClipboard.pendingPasteAnchorTime = nil
+                pasteClipboard.pendingPasteTrackIndex = nil
             }
             Button("Cancel", role: .cancel) {
                 // Dismiss only — stays in paste mode so the user can try a
                 // different spot, or press Escape to back out entirely.
-                pendingPasteAnchorTime = nil
-                pendingPasteTrackIndex = nil
+                pasteClipboard.pendingPasteAnchorTime = nil
+                pasteClipboard.pendingPasteTrackIndex = nil
             }
         } message: {
             Text("The copied points come from a different track type. Adapt them to this track (converting labels, rescaling values), or cancel?")
         }
-        .alert("Different amplitude range", isPresented: $showPasteScaleRangeAlert) {
+        .alert("Different amplitude range", isPresented: $pasteClipboard.showPasteScaleRangeAlert) {
             Button("Scale to Fit") {
-                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                if let t = pasteClipboard.pendingPasteAnchorTime, let idx = pasteClipboard.pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: true)
-                    lastPasteOffset = nil
+                    pasteClipboard.lastPasteOffset = nil
                 }
-                isPasteModeActive = false
-                pendingPasteAnchorTime = nil
-                pendingPasteTrackIndex = nil
+                pasteClipboard.isPasteModeActive = false
+                pasteClipboard.pendingPasteAnchorTime = nil
+                pasteClipboard.pendingPasteTrackIndex = nil
             }
             Button("Keep As-Is") {
-                if let t = pendingPasteAnchorTime, let idx = pendingPasteTrackIndex {
+                if let t = pasteClipboard.pendingPasteAnchorTime, let idx = pasteClipboard.pendingPasteTrackIndex {
                     _ = pasteClipboard(at: t, trackIndex: idx, scaleToRange: false)
-                    lastPasteOffset = nil
+                    pasteClipboard.lastPasteOffset = nil
                 }
-                isPasteModeActive = false
-                pendingPasteAnchorTime = nil
-                pendingPasteTrackIndex = nil
+                pasteClipboard.isPasteModeActive = false
+                pasteClipboard.pendingPasteAnchorTime = nil
+                pasteClipboard.pendingPasteTrackIndex = nil
             }
             Button("Cancel", role: .cancel) {
                 // Dismiss only — stays in paste mode so the user can try a
                 // different spot, or press Escape to back out entirely.
-                pendingPasteAnchorTime = nil
-                pendingPasteTrackIndex = nil
+                pasteClipboard.pendingPasteAnchorTime = nil
+                pasteClipboard.pendingPasteTrackIndex = nil
             }
         } message: {
             Text("The copied points come from a track with a different amplitude range. Scale their values to fit this track's range, or paste them unchanged (clamped if out of range)?")
@@ -191,57 +191,57 @@ extension ContentView {
 
         return step1
         .alert("Overwrite track?", isPresented: Binding<Bool>(
-            get: { pendingAutofillIndex != nil },
-            set: { if !$0 { pendingAutofillIndex = nil } }
+            get: { autofill.pendingAutofillIndex != nil },
+            set: { if !$0 { autofill.pendingAutofillIndex = nil } }
         )) {
             Button("Cancel", role: .cancel) {
-                pendingAutofillIndex = nil
+                autofill.pendingAutofillIndex = nil
             }
             Button("Continue", role: .destructive) {
-                if let index = pendingAutofillIndex {
+                if let index = autofill.pendingAutofillIndex {
                     proceedWithAutofill(for: index)
                 }
-                pendingAutofillIndex = nil
+                autofill.pendingAutofillIndex = nil
             }
         } message: {
             Text("This track already has points. Autofill will replace them all.")
         }
         .alert("Switch to Gate?", isPresented: Binding<Bool>(
-            get: { pendingGateSwitchIndex != nil },
-            set: { if !$0 { pendingGateSwitchIndex = nil } }
+            get: { pointEditing.pendingGateSwitchIndex != nil },
+            set: { if !$0 { pointEditing.pendingGateSwitchIndex = nil } }
         )) {
             Button("Cancel", role: .cancel) {
-                pendingGateSwitchIndex = nil
+                pointEditing.pendingGateSwitchIndex = nil
             }
             Button("Continue", role: .destructive) {
-                if let index = pendingGateSwitchIndex {
+                if let index = pointEditing.pendingGateSwitchIndex {
                     applyGateModeSwitch(forTrackIndex: index)
                 }
-                pendingGateSwitchIndex = nil
+                pointEditing.pendingGateSwitchIndex = nil
             }
         } message: {
             Text("This track already has points. Switching to Gate will redistribute all their values to 0 or 1.")
         }
         .alert("Quantization step adjusted", isPresented: Binding<Bool>(
-            get: { invalidQuantizeStepMessage != nil },
-            set: { if !$0 { invalidQuantizeStepMessage = nil } }
+            get: { pointEditing.invalidQuantizeStepMessage != nil },
+            set: { if !$0 { pointEditing.invalidQuantizeStepMessage = nil } }
         )) {
-            Button("OK") { invalidQuantizeStepMessage = nil }
+            Button("OK") { pointEditing.invalidQuantizeStepMessage = nil }
         } message: {
-            Text(invalidQuantizeStepMessage ?? "")
+            Text(pointEditing.invalidQuantizeStepMessage ?? "")
         }
         .alert("Rename track", isPresented: Binding<Bool>(
-            get: { indexPisteARenommer != nil },
-            set: { if !$0 { indexPisteARenommer = nil } }
+            get: { pointEditing.indexPisteARenommer != nil },
+            set: { if !$0 { pointEditing.indexPisteARenommer = nil } }
         )) {
-            TextField("New name", text: $nouveauNomPiste)
+            TextField("New name", text: $pointEditing.nouveauNomPiste)
             Button("OK") {
-                if let index = indexPisteARenommer {
-                    pistes[index].nom = nouveauNomPiste
+                if let index = pointEditing.indexPisteARenommer {
+                    pistes[index].nom = pointEditing.nouveauNomPiste
                 }
-                indexPisteARenommer = nil
+                pointEditing.indexPisteARenommer = nil
             }
-            Button("Cancel", role: .cancel) { indexPisteARenommer = nil }
+            Button("Cancel", role: .cancel) { pointEditing.indexPisteARenommer = nil }
         }
     }
 }

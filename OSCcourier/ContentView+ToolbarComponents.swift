@@ -6,13 +6,13 @@ import SwiftUI
 extension ContentView {
 
     // Compact alternative to the full toolbar (toggled via the View menu,
-    // ⌘B): a full-width bar acting as an extended version of the position
+    // ⌘B): a full-width bar acting as an extended version of the transport.position
     // display — same black/blue styling, but stretched across the window
-    // with the position centered, a play/pause indicator ~50px to its left,
+    // with the transport.position centered, a play/pause indicator ~50px to its left,
     // and a loop indicator on the right.
     // "Paused" vs "stopped" aren't separately tracked in the app's state
-    // (both are just enLecture == false); we approximate "stopped" as
-    // enLecture == false with position back at 0 (which Stop always does,
+    // (both are just transport.enLecture == false); we approximate "stopped" as
+    // transport.enLecture == false with transport.position back at 0 (which Stop always does,
     // unlike Pause), and show nothing in that case per the spec ("rien si
     // stop").
     // Two-tone "Duration mm:ss" label for the compact command bar, built via
@@ -22,7 +22,7 @@ extension ContentView {
     var durationLabelText: Text {
         var attributed = AttributedString("Duration ")
         attributed.foregroundColor = .gray
-        var value = AttributedString(formattedDuration(duree))
+        var value = AttributedString(formattedDuration(transport.duree))
         value.foregroundColor = Color(red: 0.3, green: 0.6, blue: 1.0)
         attributed.append(value)
         return Text(attributed)
@@ -31,7 +31,7 @@ extension ContentView {
     var compactControlBar: some View {
         ZStack {
             Rectangle().fill(Color.black)
-            Text(formattedPosition(position))
+            Text(formattedPosition(transport.position))
                 .font(.system(size: 20, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
@@ -40,10 +40,10 @@ extension ContentView {
                     showCommandBar = true
                 }
             Group {
-                if enLecture {
+                if transport.enLecture {
                     Image(systemName: "play.fill")
                         .foregroundColor(Color(red: 0.5, green: 1.0, blue: 0.2))
-                } else if position > 0.001 {
+                } else if transport.position > 0.001 {
                     Image(systemName: "pause.fill")
                         .foregroundColor(.gray)
                 }
@@ -66,11 +66,11 @@ extension ContentView {
                     .font(.caption2)
                     .fontWeight(.bold)
             }
-            .foregroundColor(isOSCFlashing ? .yellow : .clear)
+            .foregroundColor(transport.isOSCFlashing ? .yellow : .clear)
             .offset(x: 220)
         }
         .frame(height: 32)
-        .padding(.top, isFullScreen ? 0 : 30)
+        .padding(.top, uiChrome.isFullScreen ? 0 : 30)
     }
 
     // A reserved margin strip pinned to the right edge of the window,
@@ -78,11 +78,11 @@ extension ContentView {
     // app's outer background, a thin vertical divider at its left edge, and
     // a triangle handle at the top. Dragging the whole strip horizontally
     // trims the track's total duration (right = longer, left = shorter),
-    // independent of scroll position or zoom.
-    // Starts the repeating timer that continuously applies the duration
-    // drag's current rate of change (see durationDragCurrentDeltaX) for as
+    // independent of scroll transport.position or zoom.
+    // Starts the repeating transport.timer that continuously applies the duration
+    // drag's current rate of change (see durationHandle.durationDragCurrentDeltaX) for as
     // long as the drag is held — this is what makes it velocity-based
-    // rather than a one-shot position mapping.
+    // rather than a one-shot transport.position mapping.
 
 
     var durationDragHandle: some View {
@@ -100,7 +100,7 @@ extension ContentView {
                 .padding(.top, 6)
         }
         .overlay(alignment: .topTrailing) {
-            if isDraggingDurationHandle {
+            if durationHandle.isDraggingDurationHandle {
                 durationTooltip
                     .fixedSize()
                     .padding(.trailing, 3)
@@ -114,16 +114,16 @@ extension ContentView {
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     guard !tracksLocked else { return }
-                    if !isDraggingDurationHandle {
-                        isDraggingDurationHandle = true
+                    if !durationHandle.isDraggingDurationHandle {
+                        durationHandle.isDraggingDurationHandle = true
                         startDurationDragTimer()
                     }
-                    durationDragCurrentDeltaX = value.translation.width
+                    durationHandle.durationDragCurrentDeltaX = value.translation.width
                 }
                 .onEnded { _ in
                     stopDurationDragTimer()
-                    isDraggingDurationHandle = false
-                    durationDragCurrentDeltaX = 0
+                    durationHandle.isDraggingDurationHandle = false
+                    durationHandle.durationDragCurrentDeltaX = 0
                 }
         )
         .onHover { hovering in
@@ -148,7 +148,7 @@ extension ContentView {
                 .fill(Color.black.opacity(0.85))
                 .frame(width: 10, height: 6)
                 .padding(.trailing, 8)
-            Text(formattedPosition(duree))
+            Text(formattedPosition(transport.duree))
                 .font(.system(.caption, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundColor(.white)

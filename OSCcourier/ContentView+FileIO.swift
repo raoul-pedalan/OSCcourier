@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 extension ContentView {
 
     func encodedProjectData() -> Data? {
-        let data = SaveData(duree: duree, oscAddress: oscManager.address, zoomX: zoomX, pistes: pistes)
+        let data = SaveData(duree: transport.duree, oscAddress: oscManager.address, zoomX: transport.zoomX, pistes: pistes)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try? encoder.encode(data)
@@ -55,12 +55,12 @@ extension ContentView {
         guard let jsonData = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
 
-        enLecture = false
-        position = 0
-        lastSentEvents.removeAll()
-        duree = decoded.duree
-        dureeText = formattedDuration(decoded.duree)
-        zoomX = decoded.zoomX
+        transport.enLecture = false
+        transport.position = 0
+        pointDrag.lastSentEvents.removeAll()
+        transport.duree = decoded.duree
+        transport.dureeText = formattedDuration(decoded.duree)
+        transport.zoomX = decoded.zoomX
         oscManager.address = decoded.oscAddress
         oscManager.setupOSCConnection()
         pistes = decoded.pistes
@@ -86,8 +86,8 @@ extension ContentView {
     }
 
     func openPDFWindow() {
-        if pdfWindowController != nil {
-            pdfWindowController?.showWindow(nil)
+        if windowManagement.pdfWindowController != nil {
+            windowManagement.pdfWindowController?.showWindow(nil)
             return
         }
         guard let pdfURL = Bundle.main.url(forResource: "Help", withExtension: "pdf") else { return }
@@ -119,13 +119,13 @@ extension ContentView {
         window.center()
         window.contentView = pdfView
         // Without this, closing the window releases it (the default for a
-        // programmatically-created NSWindow), leaving pdfWindowController
+        // programmatically-created NSWindow), leaving windowManagement.pdfWindowController
         // pointing at a dead window — so the menu item would appear to do
         // nothing at all the next time, since it thinks the window still
         // exists and just tries to re-show it instead of rebuilding one.
         window.isReleasedWhenClosed = false
-        pdfWindowController = NSWindowController(window: window)
-        pdfWindowController?.showWindow(nil)
+        windowManagement.pdfWindowController = NSWindowController(window: window)
+        windowManagement.pdfWindowController?.showWindow(nil)
     }
 
 }

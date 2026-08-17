@@ -13,7 +13,7 @@ extension ContentView {
     // pulling each sheet's content into its own typed computed property
     // gives it a much smaller, independent expression to check.
     var autofillRectangleSheet: some View {
-        let isGateTrack = autofillTrackIndex.map { pistes[$0].isGate } ?? false
+        let isGateTrack = autofill.autofillTrackIndex.map { pistes[$0].isGate } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Autofill Rectangle")
                 .font(.headline)
@@ -23,19 +23,19 @@ extension ContentView {
                 Text("T (s.)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $autofillPeriodString)
+                TextField("", text: $autofill.autofillPeriodString)
             }
             HStack {
                 Text("Φ (0-1)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $autofillPhaseString)
+                TextField("", text: $autofill.autofillPhaseString)
             }
             HStack {
                 Text("PW (0-1)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $autofillPulseWidthString)
+                TextField("", text: $autofill.autofillPulseWidthString)
             }
             HStack {
                 Text("Range")
@@ -43,18 +43,18 @@ extension ContentView {
                     .frame(width: 80, alignment: .trailing)
                 Text("min")
                     .foregroundColor(.gray.opacity(0.7))
-                TextField("", text: $autofillAmpMinString)
+                TextField("", text: $autofill.autofillAmpMinString)
                     .disabled(isGateTrack)
                 Text("max")
                     .foregroundColor(.gray.opacity(0.7))
-                TextField("", text: $autofillAmpMaxString)
+                TextField("", text: $autofill.autofillAmpMaxString)
                     .disabled(isGateTrack)
             }
 
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    autofillTrackIndex = nil
+                    autofill.autofillTrackIndex = nil
                 }
                 Button("OK") {
                     commitAutofillRectangle()
@@ -73,7 +73,7 @@ extension ContentView {
                 .font(.headline)
                 .padding(.bottom, 4)
 
-            Picker("", selection: $waveIsSine) {
+            Picker("", selection: $autofill.waveIsSine) {
                 Text("Sin").tag(true)
                 Text("Saw").tag(false)
             }
@@ -83,20 +83,20 @@ extension ContentView {
                 Text("T (s.)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $wavePeriodString)
+                TextField("", text: $autofill.wavePeriodString)
             }
             HStack {
                 Text("Φ (0-1)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $wavePhaseString)
+                TextField("", text: $autofill.wavePhaseString)
             }
             HStack {
                 Text("Skew")
-                    .foregroundColor(waveIsSine ? .gray.opacity(0.3) : .gray.opacity(0.7))
+                    .foregroundColor(autofill.waveIsSine ? .gray.opacity(0.3) : .gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $waveSkewString)
-                    .disabled(waveIsSine)
+                TextField("", text: $autofill.waveSkewString)
+                    .disabled(autofill.waveIsSine)
             }
             HStack {
                 Text("Range")
@@ -104,16 +104,16 @@ extension ContentView {
                     .frame(width: 80, alignment: .trailing)
                 Text("min")
                     .foregroundColor(.gray.opacity(0.7))
-                TextField("", text: $waveAmpMinString)
+                TextField("", text: $autofill.waveAmpMinString)
                 Text("max")
                     .foregroundColor(.gray.opacity(0.7))
-                TextField("", text: $waveAmpMaxString)
+                TextField("", text: $autofill.waveAmpMaxString)
             }
 
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    waveTrackIndex = nil
+                    autofill.waveTrackIndex = nil
                 }
                 Button("OK") {
                     commitAutofillWave()
@@ -130,7 +130,7 @@ extension ContentView {
     // only host single-line TextFields — the multi-line comment box needs a
     // TextEditor, which an alert won't render.
     var editPointSheet: some View {
-        let trackIndex = pointAEditer?.trackIndex ?? 0
+        let trackIndex = pointEditing.pointAEditer?.trackIndex ?? 0
         let isMarkersTrack = trackIndex == 0
         let isMessageTrack = pistes.indices.contains(trackIndex) && pistes[trackIndex].type == .message
         let hasY = pistes.indices.contains(trackIndex) && (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step)
@@ -144,7 +144,7 @@ extension ContentView {
                 Text("Position (s)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 100, alignment: .trailing)
-                TextField("", text: $nouvellePositionString)
+                TextField("", text: $pointEditing.nouvellePositionString)
             }
             if hasY {
                 HStack {
@@ -154,7 +154,7 @@ extension ContentView {
                     Text(String(format: "Y [%g, %g]", pistes[trackIndex].minAmplitude, pistes[trackIndex].maxAmplitude))
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 100, alignment: .trailing)
-                    TextField("", text: $nouvelleYString)
+                    TextField("", text: $pointEditing.nouvelleYString)
                 }
             }
             if isMarkersTrack || isMessageTrack {
@@ -162,7 +162,7 @@ extension ContentView {
                     Text("Label")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 100, alignment: .trailing)
-                    TextField("", text: $nouveauLabel)
+                    TextField("", text: $pointEditing.nouveauLabel)
                 }
             }
 
@@ -170,7 +170,7 @@ extension ContentView {
                 Text("Comment")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 100, alignment: .trailing)
-                TextField("", text: $nouveauComment)
+                TextField("", text: $pointEditing.nouveauComment)
                     // A plain single-line field: no newlines to type in the
                     // first place, and Return submits (like every other
                     // field in this sheet) instead of inserting a line break.
@@ -180,7 +180,7 @@ extension ContentView {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    pointAEditer = nil
+                    pointEditing.pointAEditer = nil
                 }
                 Button("OK") {
                     commitPointEdit()
@@ -194,8 +194,8 @@ extension ContentView {
     }
 
     var autofillBangSheet: some View {
-        let isMarkersTrack = bangTrackIndex == 0
-        let isMessageTrack = bangTrackIndex.map { pistes[$0].type == .message } ?? false
+        let isMarkersTrack = autofill.bangTrackIndex == 0
+        let isMessageTrack = autofill.bangTrackIndex.map { pistes[$0].type == .message } ?? false
         let title = isMarkersTrack ? "Autofill Markers" : (isMessageTrack ? "Autofill Message" : "Autofill Bang")
         return VStack(alignment: .leading, spacing: 12) {
             Text(title)
@@ -206,27 +206,27 @@ extension ContentView {
                 Text("T (s.)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $bangPeriodString)
+                TextField("", text: $autofill.bangPeriodString)
             }
             HStack {
                 Text("Φ (0-1)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $bangPhaseString)
+                TextField("", text: $autofill.bangPhaseString)
             }
             if isMarkersTrack || isMessageTrack {
                 HStack {
                     Text("Prefix")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 80, alignment: .trailing)
-                    TextField(isMarkersTrack ? "M" : "key", text: $bangLabelPrefixString)
+                    TextField(isMarkersTrack ? "M" : "key", text: $autofill.bangLabelPrefixString)
                 }
             }
 
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    bangTrackIndex = nil
+                    autofill.bangTrackIndex = nil
                 }
                 Button("OK") {
                     commitAutofillBang()
@@ -249,13 +249,13 @@ extension ContentView {
                 Text("T mini (s.)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $gridPeriodString)
+                TextField("", text: $uiChrome.gridPeriodString)
             }
             HStack {
                 Text("Φ (0-1)")
                     .foregroundColor(.gray.opacity(0.7))
                     .frame(width: 80, alignment: .trailing)
-                TextField("", text: $gridPhaseString)
+                TextField("", text: $uiChrome.gridPhaseString)
             }
 
             Divider()
@@ -274,7 +274,7 @@ extension ContentView {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    showGridSettingsPopup = false
+                    uiChrome.showGridSettingsPopup = false
                 }
                 Button("OK") {
                     commitGridSettings()
@@ -292,28 +292,28 @@ extension ContentView {
     // Float/Gate toggle: Gate locks the range to 0...1 (boolean on/off) and
     // hides the min/max fields entirely, since there's nothing to configure.
     var rangeEditorSheet: some View {
-        let isStepTrack = amplitudeEditorTrackIndex.map { pistes[$0].type == .step } ?? false
+        let isStepTrack = pointEditing.amplitudeEditorTrackIndex.map { pistes[$0].type == .step } ?? false
         return VStack(alignment: .leading, spacing: 12) {
             Text("Range")
                 .font(.headline)
                 .padding(.bottom, 4)
 
             if isStepTrack {
-                Picker("", selection: $tempIsGate) {
+                Picker("", selection: $trackAmplitudeEdit.tempIsGate) {
                     Text("Float").tag(false)
                     Text("Gate").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: tempIsGate) { _, nowGate in
+                .onChange(of: trackAmplitudeEdit.tempIsGate) { _, nowGate in
                     // Gate locks the range to 0...1 — reflect that in the
                     // (now disabled) fields, rather than leaving them showing
                     // stale Float values that no longer apply.
                     if nowGate {
-                        tempMinAmplitude = "0.00"
-                        tempMaxAmplitude = "1.00"
+                        trackAmplitudeEdit.tempMinAmplitude = "0.00"
+                        trackAmplitudeEdit.tempMaxAmplitude = "1.00"
                         // Step value kept — only switched off — so returning to
                         // Float brings it back.
-                        tempQuantizeEnabled = false
+                        trackAmplitudeEdit.tempQuantizeEnabled = false
                     }
                 }
             }
@@ -322,35 +322,35 @@ extension ContentView {
             // to 0/1 and is itself a quantization, so there's nothing to set —
             // greying the fields out (rather than hiding them) keeps the sheet
             // from changing size as you toggle Float/Gate.
-            let isGateMode = isStepTrack && tempIsGate
+            let isGateMode = isStepTrack && trackAmplitudeEdit.tempIsGate
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("max")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 40, alignment: .trailing)
-                    TextField("max", text: $tempMaxAmplitude)
+                    TextField("max", text: $trackAmplitudeEdit.tempMaxAmplitude)
                 }
                 HStack {
                     Text("min")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 40, alignment: .trailing)
-                    TextField("min", text: $tempMinAmplitude)
+                    TextField("min", text: $trackAmplitudeEdit.tempMinAmplitude)
                 }
 
                 Divider()
                     .padding(.vertical, 2)
 
-                Toggle("Quantize", isOn: $tempQuantizeEnabled)
-                    .onChange(of: tempQuantizeEnabled) { _, enabled in
+                Toggle("Quantize", isOn: $trackAmplitudeEdit.tempQuantizeEnabled)
+                    .onChange(of: trackAmplitudeEdit.tempQuantizeEnabled) { _, enabled in
                         // Only seed a value if there isn't one yet: an existing
                         // step is kept (shown greyed while off) so toggling
                         // back on restores exactly what was there.
-                        if enabled, (Double(tempQuantizeStep) ?? 0) <= 0 {
-                            let minV = Double(tempMinAmplitude) ?? 0
-                            let maxV = Double(tempMaxAmplitude) ?? 1
+                        if enabled, (Double(trackAmplitudeEdit.tempQuantizeStep) ?? 0) <= 0 {
+                            let minV = Double(trackAmplitudeEdit.tempMinAmplitude) ?? 0
+                            let maxV = Double(trackAmplitudeEdit.tempMaxAmplitude) ?? 1
                             let range = maxV - minV
-                            tempQuantizeStep = String(format: "%g", range > 0 ? range / 10 : 0.1)
+                            trackAmplitudeEdit.tempQuantizeStep = String(format: "%g", range > 0 ? range / 10 : 0.1)
                         }
                     }
 
@@ -358,10 +358,10 @@ extension ContentView {
                     Text("quantif.")
                         .foregroundColor(.gray.opacity(0.7))
                         .frame(width: 55, alignment: .trailing)
-                    TextField("", text: $tempQuantizeStep)
-                        .disabled(!tempQuantizeEnabled)
+                    TextField("", text: $trackAmplitudeEdit.tempQuantizeStep)
+                        .disabled(!trackAmplitudeEdit.tempQuantizeEnabled)
                 }
-                .opacity(tempQuantizeEnabled ? 1 : 0.45)
+                .opacity(trackAmplitudeEdit.tempQuantizeEnabled ? 1 : 0.45)
 
                 Text("Point values snap to multiples of this step.")
                     .font(.caption2)
@@ -374,7 +374,7 @@ extension ContentView {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
-                    amplitudeEditorTrackIndex = nil
+                    pointEditing.amplitudeEditorTrackIndex = nil
                 }
                 Button("OK") {
                     commitAmplitudeEdit()
@@ -393,36 +393,36 @@ extension ContentView {
     func applySheetPresentation<Content: View>(_ content: Content) -> some View {
         content
         .sheet(isPresented: Binding<Bool>(
-            get: { pointAEditer != nil },
-            set: { if !$0 { pointAEditer = nil } }
+            get: { pointEditing.pointAEditer != nil },
+            set: { if !$0 { pointEditing.pointAEditer = nil } }
         )) {
             editPointSheet
         }
         .sheet(isPresented: Binding<Bool>(
-            get: { amplitudeEditorTrackIndex != nil },
-            set: { if !$0 { amplitudeEditorTrackIndex = nil } }
+            get: { pointEditing.amplitudeEditorTrackIndex != nil },
+            set: { if !$0 { pointEditing.amplitudeEditorTrackIndex = nil } }
         )) {
             rangeEditorSheet
         }
         .sheet(isPresented: Binding<Bool>(
-            get: { autofillTrackIndex != nil },
-            set: { if !$0 { autofillTrackIndex = nil } }
+            get: { autofill.autofillTrackIndex != nil },
+            set: { if !$0 { autofill.autofillTrackIndex = nil } }
         )) {
             autofillRectangleSheet
         }
         .sheet(isPresented: Binding<Bool>(
-            get: { waveTrackIndex != nil },
-            set: { if !$0 { waveTrackIndex = nil } }
+            get: { autofill.waveTrackIndex != nil },
+            set: { if !$0 { autofill.waveTrackIndex = nil } }
         )) {
             autofillWaveSheet
         }
         .sheet(isPresented: Binding<Bool>(
-            get: { bangTrackIndex != nil },
-            set: { if !$0 { bangTrackIndex = nil } }
+            get: { autofill.bangTrackIndex != nil },
+            set: { if !$0 { autofill.bangTrackIndex = nil } }
         )) {
             autofillBangSheet
         }
-        .sheet(isPresented: $showGridSettingsPopup) {
+        .sheet(isPresented: $uiChrome.showGridSettingsPopup) {
             gridSettingsSheet
         }
     }

@@ -12,16 +12,16 @@ extension ContentView {
                 trackHeaderColumn(index: index)
                 trackContentColumn(index: index, largeurTimeline: largeurTimeline)
             }
-            .offset(y: reorderingIndex == index ? reorderDragTranslation : 0)
-            .zIndex(reorderingIndex == index ? 1 : 0)
-            .opacity(reorderingIndex == index ? 0.85 : 1.0)
+            .offset(y: trackDragReorder.reorderingIndex == index ? trackDragReorder.reorderDragTranslation : 0)
+            .zIndex(trackDragReorder.reorderingIndex == index ? 1 : 0)
+            .opacity(trackDragReorder.reorderingIndex == index ? 0.85 : 1.0)
             .onHover { hovering in
                 // Belt-and-suspenders: if the mouse leaves this entire track
                 // row (e.g. straight onto a different track) without passing
                 // back through the curve area's own hover handler, make sure
                 // the segment-erase cursor state doesn't stay stuck on.
-                if !hovering && isNearCurveControlZone {
-                    isNearCurveControlZone = false
+                if !hovering && pointDrag.isNearCurveControlZone {
+                    pointDrag.isNearCurveControlZone = false
                     updatePointCursor()
                 }
             }

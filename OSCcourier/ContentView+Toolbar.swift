@@ -10,16 +10,16 @@ extension ContentView {
             if showCommandBar {
             HStack {
                 Button(action: { togglePlayback() }) {
-                    Image(systemName: enLecture ? "pause.fill" : "play.fill")
+                    Image(systemName: transport.enLecture ? "pause.fill" : "play.fill")
                         .font(.title2)
                         .foregroundColor(.black)
                         .frame(width: 60, height: 32)
-                        .background(enLecture ? Color(red: 0.5, green: 1.0, blue: 0.2) : Color.gray.opacity(0.15))
+                        .background(transport.enLecture ? Color(red: 0.5, green: 1.0, blue: 0.2) : Color.gray.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
                 .padding(.leading, playButtonLeadingDistance)
-                Button(action: { enLecture = false; position = 0.0; lastSentEvents.removeAll() }) {
+                Button(action: { transport.enLecture = false; transport.position = 0.0; pointDrag.lastSentEvents.removeAll() }) {
                     Image(systemName: "stop.fill")
                         .font(.title2)
                         .foregroundColor(.black)
@@ -37,7 +37,7 @@ extension ContentView {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                TextField("Duration", text: $dureeText)
+                TextField("Duration", text: $transport.dureeText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .frame(width: 85, height: 22)
                     .focused($focusedField, equals: .duree)
@@ -56,7 +56,7 @@ extension ContentView {
                             .foregroundColor(.gray.opacity(0.6))
                             .offset(y: 23)
                     }
-                Text(formattedPosition(position))
+                Text(formattedPosition(transport.position))
                     .font(.system(.body, design: .monospaced))
                     .fontWeight(.bold)
                     .foregroundColor(Color(red: 0.3, green: 0.6, blue: 1.0))
@@ -68,7 +68,7 @@ extension ContentView {
                         showCommandBar = false
                     }
                     .overlay(alignment: .bottom) {
-                        Text("position")
+                        Text("transport.position")
                             .font(.caption2)
                             .foregroundColor(.gray.opacity(0.6))
                             .offset(y: 23)
@@ -187,7 +187,7 @@ extension ContentView {
                         }
                     }
                 Button(action: {
-                    showClearAllConfirmation = true
+                    autofill.showClearAllConfirmation = true
                 }) {
                     Image(systemName: "xmark")
                         .font(.body)
@@ -246,8 +246,8 @@ extension ContentView {
                 // Play/Stop/etc. sideways — only its own leading padding
                 // positions it, always at exactly half of Play's fixed
                 // distance from this same leading edge.
-                RotaryKnob(value: $zoomX, range: 1.0...maxZoomX, onDoubleTap: {
-                    zoomX = 1.0
+                RotaryKnob(value: $transport.zoomX, range: 1.0...maxZoomX, onDoubleTap: {
+                    transport.zoomX = 1.0
                 }, sensitivity: zoomKnobSensitivity)
                 .overlay(alignment: .bottom) {
                     Text("zoom")
@@ -258,8 +258,8 @@ extension ContentView {
                 .padding(.leading, zoomKnobLeadingDistance)
             }
             .padding(.horizontal)
-            .padding(.top, isFullScreen ? 0 : 30)
-            .frame(height: isFullScreen ? 70 : 100)
+            .padding(.top, uiChrome.isFullScreen ? 0 : 30)
+            .frame(height: uiChrome.isFullScreen ? 70 : 100)
 
             Spacer().frame(height: 10)
             } else {

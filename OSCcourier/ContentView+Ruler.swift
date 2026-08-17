@@ -13,17 +13,17 @@ extension ContentView {
                                         // The loop zone band: matches the Loop button's own colors
                                         // exactly (solid yellow active, gray when off), so the zone
                                         // and the button read as one and the same "loop" state.
-                                        if let start = loopZoneStart, let end = loopZoneEnd {
-                                            let x1 = CGFloat(min(start, end) / duree) * largeurTimeline
-                                            let x2 = CGFloat(max(start, end) / duree) * largeurTimeline
+                                        if let start = loopZone.loopZoneStart, let end = loopZone.loopZoneEnd {
+                                            let x1 = CGFloat(min(start, end) / transport.duree) * largeurTimeline
+                                            let x2 = CGFloat(max(start, end) / transport.duree) * largeurTimeline
                                             Rectangle()
                                                 .fill(enBoucle ? Color.yellow : Color.gray.opacity(0.15))
                                                 .frame(width: max(x2 - x1, 1), height: 24)
                                                 .offset(x: 140 + x1)
-                                        } else if let dragStart = rulerDragStartTime, let dragCurrent = rulerDragCurrentTime {
+                                        } else if let dragStart = loopZone.rulerDragStartTime, let dragCurrent = loopZone.rulerDragCurrentTime {
                                             // Live preview while dragging out a brand new zone.
-                                            let x1 = CGFloat(min(dragStart, dragCurrent) / duree) * largeurTimeline
-                                            let x2 = CGFloat(max(dragStart, dragCurrent) / duree) * largeurTimeline
+                                            let x1 = CGFloat(min(dragStart, dragCurrent) / transport.duree) * largeurTimeline
+                                            let x2 = CGFloat(max(dragStart, dragCurrent) / transport.duree) * largeurTimeline
                                             Rectangle()
                                                 .fill(Color.yellow)
                                                 .frame(width: max(x2 - x1, 1), height: 24)
@@ -54,7 +54,7 @@ extension ContentView {
                                             )
                                             .overlay {
                                                 CursorOverlay(
-                                                    isActive: isNearLoopZoneEdge || resizingLoopZoneEdge != nil,
+                                                    isActive: loopZone.isNearLoopZoneEdge || loopZone.resizingLoopZoneEdge != nil,
                                                     symbolName: "chevron.left.chevron.right"
                                                 )
                                                 .allowsHitTesting(false)
@@ -71,7 +71,7 @@ extension ContentView {
                                         // accounts for zoom, via largeurTimeline), not just the total duration —
                                         // otherwise, zoomed in a lot on a long track, the interval would represent
                                         // thousands of pixels and no tick would fall within the visible area.
-                                        let pixelsPerSecond = largeurTimeline / CGFloat(max(duree, 0.001))
+                                        let pixelsPerSecond = largeurTimeline / CGFloat(max(transport.duree, 0.001))
                                         let minPixelSpacing: CGFloat = 100
                                         let niceIntervals: [Double] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
                                         let labelInterval = niceIntervals.first(where: { CGFloat($0) * pixelsPerSecond >= minPixelSpacing }) ?? (niceIntervals.last ?? 3600)
@@ -82,8 +82,8 @@ extension ContentView {
                                         // (tens of thousands of elements).
                                         let outerWidth = outerWidth
                                         let buffer: CGFloat = 200
-                                        let visibleStartSeconde = max(0, Double((scrollOffsetX - buffer - 140) / largeurTimeline) * duree)
-                                        let visibleEndSeconde = min(duree, Double((scrollOffsetX + outerWidth + buffer - 140) / largeurTimeline) * duree)
+                                        let visibleStartSeconde = max(0, Double((transport.scrollOffsetX - buffer - 140) / largeurTimeline) * transport.duree)
+                                        let visibleEndSeconde = min(transport.duree, Double((transport.scrollOffsetX + outerWidth + buffer - 140) / largeurTimeline) * transport.duree)
                                         let firstTick = max(0, (visibleStartSeconde / labelInterval).rounded(.down) * labelInterval)
 
                                         // The ticks are masked so that anything drawn left of the
@@ -105,7 +105,7 @@ extension ContentView {
                                                 }
                                                 .frame(width: 70) // fixed, so the center stays exact regardless of label text width
                                                 .padding(.leading, 140)
-                                                .offset(x: CGFloat(seconde / duree) * largeurTimeline - 35)
+                                                .offset(x: CGFloat(seconde / transport.duree) * largeurTimeline - 35)
                                             }
                                         }
                                         // Pinned to the full available width so the mask below lines

@@ -42,7 +42,7 @@ extension ContentView {
         for i in pistes.indices {
             pistes[i].evenements.removeAll { idSet.contains($0.id) }
         }
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
     }
 
     func applyPointEdit(_ edit: PointEdit) {
@@ -51,7 +51,7 @@ extension ContentView {
             guard let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == edit.id }) else { continue }
 
             if let time = edit.time {
-                pistes[trackIndex].evenements[eventIndex].time = min(max(time, 0), duree)
+                pistes[trackIndex].evenements[eventIndex].time = min(max(time, 0), transport.duree)
             }
             if let label = edit.label {
                 pistes[trackIndex].evenements[eventIndex].label = label
@@ -66,7 +66,7 @@ extension ContentView {
             }
 
             pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
             return
         }
     }
@@ -75,12 +75,12 @@ extension ContentView {
         guard !tracksLocked else { return }
         for (trackIndex, piste) in pistes.enumerated() {
             guard let event = piste.evenements.first(where: { $0.id == eventId }) else { continue }
-            pointAEditer = (trackIndex, eventId)
-            nouvellePositionString = String(format: "%.2f", event.time)
-            nouvelleYString = String(format: "%.2f", event.y)
-            nouveauComment = event.comment
+            pointEditing.pointAEditer = (trackIndex, eventId)
+            pointEditing.nouvellePositionString = String(format: "%.2f", event.time)
+            pointEditing.nouvelleYString = String(format: "%.2f", event.y)
+            pointEditing.nouveauComment = event.comment
             if trackIndex == 0 || piste.type == .message {
-                nouveauLabel = event.label
+                pointEditing.nouveauLabel = event.label
             }
             return
         }
@@ -91,17 +91,17 @@ extension ContentView {
     // incompatible-track alert) if the track's type doesn't match the
     // clipboard's source type.
     func pasteClipboard(at anchorTime: Double, trackIndex: Int, scaleToRange: Bool) -> Bool {
-        guard !tracksLocked, !pointClipboard.isEmpty,
-              let clipboardType = pointClipboardTrackType else { return false }
+        guard !tracksLocked, !pasteClipboard.pointClipboard.isEmpty,
+              let clipboardType = pasteClipboard.pointClipboardTrackType else { return false }
 
         let piste = pistes[trackIndex]
         let destinationType = piste.type
         let typesDiffer = destinationType != clipboardType
-        let srcMin = pointClipboardSourceMinAmplitude
-        let srcMax = pointClipboardSourceMaxAmplitude
+        let srcMin = pasteClipboard.pointClipboardSourceMinAmplitude
+        let srcMax = pasteClipboard.pointClipboardSourceMaxAmplitude
         var newSelection: Set<UUID> = []
         var pasted: [TimelineEvent] = []
-        for entry in pointClipboard {
+        for entry in pasteClipboard.pointClipboard {
             var y = entry.y
             if scaleToRange, let srcMin, let srcMax, srcMax > srcMin {
                 let normalized = (entry.y - srcMin) / (srcMax - srcMin)
@@ -122,7 +122,7 @@ extension ContentView {
                 }
             }
             let newEvent = TimelineEvent(
-                time: min(max(anchorTime + entry.deltaTime, 0), duree),
+                time: min(max(anchorTime + entry.deltaTime, 0), transport.duree),
                 label: label,
                 y: min(max(y, piste.minAmplitude), piste.maxAmplitude),
                 segmentCurve: entry.segmentCurve,
@@ -135,14 +135,14 @@ extension ContentView {
         }
         pistes[trackIndex].evenements.append(contentsOf: pasted)
         pistes[trackIndex].evenements.sort()
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
         // The freshly pasted points become the new selection, so they can
         // immediately be nudged as a group if the placement needs tweaking.
-        selectedPointIDs = newSelection
+        selection.selectedPointIDs = newSelection
         // Remembered so ⌘D can repeat this exact paste at the same offset,
         // stepping forward again each time it's pressed.
-        lastPasteAnchorTime = anchorTime
-        lastPasteTrackIndex = trackIndex
+        pasteClipboard.lastPasteAnchorTime = anchorTime
+        pasteClipboard.lastPasteTrackIndex = trackIndex
         return true
     }
 
@@ -150,7 +150,7 @@ extension ContentView {
     // source type — if so, paste needs the user to explicitly choose to
     // adapt (or cancel), rather than silently reinterpreting the data.
     func pasteNeedsTypeChoice(trackIndex: Int) -> Bool {
-        guard let clipboardType = pointClipboardTrackType else { return false }
+        guard let clipboardType = pasteClipboard.pointClipboardTrackType else { return false }
         return pistes[trackIndex].type != clipboardType
     }
 
@@ -159,7 +159,7 @@ extension ContentView {
     // the only types where Y carries real information.
     func pasteNeedsRangeChoice(trackIndex: Int) -> Bool {
         guard pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step else { return false }
-        guard let srcMin = pointClipboardSourceMinAmplitude, let srcMax = pointClipboardSourceMaxAmplitude else { return false }
+        guard let srcMin = pasteClipboard.pointClipboardSourceMinAmplitude, let srcMax = pasteClipboard.pointClipboardSourceMaxAmplitude else { return false }
         return srcMin != pistes[trackIndex].minAmplitude || srcMax != pistes[trackIndex].maxAmplitude
     }
 
@@ -169,20 +169,20 @@ extension ContentView {
     // happened since the last copy, since that's what establishes the
     // offset to repeat; does nothing before that.
     func duplicateSelectionWithSameOffset() {
-        guard !tracksLocked, !pointClipboard.isEmpty,
-              let prevAnchor = lastPasteAnchorTime,
-              let trackIndex = lastPasteTrackIndex,
+        guard !tracksLocked, !pasteClipboard.pointClipboard.isEmpty,
+              let prevAnchor = pasteClipboard.lastPasteAnchorTime,
+              let trackIndex = pasteClipboard.lastPasteTrackIndex,
               pistes.indices.contains(trackIndex) else { return }
 
         let offset: Double
-        if let fixedOffset = lastPasteOffset {
+        if let fixedOffset = pasteClipboard.lastPasteOffset {
             offset = fixedOffset
-        } else if let originalEarliest = pointClipboardOriginalEarliestTime {
+        } else if let originalEarliest = pasteClipboard.pointClipboardOriginalEarliestTime {
             // First ⌘D since the last manual paste: derive the offset once
             // from how far that paste was from the original copy, then
             // remember it — every later ⌘D press reuses this exact value.
             offset = prevAnchor - originalEarliest
-            lastPasteOffset = offset
+            pasteClipboard.lastPasteOffset = offset
         } else {
             return
         }
@@ -195,12 +195,12 @@ extension ContentView {
     // track with a match is the source — its type is remembered so paste
     // can reject a mismatched destination.
     func copySelectedPoints() {
-        guard !selectedPointIDs.isEmpty else { return }
+        guard !selection.selectedPointIDs.isEmpty else { return }
         for piste in pistes {
-            let matching = piste.evenements.filter { selectedPointIDs.contains($0.id) }
+            let matching = piste.evenements.filter { selection.selectedPointIDs.contains($0.id) }
             guard !matching.isEmpty else { continue }
             let earliestTime = matching.map { $0.time }.min() ?? 0
-            pointClipboard = matching.map { event in
+            pasteClipboard.pointClipboard = matching.map { event in
                 PointClipboardEntry(
                     deltaTime: event.time - earliestTime,
                     label: event.label,
@@ -211,15 +211,15 @@ extension ContentView {
                     comment: event.comment
                 )
             }
-            pointClipboardTrackType = piste.type
-            pointClipboardSourceMinAmplitude = piste.minAmplitude
-            pointClipboardSourceMaxAmplitude = piste.maxAmplitude
-            pointClipboardOriginalEarliestTime = earliestTime
+            pasteClipboard.pointClipboardTrackType = piste.type
+            pasteClipboard.pointClipboardSourceMinAmplitude = piste.minAmplitude
+            pasteClipboard.pointClipboardSourceMaxAmplitude = piste.maxAmplitude
+            pasteClipboard.pointClipboardOriginalEarliestTime = earliestTime
             // A new copy invalidates whatever offset ⌘D was tracking —
             // it needs a fresh paste before it has an offset to repeat.
-            lastPasteAnchorTime = nil
-            lastPasteTrackIndex = nil
-            lastPasteOffset = nil
+            pasteClipboard.lastPasteAnchorTime = nil
+            pasteClipboard.lastPasteTrackIndex = nil
+            pasteClipboard.lastPasteOffset = nil
             return
         }
     }
@@ -230,25 +230,25 @@ extension ContentView {
     // (rather than each point clamping independently) if it would push any
     // selected point out of range, so relative spacing is never distorted.
     func nudgeSelection(timePixels: Int, valuePixels: Int) {
-        guard !tracksLocked, !selectedPointIDs.isEmpty else { return }
+        guard !tracksLocked, !selection.selectedPointIDs.isEmpty else { return }
         for i in pistes.indices {
-            let selected = pistes[i].evenements.filter { selectedPointIDs.contains($0.id) }
+            let selected = pistes[i].evenements.filter { selection.selectedPointIDs.contains($0.id) }
             guard !selected.isEmpty else { continue }
 
             if timePixels != 0 {
                 // Mirrors largeurTimeline's own formula (geometry.size.width - 140,
                 // where that geometry is the zoomed content width).
-                let effectiveWidth = max((timelineAreaWidth * CGFloat(zoomX)) - 140, 1)
-                let secondsPerPixel = duree / Double(effectiveWidth)
+                let effectiveWidth = max((transport.timelineAreaWidth * CGFloat(transport.zoomX)) - 140, 1)
+                let secondsPerPixel = transport.duree / Double(effectiveWidth)
                 let rawDelta = secondsPerPixel * Double(timePixels)
                 var minAllowedDelta = -Double.infinity
                 var maxAllowedDelta = Double.infinity
                 for e in selected {
                     minAllowedDelta = max(minAllowedDelta, 0 - e.time)
-                    maxAllowedDelta = min(maxAllowedDelta, duree - e.time)
+                    maxAllowedDelta = min(maxAllowedDelta, transport.duree - e.time)
                 }
                 let delta = min(max(rawDelta, minAllowedDelta), maxAllowedDelta)
-                for id in selectedPointIDs {
+                for id in selection.selectedPointIDs {
                     guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
                     pistes[i].evenements[idx].time += delta
                 }
@@ -260,7 +260,7 @@ extension ContentView {
                 if pistes[i].type == .step && pistes[i].isGate {
                     // Only two levels exist — jump straight to the other one.
                     let target = goingUp ? pistes[i].maxAmplitude : pistes[i].minAmplitude
-                    for id in selectedPointIDs {
+                    for id in selection.selectedPointIDs {
                         guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
                         pistes[i].evenements[idx].y = target
                     }
@@ -270,7 +270,7 @@ extension ContentView {
                     // sits — not a pixel-sized nudge that quantizedY would then
                     // just round back down to nothing.
                     let step = pistes[i].quantizeStep
-                    for id in selectedPointIDs {
+                    for id in selection.selectedPointIDs {
                         guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
                         let currentY = pistes[i].evenements[idx].y
                         let currentDivision = ((currentY - pistes[i].minAmplitude) / step).rounded()
@@ -291,7 +291,7 @@ extension ContentView {
                         maxAllowedDelta = min(maxAllowedDelta, pistes[i].maxAmplitude - e.y)
                     }
                     let delta = min(max(rawDelta, minAllowedDelta), maxAllowedDelta)
-                    for id in selectedPointIDs {
+                    for id in selection.selectedPointIDs {
                         guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
                         pistes[i].evenements[idx].y = pistes[i].evenements[idx].y + delta
                     }
@@ -299,7 +299,7 @@ extension ContentView {
             }
 
             pistes[i].evenements.sort()
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
             break // the lasso only ever selects points on a single track
         }
     }
@@ -308,22 +308,22 @@ extension ContentView {
     // so removing by id across every track's evenements is safe — at most
     // one track actually has any matches.
     func deleteSelectedPoints() {
-        guard !tracksLocked, !selectedPointIDs.isEmpty else { return }
+        guard !tracksLocked, !selection.selectedPointIDs.isEmpty else { return }
         for i in pistes.indices {
-            pistes[i].evenements.removeAll { selectedPointIDs.contains($0.id) }
+            pistes[i].evenements.removeAll { selection.selectedPointIDs.contains($0.id) }
         }
-        selectedPointIDs.removeAll()
-        lastSentEvents.removeAll()
+        selection.selectedPointIDs.removeAll()
+        pointDrag.lastSentEvents.removeAll()
     }
 
     func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
         guard !tracksLocked else { return }
-        if !selectedPointIDs.isEmpty {
-            selectedPointIDs.removeAll()
+        if !selection.selectedPointIDs.isEmpty {
+            selection.selectedPointIDs.removeAll()
         }
         let piste = pistes[trackIndex]
-        let rawTime = (Double(location.x) / Double(largeurTimeline)) * duree
-        let time = min(max(rawTime, 0), duree)
+        let rawTime = (Double(location.x) / Double(largeurTimeline)) * transport.duree
+        let time = min(max(rawTime, 0), transport.duree)
 
         let label: String
         let y: Double
@@ -347,22 +347,22 @@ extension ContentView {
         let event = TimelineEvent(time: time, label: label, y: y)
         pistes[trackIndex].evenements.append(event)
         pistes[trackIndex].evenements.sort()
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
 
-        creatingPointId = event.id
-        creatingPointTrackIndex = trackIndex
+        pointEditing.creatingPointId = event.id
+        pointEditing.creatingPointTrackIndex = trackIndex
     }
 
     func updateCreatingPoint(at location: CGPoint, largeurTimeline: CGFloat) {
         guard !tracksLocked,
-              let id = creatingPointId,
-              let trackIndex = creatingPointTrackIndex,
+              let id = pointEditing.creatingPointId,
+              let trackIndex = pointEditing.creatingPointTrackIndex,
               pistes.indices.contains(trackIndex),
               let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id })
         else { return }
 
         let xPos = Double(location.x)
-        var newTime = (xPos / Double(largeurTimeline)) * duree
+        var newTime = (xPos / Double(largeurTimeline)) * transport.duree
 
         if NSEvent.modifierFlags.contains(.command),
            let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline), excluding: id) {
@@ -371,7 +371,7 @@ extension ContentView {
                   let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
             newTime = snapped
         }
-        pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), duree)
+        pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), transport.duree)
 
         let piste = pistes[trackIndex]
         if piste.type == .curve || piste.type == .step {
@@ -379,34 +379,34 @@ extension ContentView {
             let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
             pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrackIndex: trackIndex)
         }
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
     }
 
     func finishCreatingPoint() {
-        if let trackIndex = creatingPointTrackIndex, pistes.indices.contains(trackIndex) {
+        if let trackIndex = pointEditing.creatingPointTrackIndex, pistes.indices.contains(trackIndex) {
             pistes[trackIndex].evenements.sort()
         }
-        creatingPointId = nil
-        creatingPointTrackIndex = nil
+        pointEditing.creatingPointId = nil
+        pointEditing.creatingPointTrackIndex = nil
     }
 
     func commitPointEdit() {
-        if let (trackIndex, eventId) = pointAEditer,
-           let newPosition = Double(nouvellePositionString),
+        if let (trackIndex, eventId) = pointEditing.pointAEditer,
+           let newPosition = Double(pointEditing.nouvellePositionString),
            let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == eventId }) {
-            pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), duree)
-            if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(nouvelleYString) {
+            pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), transport.duree)
+            if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(pointEditing.nouvelleYString) {
                 let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
                 pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrackIndex: trackIndex)
             }
             if trackIndex == 0 || pistes[trackIndex].type == .message {
-                pistes[trackIndex].evenements[eventIndex].label = nouveauLabel
+                pistes[trackIndex].evenements[eventIndex].label = pointEditing.nouveauLabel
             }
-            pistes[trackIndex].evenements[eventIndex].comment = nouveauComment
+            pistes[trackIndex].evenements[eventIndex].comment = pointEditing.nouveauComment
             pistes[trackIndex].evenements.sort()
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
         }
-        pointAEditer = nil
+        pointEditing.pointAEditer = nil
     }
 
     func openPointListWindow() {
@@ -421,13 +421,13 @@ extension ContentView {
             deleteSpecificPoints(ids: ids)
         }
 
-        if let controller = pointListWindowController {
-            if isPointListWindowVisible {
+        if let controller = windowManagement.pointListWindowController {
+            if windowManagement.isPointListWindowVisible {
                 controller.window?.close()
-                isPointListWindowVisible = false
+                windowManagement.isPointListWindowVisible = false
             } else {
                 controller.showWindow(nil)
-                isPointListWindowVisible = true
+                windowManagement.isPointListWindowVisible = true
             }
             return
         }
@@ -454,17 +454,17 @@ extension ContentView {
 
         let delegate = OSCWindowCloseDelegate()
         delegate.onClose = {
-            isPointListWindowVisible = false
+            windowManagement.isPointListWindowVisible = false
         }
         delegate.sharedUndoManager = timelineStore.undoManager
         window.delegate = delegate
-        pointListCloseDelegate = delegate
+        windowManagement.pointListCloseDelegate = delegate
 
         window.center()
 
-        pointListWindowController = NSWindowController(window: window)
-        pointListWindowController?.showWindow(nil)
-        isPointListWindowVisible = true
+        windowManagement.pointListWindowController = NSWindowController(window: window)
+        windowManagement.pointListWindowController?.showWindow(nil)
+        windowManagement.isPointListWindowVisible = true
     }
 
 }

@@ -138,85 +138,85 @@ extension ContentView {
         if pistes[index].evenements.isEmpty {
             proceedWithAutofill(for: index)
         } else {
-            pendingAutofillIndex = index
+            autofill.pendingAutofillIndex = index
         }
     }
 
     func proceedWithAutofill(for index: Int) {
         switch pistes[index].type {
         case .step:
-            autofillTrackIndex = index
-            autofillPeriodString = "1.0"
-            autofillPhaseString = "0.0"
-            autofillPulseWidthString = "0.5"
-            autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
+            autofill.autofillTrackIndex = index
+            autofill.autofillPeriodString = "1.0"
+            autofill.autofillPhaseString = "0.0"
+            autofill.autofillPulseWidthString = "0.5"
+            autofill.autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
+            autofill.autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
         case .curve:
-            waveTrackIndex = index
-            waveIsSine = true
-            wavePeriodString = "1.0"
-            wavePhaseString = "0.0"
-            waveSkewString = "0.5"
-            waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
+            autofill.waveTrackIndex = index
+            autofill.waveIsSine = true
+            autofill.wavePeriodString = "1.0"
+            autofill.wavePhaseString = "0.0"
+            autofill.waveSkewString = "0.5"
+            autofill.waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
+            autofill.waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
         case .bang, .message:
-            bangTrackIndex = index
-            bangPeriodString = "1.0"
-            bangPhaseString = "0.0"
-            bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
+            autofill.bangTrackIndex = index
+            autofill.bangPeriodString = "1.0"
+            autofill.bangPhaseString = "0.0"
+            autofill.bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
         case .normal:
             break
         }
     }
 
     func commitAutofillRectangle() {
-        if let index = autofillTrackIndex,
-           let period = Double(autofillPeriodString),
-           let phase = Double(autofillPhaseString),
-           let pulseWidth = Double(autofillPulseWidthString),
-           let ampMin = Double(autofillAmpMinString),
-           let ampMax = Double(autofillAmpMaxString) {
+        if let index = autofill.autofillTrackIndex,
+           let period = Double(autofill.autofillPeriodString),
+           let phase = Double(autofill.autofillPhaseString),
+           let pulseWidth = Double(autofill.autofillPulseWidthString),
+           let ampMin = Double(autofill.autofillAmpMinString),
+           let ampMax = Double(autofill.autofillAmpMaxString) {
             pistes[index].evenements = rectangleEvents(
                 period: period,
                 phase: phase,
                 pulseWidth: pulseWidth,
                 ampMin: ampMin,
                 ampMax: ampMax,
-                duree: duree
+                duree: transport.duree
             )
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
         }
-        autofillTrackIndex = nil
+        autofill.autofillTrackIndex = nil
     }
 
     func commitAutofillWave() {
-        if let index = waveTrackIndex,
-           let period = Double(wavePeriodString),
-           let phase = Double(wavePhaseString),
-           let skew = Double(waveSkewString),
-           let ampMin = Double(waveAmpMinString),
-           let ampMax = Double(waveAmpMaxString) {
+        if let index = autofill.waveTrackIndex,
+           let period = Double(autofill.wavePeriodString),
+           let phase = Double(autofill.wavePhaseString),
+           let skew = Double(autofill.waveSkewString),
+           let ampMin = Double(autofill.waveAmpMinString),
+           let ampMax = Double(autofill.waveAmpMaxString) {
             pistes[index].evenements = waveEvents(
-                isSine: waveIsSine,
+                isSine: autofill.waveIsSine,
                 period: period,
                 phase: phase,
                 skew: skew,
                 ampMin: ampMin,
                 ampMax: ampMax,
-                duree: duree
+                duree: transport.duree
             )
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
         }
-        waveTrackIndex = nil
+        autofill.waveTrackIndex = nil
     }
 
     func commitAutofillBang() {
-        if let index = bangTrackIndex,
-           let period = Double(bangPeriodString),
-           let phase = Double(bangPhaseString) {
+        if let index = autofill.bangTrackIndex,
+           let period = Double(autofill.bangPeriodString),
+           let phase = Double(autofill.bangPhaseString) {
             let isMarkersTrack = index == 0
             let isMessageTrack = pistes[index].type == .message
-            let trimmedPrefix = bangLabelPrefixString.trimmingCharacters(in: .whitespaces)
+            let trimmedPrefix = autofill.bangLabelPrefixString.trimmingCharacters(in: .whitespaces)
             let numberedLabelPrefix: String?
             if isMarkersTrack {
                 numberedLabelPrefix = trimmedPrefix.isEmpty ? "M" : trimmedPrefix
@@ -228,12 +228,12 @@ extension ContentView {
             pistes[index].evenements = bangEvents(
                 period: period,
                 phase: phase,
-                duree: duree,
+                duree: transport.duree,
                 numberedLabelPrefix: numberedLabelPrefix
             )
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
         }
-        bangTrackIndex = nil
+        autofill.bangTrackIndex = nil
     }
 
 }

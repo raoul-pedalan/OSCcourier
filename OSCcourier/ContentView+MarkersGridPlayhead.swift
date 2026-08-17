@@ -15,7 +15,7 @@ extension ContentView {
                                 // drawn here (outside the .clipped() area of each individual track)
                                 // so they can span through all the tracks below.
                                 ForEach(pistes[0].evenements) { event in
-                                    let xPos = CGFloat(event.time / duree) * largeurTimeline + 140
+                                    let xPos = CGFloat(event.time / transport.duree) * largeurTimeline + 140
                                     Rectangle()
                                         .fill(pistes[0].couleur)
                                         .frame(width: 1, height: CGFloat(totalHeight) - 15)
@@ -29,7 +29,7 @@ extension ContentView {
                                 // same span as the marker lines above but dashed and purely visual.
                                 if showGrid {
                                     ForEach(visibleGridLineTimes(largeurTimeline: largeurTimeline), id: \.self) { time in
-                                        let xPos = CGFloat(time / duree) * largeurTimeline + 140
+                                        let xPos = CGFloat(time / transport.duree) * largeurTimeline + 140
                                         Path { path in
                                             path.move(to: CGPoint(x: xPos, y: 15))
                                             path.addLine(to: CGPoint(x: xPos, y: CGFloat(totalHeight)))
@@ -61,9 +61,9 @@ extension ContentView {
                                     .offset(y: -15)
                                     .onTapGesture { location in
                                         guard location.x > 140 else { return }
-                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * duree
-                                        position = min(max(clicked, 0), duree)
-                                        sendOSCMessagesForPosition(position)
+                                        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * transport.duree
+                                        transport.position = min(max(clicked, 0), transport.duree)
+                                        sendOSCMessagesForPosition(transport.position)
                                     }
 
                                 ZStack(alignment: .topLeading) {
@@ -74,21 +74,21 @@ extension ContentView {
                                         .rotationEffect(.degrees(180))
                                         .offset(x: -6, y: -12)
                                 }
-                                // .offset() shifts the triangle's RENDERED position but not this
+                                // .offset() shifts the triangle's RENDERED transport.position but not this
                                 // ZStack's own hit-testable bounds, which stay anchored to the
                                 // thin 2pt-wide line — so without this, dragging only worked from
                                 // the line itself, never from the triangle that visually pokes out
                                 // above and to the side of it. An explicit Path-based content
-                                // shape doesn't affect layout size/position (only which region
+                                // shape doesn't affect layout size/transport.position (only which region
                                 // responds to gestures), so the existing offset/coordinate math
                                 // below is untouched.
                                 .contentShape(Path(CGRect(x: -8, y: -14, width: 16, height: CGFloat(totalHeight) + 14)))
-                                .offset(x: CGFloat(position / duree) * largeurTimeline + 140)
+                                .offset(x: CGFloat(transport.position / transport.duree) * largeurTimeline + 140)
                                 .gesture(
                                     DragGesture(minimumDistance: 0)
                                         .onChanged { value in
                                             let xPos = Double(value.location.x - 140)
-                                            var newPosition = (xPos / Double(largeurTimeline)) * duree
+                                            var newPosition = (xPos / Double(largeurTimeline)) * transport.duree
                                             // ⌘ snaps the playhead to the nearest marker/grid
                                             // line — the same snap zone and candidates a point
                                             // drag uses, so the two behave identically.
@@ -96,8 +96,8 @@ extension ContentView {
                                                let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
                                                 newPosition = snapped
                                             }
-                                            position = min(max(newPosition, 0), duree)
-                                            sendOSCMessagesForPosition(position)
+                                            transport.position = min(max(newPosition, 0), transport.duree)
+                                            sendOSCMessagesForPosition(transport.position)
                                         }
                                 )
                                 .simultaneousGesture(
@@ -106,9 +106,9 @@ extension ContentView {
                                         // above uses minimumDistance 0, which would otherwise
                                         // win exclusive recognition and swallow every tap
                                         // before a double-tap could ever be detected.
-                                        goToTimeString = formattedDuration(position)
-                                        goToMarkerNameString = ""
-                                        showPlayheadPositionChoice = true
+                                        uiChrome.goToTimeString = formattedDuration(transport.position)
+                                        uiChrome.goToMarkerNameString = ""
+                                        pasteClipboard.showPlayheadPositionChoice = true
                                     }
                                 )
                                 .onHover { isHovering in

@@ -13,23 +13,23 @@ extension ContentView {
         // ⇧⌥ starting directly on top of a point means the
         // lasso started there — don't also move the point out
         // from under it via this gesture.
-        guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
+        guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !pasteClipboard.isPasteModeActive else { return }
 
-        let isGroupDrag = selectedPointIDs.contains(eventID)
-        if !isGroupDrag && !selectedPointIDs.isEmpty {
-            selectedPointIDs.removeAll()
+        let isGroupDrag = selection.selectedPointIDs.contains(eventID)
+        if !isGroupDrag && !selection.selectedPointIDs.isEmpty {
+            selection.selectedPointIDs.removeAll()
         }
 
-        var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * duree
-        isHoveringPoint = true
+        var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * transport.duree
+        pointDrag.isHoveringPoint = true
 
         // Cmd + within 7px of a marker or grid line: snap to it.
         // Without Cmd, if "magnetic grid" is on, still snap onto
         // the nearest grid line alone (never a marker).
-        let dragXPos = (newPosition / duree) * Double(largeurTimeline)
-        isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: eventID)
-        isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
-        isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: eventID)
+        let dragXPos = (newPosition / transport.duree) * Double(largeurTimeline)
+        pointDrag.isNearSnapZone = isNearMarker(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: eventID)
+        pointDrag.isNearGridSnapZone = nearestGridTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) != nil
+        pointDrag.isNearestSnapGrid = isNearestSnapAGridLine(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: eventID)
         if NSEvent.modifierFlags.contains(.command),
            let snapTime = nearestSnapTime(xPos: dragXPos, largeurTimeline: Double(largeurTimeline), excluding: eventID) {
             newPosition = snapTime
@@ -39,34 +39,34 @@ extension ContentView {
         }
         updatePointCursor()
 
-        let clampedNewTime = min(max(newPosition, 0), duree)
+        let clampedNewTime = min(max(newPosition, 0), transport.duree)
 
         if isGroupDrag {
             // Captured once, on the first tick — re-deriving from
             // a moving baseline each frame would compound
             // snapping/rounding error across the drag.
-            if groupDragBaseline.isEmpty {
-                groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
-                    .filter { selectedPointIDs.contains($0.id) }
+            if pointDrag.groupDragBaseline.isEmpty {
+                pointDrag.groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                    .filter { selection.selectedPointIDs.contains($0.id) }
                     .map { ($0.id, $0.time) })
-                groupDragAnchorOriginalTime = groupDragBaseline[eventID]
+                pointDrag.groupDragAnchorOriginalTime = pointDrag.groupDragBaseline[eventID]
             }
-            guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
+            guard let anchorOriginal = pointDrag.groupDragAnchorOriginalTime else { return }
             let delta = clampedNewTime - anchorOriginal
-            for (id, originalTime) in groupDragBaseline {
+            for (id, originalTime) in pointDrag.groupDragBaseline {
                 guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), duree)
+                pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), transport.duree)
             }
 
             // Y moves too, but only where it means something.
             if pistes[index].type == .curve || pistes[index].type == .step {
-                if groupDragYBaseline.isEmpty {
-                    groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
-                        .filter { selectedPointIDs.contains($0.id) }
+                if pointDrag.groupDragYBaseline.isEmpty {
+                    pointDrag.groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
+                        .filter { selection.selectedPointIDs.contains($0.id) }
                         .map { ($0.id, $0.y) })
-                    groupDragAnchorOriginalY = groupDragYBaseline[eventID]
+                    pointDrag.groupDragAnchorOriginalY = pointDrag.groupDragYBaseline[eventID]
                 }
-                if let anchorOriginalY = groupDragAnchorOriginalY {
+                if let anchorOriginalY = pointDrag.groupDragAnchorOriginalY {
                     let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
                     let rawY = pistes[index].minAmplitude + normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude)
                     let rawYDelta = rawY - anchorOriginalY
@@ -76,12 +76,12 @@ extension ContentView {
                     // distorting the spacing between their values.
                     var minAllowedDelta = -Double.infinity
                     var maxAllowedDelta = Double.infinity
-                    for (_, originalY) in groupDragYBaseline {
+                    for (_, originalY) in pointDrag.groupDragYBaseline {
                         minAllowedDelta = max(minAllowedDelta, pistes[index].minAmplitude - originalY)
                         maxAllowedDelta = min(maxAllowedDelta, pistes[index].maxAmplitude - originalY)
                     }
                     let clampedYDelta = min(max(rawYDelta, minAllowedDelta), maxAllowedDelta)
-                    for (id, originalY) in groupDragYBaseline {
+                    for (id, originalY) in pointDrag.groupDragYBaseline {
                         guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
                         pistes[index].evenements[idx].y = gateSnappedY(originalY + clampedYDelta, forTrackIndex: index)
                     }
@@ -99,11 +99,11 @@ extension ContentView {
 
     func handlePointDragEnded(trackIndex index: Int) {
         pistes[index].evenements.sort()
-        lastSentEvents.removeAll()
-        groupDragBaseline.removeAll()
-        groupDragAnchorOriginalTime = nil
-        groupDragYBaseline.removeAll()
-        groupDragAnchorOriginalY = nil
+        pointDrag.lastSentEvents.removeAll()
+        pointDrag.groupDragBaseline.removeAll()
+        pointDrag.groupDragAnchorOriginalTime = nil
+        pointDrag.groupDragYBaseline.removeAll()
+        pointDrag.groupDragAnchorOriginalY = nil
     }
 
     // A plain click: Shift (without Option) removes the point; otherwise a
@@ -113,10 +113,10 @@ extension ContentView {
         if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
             if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == eventID }) {
                 pistes[index].evenements.remove(at: eventIndex)
-                lastSentEvents.removeAll()
+                pointDrag.lastSentEvents.removeAll()
             }
-        } else if !selectedPointIDs.isEmpty {
-            selectedPointIDs.removeAll()
+        } else if !selection.selectedPointIDs.isEmpty {
+            selection.selectedPointIDs.removeAll()
         }
     }
 
@@ -137,8 +137,8 @@ extension ContentView {
         let sorted = pistes[index].evenements.sorted { $0.time < $1.time }
         guard sorted.count > 1 else { return }
 
-        if curveDragSegmentID == nil {
-            let startTime = (Double(value.startLocation.x) / Double(largeurTimeline)) * duree
+        if pointDrag.curveDragSegmentID == nil {
+            let startTime = (Double(value.startLocation.x) / Double(largeurTimeline)) * transport.duree
             var chosenID = sorted[0].id
             for i in 0..<(sorted.count - 1) {
                 if startTime >= sorted[i].time && startTime <= sorted[i + 1].time {
@@ -146,15 +146,15 @@ extension ContentView {
                     break
                 }
             }
-            curveDragSegmentID = chosenID
+            pointDrag.curveDragSegmentID = chosenID
             let chosenEvent = sorted.first(where: { $0.id == chosenID })
-            curveDragBaseline = chosenEvent?.segmentCurve ?? 0
-            curveDragBulgeBaseline = chosenEvent?.segmentBulge ?? 0
+            pointDrag.curveDragBaseline = chosenEvent?.segmentCurve ?? 0
+            pointDrag.curveDragBulgeBaseline = chosenEvent?.segmentBulge ?? 0
         }
 
-        if let segmentID = curveDragSegmentID,
-           let baseline = curveDragBaseline,
-           let bulgeBaseline = curveDragBulgeBaseline,
+        if let segmentID = pointDrag.curveDragSegmentID,
+           let baseline = pointDrag.curveDragBaseline,
+           let bulgeBaseline = pointDrag.curveDragBulgeBaseline,
            let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == segmentID }) {
             let newCurvature = min(max(baseline + Double(value.translation.width) * 0.0075, -6), 6)
             let newBulge = min(max(bulgeBaseline - Double(value.translation.height) * 0.0075, -6), 6)
@@ -164,9 +164,9 @@ extension ContentView {
     }
 
     func handleCurveBendDragEnded() {
-        curveDragSegmentID = nil
-        curveDragBaseline = nil
-        curveDragBulgeBaseline = nil
+        pointDrag.curveDragSegmentID = nil
+        pointDrag.curveDragBaseline = nil
+        pointDrag.curveDragBulgeBaseline = nil
     }
 
 }

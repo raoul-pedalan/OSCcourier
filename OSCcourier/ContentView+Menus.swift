@@ -20,7 +20,7 @@ extension ContentView {
     func deleteAllTracks() {
         guard !tracksLocked else { return }
         pistes = [pistes[0]]
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
     }
 
     func addTrack(couleur: Color, type: TrackType, height: CGFloat) {
@@ -78,13 +78,13 @@ extension ContentView {
         // No per-window appearance handling here anymore: NSApp.appearance
         // (set app-wide from the Appearance setting) already covers every
         // window, including this one and its title bar.
-        if let controller = messagesWindowController {
-            if isOSCWindowVisible {
+        if let controller = windowManagement.messagesWindowController {
+            if windowManagement.isOSCWindowVisible {
                 controller.window?.close()
-                isOSCWindowVisible = false
+                windowManagement.isOSCWindowVisible = false
             } else {
                 controller.showWindow(nil)
-                isOSCWindowVisible = true
+                windowManagement.isOSCWindowVisible = true
             }
             return
         }
@@ -111,10 +111,10 @@ extension ContentView {
 
         let delegate = OSCWindowCloseDelegate()
         delegate.onClose = {
-            isOSCWindowVisible = false
+            windowManagement.isOSCWindowVisible = false
         }
         window.delegate = delegate
-        oscWindowCloseDelegate = delegate
+        windowManagement.oscWindowCloseDelegate = delegate
 
         // Top-right of the screen, with a small margin from the edges —
         // applied after setFrameAutosaveName so it always ends up there,
@@ -128,19 +128,19 @@ extension ContentView {
             window.setFrameOrigin(origin)
         }
 
-        messagesWindowController = NSWindowController(window: window)
-        messagesWindowController?.showWindow(nil)
-        isOSCWindowVisible = true
+        windowManagement.messagesWindowController = NSWindowController(window: window)
+        windowManagement.messagesWindowController?.showWindow(nil)
+        windowManagement.isOSCWindowVisible = true
     }
 
     func openModifierKeysHelpWindow() {
-        if let controller = modifierKeysWindowController {
-            if isModifierKeysWindowVisible {
+        if let controller = windowManagement.modifierKeysWindowController {
+            if windowManagement.isModifierKeysWindowVisible {
                 controller.window?.close()
-                isModifierKeysWindowVisible = false
+                windowManagement.isModifierKeysWindowVisible = false
             } else {
                 controller.showWindow(nil)
-                isModifierKeysWindowVisible = true
+                windowManagement.isModifierKeysWindowVisible = true
             }
             return
         }
@@ -169,16 +169,16 @@ extension ContentView {
 
         let delegate = OSCWindowCloseDelegate()
         delegate.onClose = {
-            isModifierKeysWindowVisible = false
+            windowManagement.isModifierKeysWindowVisible = false
         }
         window.delegate = delegate
-        modifierKeysCloseDelegate = delegate
+        windowManagement.modifierKeysCloseDelegate = delegate
 
         window.center()
 
-        modifierKeysWindowController = NSWindowController(window: window)
-        modifierKeysWindowController?.showWindow(nil)
-        isModifierKeysWindowVisible = true
+        windowManagement.modifierKeysWindowController = NSWindowController(window: window)
+        windowManagement.modifierKeysWindowController?.showWindow(nil)
+        windowManagement.isModifierKeysWindowVisible = true
     }
 
 }

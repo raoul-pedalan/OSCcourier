@@ -20,26 +20,26 @@ extension ContentView {
     }
 
     // Maximum zoom factor such that at max zoom, 1 second of timeline = 1000px,
-    // no matter how long the track (`duree`) is. Without this, a fixed max zoom
-    // (e.g. 10x) isn't enough to reach that resolution once `duree` gets large.
+    // no matter how long the track (`transport.duree`) is. Without this, a fixed max zoom
+    // (e.g. 10x) isn't enough to reach that resolution once `transport.duree` gets large.
     var maxZoomX: Double {
-        let outerWidth = max(timelineAreaWidth, 1)
-        let desiredLargeur = 1000.0 * duree // pixels needed so that 1s = 1000px
+        let outerWidth = max(transport.timelineAreaWidth, 1)
+        let desiredLargeur = 1000.0 * transport.duree // pixels needed so that 1s = 1000px
         let zoom = (desiredLargeur + 140) / outerWidth
         return max(1.0, zoom)
     }
 
-    // maxZoomX computed as if duree were pinned at 30s (same outerWidth) —
+    // maxZoomX computed as if transport.duree were pinned at 30s (same outerWidth) —
     // used purely as a reference span for calibrating the zoom knob's
     // sensitivity below, not for the actual zoom range.
     var referenceMaxZoomX: Double {
-        let outerWidth = max(timelineAreaWidth, 1)
+        let outerWidth = max(transport.timelineAreaWidth, 1)
         let desiredLargeur = 1000.0 * 30.0
         return max(1.0, (desiredLargeur + 140) / outerWidth)
     }
 
     // The zoom knob was tuned to feel right for a 30s track (sensitivity
-    // 0.05). Since the usable zoom range (1...maxZoomX) grows with `duree`,
+    // 0.05). Since the usable zoom range (1...maxZoomX) grows with `transport.duree`,
     // a fixed sensitivity would require dragging proportionally further for
     // longer tracks to reach the same zoom level. Scaling sensitivity by the
     // ratio of the current range's span to the 30s-reference span keeps the

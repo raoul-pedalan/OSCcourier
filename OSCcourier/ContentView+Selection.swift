@@ -7,7 +7,7 @@ extension ContentView {
     // candidates as a point drag) so the cursor reflects where a
     // click-up would actually land, before the user even clicks.
     func handlePasteHover(phase: HoverPhase, largeurTimeline: CGFloat) {
-        guard isPasteModeActive else { return }
+        guard pasteClipboard.isPasteModeActive else { return }
         switch phase {
         case .active(let location):
             let xPos = Double(location.x)
@@ -15,11 +15,11 @@ extension ContentView {
                 && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
             let willSnapToGrid = magneticGridSnap
                 && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
-            if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
-            if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+            if pointDrag.isNearSnapZone != willSnapToMarker { pointDrag.isNearSnapZone = willSnapToMarker }
+            if pointDrag.isNearGridSnapZone != willSnapToGrid { pointDrag.isNearGridSnapZone = willSnapToGrid }
         case .ended:
-            if isNearSnapZone { isNearSnapZone = false }
-            if isNearGridSnapZone { isNearGridSnapZone = false }
+            if pointDrag.isNearSnapZone { pointDrag.isNearSnapZone = false }
+            if pointDrag.isNearGridSnapZone { pointDrag.isNearGridSnapZone = false }
         }
     }
 
@@ -29,7 +29,7 @@ extension ContentView {
     // underneath; it only actually does anything once both modifiers
     // are held.
     func handleLassoDragChanged(_ value: DragGesture.Value, trackIndex index: Int, largeurTimeline: CGFloat) {
-        guard !tracksLocked, !isPasteModeActive,
+        guard !tracksLocked, !pasteClipboard.isPasteModeActive,
               NSEvent.modifierFlags.contains(.shift),
               NSEvent.modifierFlags.contains(.option) else { return }
         // onContinuousHover (used for the idle-hover cursor) stops firing
@@ -37,19 +37,19 @@ extension ContentView {
         // duration of the lasso drag itself — same pattern as the
         // curve-bend cursor.
         cursor(fromSymbol: "dot.crosshair").set()
-        if lassoTrackIndex == nil {
-            lassoTrackIndex = index
-            lassoStartLocation = value.startLocation
+        if selection.lassoTrackIndex == nil {
+            selection.lassoTrackIndex = index
+            selection.lassoStartLocation = value.startLocation
         }
-        guard lassoTrackIndex == index else { return }
-        lassoCurrentLocation = value.location
+        guard selection.lassoTrackIndex == index else { return }
+        selection.lassoCurrentLocation = value.location
     }
 
     func handleLassoDragEnded(_ value: DragGesture.Value, trackIndex index: Int, largeurTimeline: CGFloat) {
-        guard lassoTrackIndex == index, let start = lassoStartLocation else {
-            lassoTrackIndex = nil
-            lassoStartLocation = nil
-            lassoCurrentLocation = nil
+        guard selection.lassoTrackIndex == index, let start = selection.lassoStartLocation else {
+            selection.lassoTrackIndex = nil
+            selection.lassoStartLocation = nil
+            selection.lassoCurrentLocation = nil
             return
         }
         let rect = CGRect(
@@ -61,7 +61,7 @@ extension ContentView {
         let trackHeight = rowHeight(for: pistes[index])
         var newSelection: Set<UUID> = []
         for event in pistes[index].evenements {
-            let xPos = CGFloat(event.time / duree) * largeurTimeline
+            let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
             let pointY: CGFloat
             if pistes[index].type == .curve || pistes[index].type == .step {
                 let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
@@ -74,10 +74,10 @@ extension ContentView {
                 newSelection.insert(event.id)
             }
         }
-        selectedPointIDs = newSelection
-        lassoTrackIndex = nil
-        lassoStartLocation = nil
-        lassoCurrentLocation = nil
+        selection.selectedPointIDs = newSelection
+        selection.lassoTrackIndex = nil
+        selection.lassoStartLocation = nil
+        selection.lassoCurrentLocation = nil
     }
 
     // Same reason as the lasso's onChanged: the tracking-area-based
@@ -86,14 +86,14 @@ extension ContentView {
     // mouse-down-to-up window — including switching to the snap glyph as
     // it comes into range.
     func handlePasteDragChanged(_ value: DragGesture.Value, largeurTimeline: CGFloat) {
-        guard isPasteModeActive else { return }
+        guard pasteClipboard.isPasteModeActive else { return }
         let xPos = Double(value.location.x)
         let willSnapToMarker = NSEvent.modifierFlags.contains(.command)
             && isNearMarker(xPos: xPos, largeurTimeline: Double(largeurTimeline))
         let willSnapToGrid = magneticGridSnap
             && nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) != nil
-        if isNearSnapZone != willSnapToMarker { isNearSnapZone = willSnapToMarker }
-        if isNearGridSnapZone != willSnapToGrid { isNearGridSnapZone = willSnapToGrid }
+        if pointDrag.isNearSnapZone != willSnapToMarker { pointDrag.isNearSnapZone = willSnapToMarker }
+        if pointDrag.isNearGridSnapZone != willSnapToGrid { pointDrag.isNearGridSnapZone = willSnapToGrid }
         if willSnapToMarker || willSnapToGrid {
             cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .red).set()
         } else {
@@ -106,9 +106,9 @@ extension ContentView {
     // way — a plain click pastes right there, a click-drag pastes
     // wherever it ended (with the same Cmd/grid snap as a point drag).
     func handlePasteDragEnded(_ value: DragGesture.Value, trackIndex index: Int, largeurTimeline: CGFloat) {
-        guard isPasteModeActive, pointClipboardTrackType != nil else { return }
+        guard pasteClipboard.isPasteModeActive, pasteClipboard.pointClipboardTrackType != nil else { return }
         let xPos = Double(value.location.x)
-        var anchorTime = (xPos / Double(largeurTimeline)) * duree
+        var anchorTime = (xPos / Double(largeurTimeline)) * transport.duree
         if NSEvent.modifierFlags.contains(.command),
            let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
             anchorTime = snapped
@@ -116,18 +116,18 @@ extension ContentView {
                   let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
             anchorTime = snapped
         }
-        anchorTime = min(max(anchorTime, 0), duree)
+        anchorTime = min(max(anchorTime, 0), transport.duree)
         if pasteNeedsTypeChoice(trackIndex: index) {
-            pendingPasteAnchorTime = anchorTime
-            pendingPasteTrackIndex = index
-            showDifferentTypePasteAlert = true
+            pasteClipboard.pendingPasteAnchorTime = anchorTime
+            pasteClipboard.pendingPasteTrackIndex = index
+            pasteClipboard.showDifferentTypePasteAlert = true
         } else if pasteNeedsRangeChoice(trackIndex: index) {
-            pendingPasteAnchorTime = anchorTime
-            pendingPasteTrackIndex = index
-            showPasteScaleRangeAlert = true
+            pasteClipboard.pendingPasteAnchorTime = anchorTime
+            pasteClipboard.pendingPasteTrackIndex = index
+            pasteClipboard.showPasteScaleRangeAlert = true
         } else if pasteClipboard(at: anchorTime, trackIndex: index, scaleToRange: false) {
-            lastPasteOffset = nil
-            isPasteModeActive = false
+            pasteClipboard.lastPasteOffset = nil
+            pasteClipboard.isPasteModeActive = false
         }
     }
 

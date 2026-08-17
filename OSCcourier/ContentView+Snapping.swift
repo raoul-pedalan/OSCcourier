@@ -60,7 +60,7 @@ extension ContentView {
         switch piste.type {
         case .bang, .message:
             ForEach(piste.evenements) { event in
-                let xPos = CGFloat(event.time / duree) * largeurTimeline
+                let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                 Rectangle()
                     .fill(piste.couleur.opacity(0.7))
                     .frame(width: 1, height: h * 0.6)
@@ -77,7 +77,7 @@ extension ContentView {
                         return margin + (h - 2 * margin) * (1 - normalizedY)
                     }
                     for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
+                        let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                         let point = CGPoint(x: xPos, y: yPos(for: event.y))
                         if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
                     }
@@ -95,7 +95,7 @@ extension ContentView {
                         return margin + (h - 2 * margin) * (1 - normalizedY)
                     }
                     for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / duree) * largeurTimeline
+                        let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                         let y = yPos(for: event)
                         if i == 0 {
                             path.move(to: CGPoint(x: xPos, y: y))
@@ -143,7 +143,7 @@ extension ContentView {
     }
 
     func applyShiftSegmentCursor(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        let time = (Double(location.x) / Double(largeurTimeline)) * duree
+        let time = (Double(location.x) / Double(largeurTimeline)) * transport.duree
         if let curveY = curveYPosition(forTime: time, trackIndex: trackIndex),
            abs(Double(location.y) - Double(curveY)) < 12 {
             if isSegmentEnabled(forTime: time, trackIndex: trackIndex) {
@@ -163,7 +163,7 @@ extension ContentView {
             guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
             if let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == sorted[i].id }) {
                 pistes[trackIndex].evenements[eventIndex].segmentEnabled.toggle()
-                lastSentEvents.removeAll()
+                pointDrag.lastSentEvents.removeAll()
             }
             return
         }
@@ -186,7 +186,7 @@ extension ContentView {
 
     // `excluding` lets a point being dragged skip itself as a snap candidate.
     // Without it, a marker being dragged would see its own (just-updated)
-    // position among the candidates each tick, effectively "snapping to
+    // transport.position among the candidates each tick, effectively "snapping to
     // wherever it was a moment ago" — a laggy, stuttery drag instead of a
     // smooth one, since the marker never advances a full step ahead but
     // trails the mouse in small catch-up jumps every frame.
@@ -199,14 +199,14 @@ extension ContentView {
     }
 
     func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double) -> Double? {
-        guard !candidates.isEmpty, duree > 0 else { return nil }
+        guard !candidates.isEmpty, transport.duree > 0 else { return nil }
         let closest = candidates.min(by: { a, b in
-            let xA = (a / duree) * largeurTimeline
-            let xB = (b / duree) * largeurTimeline
+            let xA = (a / transport.duree) * largeurTimeline
+            let xB = (b / transport.duree) * largeurTimeline
             return abs(xA - xPos) < abs(xB - xPos)
         })
         guard let closest = closest else { return nil }
-        let closestXPos = (closest / duree) * largeurTimeline
+        let closestXPos = (closest / transport.duree) * largeurTimeline
         return abs(closestXPos - xPos) < 7 ? closest : nil
     }
 
@@ -228,8 +228,8 @@ extension ContentView {
         let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
         guard let gridTime else { return false }
         guard let markerTime else { return true }
-        let markerX = (markerTime / duree) * largeurTimeline
-        let gridX = (gridTime / duree) * largeurTimeline
+        let markerX = (markerTime / transport.duree) * largeurTimeline
+        let gridX = (gridTime / transport.duree) * largeurTimeline
         return abs(gridX - xPos) < abs(markerX - xPos)
     }
 
@@ -242,17 +242,17 @@ extension ContentView {
         // stray modifier-key change (e.g. releasing ⌘ right after ⌘V)
         // clobber the red crosshair with the arrow just because the mouse
         // isn't currently over a point.
-        guard !isPasteModeActive else { return }
-        guard isHoveringPoint else {
+        guard !pasteClipboard.isPasteModeActive else { return }
+        guard pointDrag.isHoveringPoint else {
             NSCursor.arrow.set()
             return
         }
         if NSEvent.modifierFlags.contains(.shift) {
             cursor(fromSymbol: "eraser.badge.xmark").set()
-        } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
-            let color: NSColor = isNearestSnapGrid ? .gray : .black
+        } else if NSEvent.modifierFlags.contains(.command) && pointDrag.isNearSnapZone {
+            let color: NSColor = pointDrag.isNearestSnapGrid ? .gray : .black
             cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: color).set()
-        } else if magneticGridSnap && isNearGridSnapZone {
+        } else if magneticGridSnap && pointDrag.isNearGridSnapZone {
             cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
         } else {
             NSCursor.arrow.set()
@@ -274,9 +274,9 @@ extension ContentView {
     }
 
     func visibleGridLineTimes(largeurTimeline: CGFloat) -> [Double] {
-        let allTimes = gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree)
-        guard duree > 0, gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
-        let pixelsPerLine = largeurTimeline * CGFloat(gridPeriod / duree)
+        let allTimes = gridLineTimes(period: uiChrome.gridPeriod, phase: uiChrome.gridPhase, duree: transport.duree)
+        guard transport.duree > 0, uiChrome.gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
+        let pixelsPerLine = largeurTimeline * CGFloat(uiChrome.gridPeriod / transport.duree)
         let minSpacing: CGFloat = 16
         guard pixelsPerLine < minSpacing else { return allTimes }
         // How many consecutive lines to fold into one to reach minSpacing —
@@ -292,17 +292,17 @@ extension ContentView {
     }
 
     func commitGridSettings() {
-        if let period = Double(gridPeriodString), let phase = Double(gridPhaseString) {
-            gridPeriod = period
-            gridPhase = phase
+        if let period = Double(uiChrome.gridPeriodString), let phase = Double(uiChrome.gridPhaseString) {
+            uiChrome.gridPeriod = period
+            uiChrome.gridPhase = phase
         }
-        showGridSettingsPopup = false
+        uiChrome.showGridSettingsPopup = false
     }
 
     func openGridSettingsPopup() {
-        gridPeriodString = String(format: "%.2f", gridPeriod)
-        gridPhaseString = String(format: "%.2f", gridPhase)
-        showGridSettingsPopup = true
+        uiChrome.gridPeriodString = String(format: "%.2f", uiChrome.gridPeriod)
+        uiChrome.gridPhaseString = String(format: "%.2f", uiChrome.gridPhase)
+        uiChrome.showGridSettingsPopup = true
     }
 
     func applyGateModeSwitch(forTrackIndex index: Int) {
@@ -315,21 +315,21 @@ extension ContentView {
         for i in pistes[index].evenements.indices {
             pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
         }
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
     }
 
     func commitAmplitudeEdit() {
-        guard let index = amplitudeEditorTrackIndex else {
-            amplitudeEditorTrackIndex = nil
+        guard let index = pointEditing.amplitudeEditorTrackIndex else {
+            pointEditing.amplitudeEditorTrackIndex = nil
             return
         }
-        if pistes[index].type == .step && tempIsGate {
+        if pistes[index].type == .step && trackAmplitudeEdit.tempIsGate {
             // Switching FROM Float TO Gate with existing points would
             // silently redistribute all their values to 0/1 — warn first
             // instead, and only apply once the user confirms.
             if !pistes[index].isGate && !pistes[index].evenements.isEmpty {
-                pendingGateSwitchIndex = index
-                amplitudeEditorTrackIndex = nil
+                pointEditing.pendingGateSwitchIndex = index
+                pointEditing.amplitudeEditorTrackIndex = nil
                 return
             }
             applyGateModeSwitch(forTrackIndex: index)
@@ -337,15 +337,15 @@ extension ContentView {
             if pistes[index].type == .step {
                 pistes[index].isGate = false
             }
-            if let minVal = Double(tempMinAmplitude), let maxVal = Double(tempMaxAmplitude) {
+            if let minVal = Double(trackAmplitudeEdit.tempMinAmplitude), let maxVal = Double(trackAmplitudeEdit.tempMaxAmplitude) {
                 pistes[index].minAmplitude = minVal
                 pistes[index].maxAmplitude = maxVal
             }
             // The step value is stored regardless of the on/off flag, so
             // switching quantization off and back on restores what was dialled
             // in rather than resetting to zero.
-            pistes[index].quantizeEnabled = tempQuantizeEnabled
-            if let stepVal = Double(tempQuantizeStep), stepVal > 0 {
+            pistes[index].quantizeEnabled = trackAmplitudeEdit.tempQuantizeEnabled
+            if let stepVal = Double(trackAmplitudeEdit.tempQuantizeStep), stepVal > 0 {
                 let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
                 let maxStep = range / 2
                 // A step bigger than half the range would leave fewer than three
@@ -355,8 +355,8 @@ extension ContentView {
                 // actually in effect.
                 if range > 0 && stepVal > maxStep {
                     pistes[index].quantizeStep = maxStep
-                    if tempQuantizeEnabled {
-                        invalidQuantizeStepMessage = String(
+                    if trackAmplitudeEdit.tempQuantizeEnabled {
+                        pointEditing.invalidQuantizeStepMessage = String(
                             format: "A step of %g is too large for the range [%g, %g]. It must not exceed half the range, so it has been set to %g.",
                             stepVal, pistes[index].minAmplitude, pistes[index].maxAmplitude, maxStep
                         )
@@ -371,7 +371,7 @@ extension ContentView {
             // as they're created or dragged, but never silently rewrites work
             // that's already been placed.
         }
-        amplitudeEditorTrackIndex = nil
+        pointEditing.amplitudeEditorTrackIndex = nil
     }
 
 }

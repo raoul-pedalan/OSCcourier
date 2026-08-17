@@ -52,8 +52,8 @@ extension ContentView {
                                                                     // ⇧⌥ is the lasso-selection gesture (handled
                                                                     // elsewhere as a .simultaneousGesture on this same
                                                                     // track) — never create a point for it.
-                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
-                                                                    if creatingPointId == nil {
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !pasteClipboard.isPasteModeActive else { return }
+                                                                    if pointEditing.creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
                                                                     updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
@@ -76,21 +76,21 @@ extension ContentView {
                                                                     // should create a point.
                                                                     if NSEvent.modifierFlags.contains(.shift) { return }
                                                                     if NSEvent.modifierFlags.contains(.option) { return }
-                                                                    if isPasteModeActive { return }
-                                                                    if creatingPointId == nil {
+                                                                    if pasteClipboard.isPasteModeActive { return }
+                                                                    if pointEditing.creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
                                                                     updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
                                                                 }
                                                                 .onEnded { value in
                                                                     guard !tracksLocked else { return }
-                                                                    if creatingPointId != nil {
+                                                                    if pointEditing.creatingPointId != nil {
                                                                         finishCreatingPoint()
                                                                         return
                                                                     }
                                                                     // No point was being created: this was a Shift
                                                                     // click on (or near) the curve line.
-                                                                    let time = (Double(value.location.x) / Double(largeurTimeline)) * duree
+                                                                    let time = (Double(value.location.x) / Double(largeurTimeline)) * transport.duree
                                                                     if NSEvent.modifierFlags.contains(.shift),
                                                                        !NSEvent.modifierFlags.contains(.option),
                                                                        let curveY = curveYPosition(forTime: time, trackIndex: index),
@@ -106,24 +106,24 @@ extension ContentView {
                                                                 // value actually changes, so plain mouse movement doesn't
                                                                 // trigger a body re-render per pixel (which is what broke
                                                                 // the hover stream in a previous iteration).
-                                                                let time = (Double(location.x) / Double(largeurTimeline)) * duree
+                                                                let time = (Double(location.x) / Double(largeurTimeline)) * transport.duree
                                                                 let nearZone: Bool
                                                                 if let curveY = curveYPosition(forTime: time, trackIndex: index) {
                                                                     nearZone = abs(Double(location.y) - Double(curveY)) < 12
                                                                 } else {
                                                                     nearZone = false
                                                                 }
-                                                                if isNearCurveControlZone != nearZone {
-                                                                    isNearCurveControlZone = nearZone
+                                                                if pointDrag.isNearCurveControlZone != nearZone {
+                                                                    pointDrag.isNearCurveControlZone = nearZone
                                                                 }
                                                                 // Receiving this hover means the mouse is on the curve
                                                                 // area itself, NOT on a point (points are separate
                                                                 // subviews stacked above; they intercept hover) — so
-                                                                // isHoveringPoint is stale if still true. That stale
+                                                                // pointDrag.isHoveringPoint is stale if still true. That stale
                                                                 // true was making updatePointCursor() impose the
                                                                 // delete-point cursor (eraser.badge.xmark) here.
-                                                                if isHoveringPoint {
-                                                                    isHoveringPoint = false
+                                                                if pointDrag.isHoveringPoint {
+                                                                    pointDrag.isHoveringPoint = false
                                                                 }
                                                                 // Direct, imperative cursor control tied to actual
                                                                 // mouse movement — no @State involved, so it works
@@ -132,8 +132,8 @@ extension ContentView {
                                                                     applyShiftSegmentCursor(at: location, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                 }
                                                             case .ended:
-                                                                if isNearCurveControlZone {
-                                                                    isNearCurveControlZone = false
+                                                                if pointDrag.isNearCurveControlZone {
+                                                                    pointDrag.isNearCurveControlZone = false
                                                                 }
                                                             }
                                                         }
@@ -157,7 +157,7 @@ extension ContentView {
                                                     // Option held. allowsHitTesting(false) so it never intercepts
                                                     // clicks/drags — those stay on the Color.clear view above.
                                                     CursorOverlay(
-                                                        isActive: isNearCurveControlZone && isOptionHeldForCursor && !isShiftHeldForCursor,
+                                                        isActive: pointDrag.isNearCurveControlZone && pointDrag.isOptionHeldForCursor && !pointDrag.isShiftHeldForCursor,
                                                         symbolName: "point.bottomleft.forward.to.point.topright.filled.scurvepath"
                                                     )
                                                     .frame(width: largeurTimeline, height: pistes[index].height)
@@ -172,8 +172,8 @@ extension ContentView {
                                                                     // ⇧⌥ is the lasso-selection gesture (handled
                                                                     // elsewhere as a .simultaneousGesture on this same
                                                                     // track) — never create a point for it.
-                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !isPasteModeActive else { return }
-                                                                    if creatingPointId == nil {
+                                                                    guard !(NSEvent.modifierFlags.contains(.shift) && NSEvent.modifierFlags.contains(.option)), !pasteClipboard.isPasteModeActive else { return }
+                                                                    if pointEditing.creatingPointId == nil {
                                                                         beginCreatingPoint(at: value.startLocation, trackIndex: index, largeurTimeline: largeurTimeline)
                                                                     }
                                                                     updateCreatingPoint(at: value.location, largeurTimeline: largeurTimeline)
@@ -196,7 +196,7 @@ extension ContentView {
                                                         }
 
                                                         for (i, event) in sortedEvents.enumerated() {
-                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                                                             let point = CGPoint(x: xPos, y: yPos(for: event.y))
                                                             if i == 0 {
                                                                 path.move(to: point)
@@ -212,7 +212,7 @@ extension ContentView {
                                                                     // Sample the S-curve; x advances linearly with t (time
                                                                     // isn't warped), only the value (y) follows the curve.
                                                                     let steps = 24
-                                                                    let previousXPos = CGFloat(previous.time / duree) * largeurTimeline
+                                                                    let previousXPos = CGFloat(previous.time / transport.duree) * largeurTimeline
                                                                     for step in 1...steps {
                                                                         let t = Double(step) / Double(steps)
                                                                         let curvedT = combinedProgress(t, curvature: previous.segmentCurve, bulge: previous.segmentBulge)
@@ -239,7 +239,7 @@ extension ContentView {
                                                             return curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY)
                                                         }
                                                         for (i, event) in sortedEvents.enumerated() {
-                                                            let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                            let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                                                             let y = yPos(for: event)
                                                             if i == 0 {
                                                                 path.move(to: CGPoint(x: xPos, y: y))
@@ -254,7 +254,7 @@ extension ContentView {
                                                 }
 
                                                 ForEach(pistes[index].evenements) { event in
-                                                    let xPos = CGFloat(event.time / duree) * largeurTimeline
+                                                    let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
                                                     let amplitudeRange = pistes[index].maxAmplitude - pistes[index].minAmplitude
                                                     let normalizedY = amplitudeRange > 0 ? (event.y - pistes[index].minAmplitude) / amplitudeRange : 0.5
                                                     let pointY = (pistes[index].type == .curve || pistes[index].type == .step) ? curveMargin + (pistes[index].height - 2 * curveMargin) * (1 - normalizedY) : (index == 0 ? 22 : 15)
@@ -271,7 +271,7 @@ extension ContentView {
                                                         if index == 0 {
                                                             ZStack {
                                                                 Rectangle()
-                                                    .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                    .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 6, height: 6)
 
                                                                 if showPointCoordinates {
@@ -305,7 +305,7 @@ extension ContentView {
                                                                 ZStack {
                                                                     Text("T")
                                                                         .font(.system(size: 11, weight: .bold))
-                                                                        .foregroundColor(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                                        .foregroundColor(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
 
                                                                     if showPointCoordinates {
                                                                         Text(String(format: "%.2f", event.time) + "s")
@@ -316,7 +316,7 @@ extension ContentView {
                                                                 }
                                                             } else if pistes[index].type == .bang {
                                                                 Rectangle()
-                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                                .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                     .frame(width: 8, height: 8)
                                                                     .rotationEffect(.degrees(45))
 
@@ -336,17 +336,17 @@ extension ContentView {
                                                                     if pistes[index].type == .step {
                                                                         if pistes[index].isGate {
                                                                             Rectangle()
-                                                                            .stroke(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur, lineWidth: 2.5)
+                                                                            .stroke(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur, lineWidth: 2.5)
                                                                                 .frame(width: 10, height: 10)
                                                                                 .contentShape(Rectangle())
                                                                         } else {
                                                                             ZStack {
                                                                                 Rectangle()
-                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                                                .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(45))
                                                                                 Rectangle()
-                                                                                .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                                                .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                                     .frame(width: 17, height: 3)
                                                                                     .rotationEffect(.degrees(-45))
                                                                             }
@@ -355,7 +355,7 @@ extension ContentView {
                                                                         }
                                                                     } else {
                                                                         Circle()
-                                                            .fill(selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
+                                                            .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
                                                                             .frame(width: 12, height: 12)
                                                                     }
                                                                 }
@@ -373,17 +373,17 @@ extension ContentView {
                                                     }
                                                     .position(x: xPos, y: pointY)
                                                     .onHover { hovering in
-                                                        isHoveringPoint = hovering
+                                                        pointDrag.isHoveringPoint = hovering
                                                         // A point is a separate subview stacked above the curve
                                                         // line; moving onto it should stop the curve area from
                                                         // being considered "hovered" for cursor purposes.
-                                                        if isNearCurveControlZone {
-                                                            isNearCurveControlZone = false
+                                                        if pointDrag.isNearCurveControlZone {
+                                                            pointDrag.isNearCurveControlZone = false
                                                         }
                                                         if hovering {
-                                                            isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
-                                                            isNearGridSnapZone = nearestGridTime(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline)) != nil
-                                                            isNearestSnapGrid = isNearestSnapAGridLine(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
+                                                            pointDrag.isNearSnapZone = isNearMarker(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
+                                                            pointDrag.isNearGridSnapZone = nearestGridTime(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline)) != nil
+                                                            pointDrag.isNearestSnapGrid = isNearestSnapAGridLine(xPos: Double(xPos), largeurTimeline: Double(largeurTimeline))
                                                         }
                                                         updatePointCursor()
                                                     }
@@ -413,9 +413,9 @@ extension ContentView {
                                             .overlay(alignment: .topLeading) {
                                                 // Visual feedback while dragging — only drawn on the track the
                                                 // lasso actually started on.
-                                                if lassoTrackIndex == index,
-                                                   let start = lassoStartLocation,
-                                                   let current = lassoCurrentLocation {
+                                                if selection.lassoTrackIndex == index,
+                                                   let start = selection.lassoStartLocation,
+                                                   let current = selection.lassoCurrentLocation {
                                                     let rect = CGRect(
                                                         x: min(start.x, current.x),
                                                         y: min(start.y, current.y),
@@ -436,11 +436,11 @@ extension ContentView {
                                             // the paste-mode cursor (red, no drag needed to trigger it).
                                             .overlay {
                                                 CursorOverlay(
-                                                    isActive: (isShiftHeldForCursor && isOptionHeldForCursor && !tracksLocked) || isPasteModeActive,
-                                                    symbolName: isPasteModeActive && (isNearSnapZone || isNearGridSnapZone)
+                                                    isActive: (pointDrag.isShiftHeldForCursor && pointDrag.isOptionHeldForCursor && !tracksLocked) || pasteClipboard.isPasteModeActive,
+                                                    symbolName: pasteClipboard.isPasteModeActive && (pointDrag.isNearSnapZone || pointDrag.isNearGridSnapZone)
                                                         ? "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left"
                                                         : "dot.crosshair",
-                                                    color: isPasteModeActive ? .red : .black
+                                                    color: pasteClipboard.isPasteModeActive ? .red : .black
                                                 )
                                                 .allowsHitTesting(false)
                                             }

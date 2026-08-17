@@ -11,21 +11,21 @@ extension ContentView {
     }
 
     func flashOSCIndicator() {
-        isOSCFlashing = true
-        oscFlashTimer?.invalidate()
+        transport.isOSCFlashing = true
+        transport.oscFlashTimer?.invalidate()
         let t = Timer(timeInterval: 0.15, repeats: false) { _ in
             DispatchQueue.main.async {
-                isOSCFlashing = false
+                transport.isOSCFlashing = false
             }
         }
         // .common so the flash still resets promptly even if the user is
         // mid-drag on something else when messages are sent.
         RunLoop.main.add(t, forMode: .common)
-        oscFlashTimer = t
+        transport.oscFlashTimer = t
     }
 
     func sendOSCMessagesForPosition(_ pos: Double) {
-        // Called whenever the playhead jumps to an arbitrary position
+        // Called whenever the playhead jumps to an arbitrary transport.position
         // (click, drag, Go to Time/Marker, next/previous marker, the OSC
         // /goto command, a loop zone's start...) — never from the
         // continuous per-tick playback loop, which tracks its own
@@ -33,7 +33,7 @@ extension ContentView {
         // points already sent earlier (e.g. play, pause, drag the playhead
         // back, play again) re-sends them instead of silently treating
         // them as "already sent" from a previous, unrelated pass.
-        lastSentEvents.removeAll()
+        pointDrag.lastSentEvents.removeAll()
         for piste in pistes where !piste.isMuted {
             if piste.type == .bang {
                 let tol = 0.01
@@ -92,56 +92,56 @@ extension ContentView {
     // through from wherever it currently sits until it eventually wanders
     // into the zone.
     private func jumpToLoopZoneStartIfNeeded() {
-        if enBoucle, let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd,
-           position < zoneStart || position > zoneEnd {
-            position = zoneStart
-            sendOSCMessagesForPosition(position)
+        if enBoucle, let zoneStart = loopZone.loopZoneStart, let zoneEnd = loopZone.loopZoneEnd,
+           transport.position < zoneStart || transport.position > zoneEnd {
+            transport.position = zoneStart
+            sendOSCMessagesForPosition(transport.position)
         }
     }
 
     func togglePlayback() {
-        if !enLecture {
+        if !transport.enLecture {
             jumpToLoopZoneStartIfNeeded()
         }
-        enLecture.toggle()
+        transport.enLecture.toggle()
     }
 
     func advancePlaybackTick() {
-        guard enLecture else {
+        guard transport.enLecture else {
             // Reset so that resuming later doesn't compute a delta spanning
             // the whole time playback was paused/stopped.
-            lastTickTimestamp = nil
+            transport.lastTickTimestamp = nil
             return
         }
 
         let now = Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
         // First tick after starting/resuming: fall back to the nominal 0.05
         // since there's no previous timestamp yet to compute a real delta from.
-        let delta = lastTickTimestamp.map { now - $0 } ?? 0.05
-        lastTickTimestamp = now
+        let delta = transport.lastTickTimestamp.map { now - $0 } ?? 0.05
+        transport.lastTickTimestamp = now
 
-        let prev = position
-        position += delta
+        let prev = transport.position
+        transport.position += delta
         var justLooped = false
         var wrapTarget = 0.0
-        if let zoneStart = loopZoneStart, let zoneEnd = loopZoneEnd, enBoucle, position >= zoneEnd {
+        if let zoneStart = loopZone.loopZoneStart, let zoneEnd = loopZone.loopZoneEnd, enBoucle, transport.position >= zoneEnd {
             // A loop zone exists and Loop is on: wrap within the zone
             // instead of the whole timeline.
-            position = zoneStart
+            transport.position = zoneStart
             wrapTarget = zoneStart
-            lastSentEvents.removeAll()
+            pointDrag.lastSentEvents.removeAll()
             justLooped = true
-        } else if position >= duree {
-            position = 0.0
+        } else if transport.position >= transport.duree {
+            transport.position = 0.0
             wrapTarget = 0.0
-            if !enBoucle { enLecture = false }
-            lastSentEvents.removeAll()
+            if !enBoucle { transport.enLecture = false }
+            pointDrag.lastSentEvents.removeAll()
             justLooped = true
         }
         // Right on the tick where playback wraps back to 0 (or to the loop
-        // zone's start), `prev` still holds the old (pre-wrap) position —
+        // zone's start), `prev` still holds the old (pre-wrap) transport.position —
         // comparing it directly against early event times would make the
-        // crossing check (prev < event.time <= position) fail for anything
+        // crossing check (prev < event.time <= transport.position) fail for anything
         // near the wrap target, since prev is much larger than those times.
         // Substitute a value just below the wrap target for that one tick
         // so events right at the start of the loop are correctly treated
@@ -152,10 +152,10 @@ extension ContentView {
             guard piste.type == .bang, !piste.isMuted else { continue }
             let tol = 0.001
             for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && transport.position >= event.time - tol else { continue }
                 let key = piste.nom + "-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
+                guard !pointDrag.lastSentEvents.contains(key) else { continue }
+                pointDrag.lastSentEvents.insert(key)
                 if piste.nom == "/markers" {
                     let label = event.label.isEmpty ? "marker" : event.label
                     sendOSCMessage(piste.nom + " " + label, color: piste.couleur)
@@ -169,10 +169,10 @@ extension ContentView {
             guard piste.type == .message, !piste.isMuted else { continue }
             let tol = 0.001
             for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && transport.position >= event.time - tol else { continue }
                 let key = piste.nom + "-message-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
+                guard !pointDrag.lastSentEvents.contains(key) else { continue }
+                pointDrag.lastSentEvents.insert(key)
                 sendOSCMessage(piste.nom + " " + event.label, color: piste.couleur)
             }
         }
@@ -184,11 +184,11 @@ extension ContentView {
             let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
             if sortedEvents.isEmpty { continue }
 
-            let lastEventBefore = sortedEvents.last(where: { $0.time <= position })
-            let nextEvent = sortedEvents.first(where: { $0.time > position })
+            let lastEventBefore = sortedEvents.last(where: { $0.time <= transport.position })
+            let nextEvent = sortedEvents.first(where: { $0.time > transport.position })
 
             if let lastEventBefore = lastEventBefore, let nextEvent = nextEvent, lastEventBefore.segmentEnabled {
-                let ratio = (position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
+                let ratio = (transport.position - lastEventBefore.time) / (nextEvent.time - lastEventBefore.time)
                 let curvedRatio = combinedProgress(ratio, curvature: lastEventBefore.segmentCurve, bulge: lastEventBefore.segmentBulge)
                 let interpolatedY = lastEventBefore.y + (nextEvent.y - lastEventBefore.y) * curvedRatio
                 sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
@@ -202,17 +202,17 @@ extension ContentView {
             // (like every 50ms tick) would just flood the system uselessly.
             let tol = 0.001
             for event in piste.evenements {
-                guard effectivePrev < event.time - tol && position >= event.time - tol else { continue }
+                guard effectivePrev < event.time - tol && transport.position >= event.time - tol else { continue }
                 let key = piste.nom + "-step-" + String(event.time)
-                guard !lastSentEvents.contains(key) else { continue }
-                lastSentEvents.insert(key)
+                guard !pointDrag.lastSentEvents.contains(key) else { continue }
+                pointDrag.lastSentEvents.insert(key)
                 sendOSCMessage(piste.nom + " " + String(format: "%.2f", event.y), color: piste.couleur)
             }
         }
     }
 
     func startPlaybackTimer() {
-        timer?.invalidate()
+        transport.timer?.invalidate()
         let rate = max(1, oscMessagesPerSecond)
         let interval = 1.0 / Double(rate)
         let playbackTimer = Timer(timeInterval: interval, repeats: true) { _ in
@@ -224,7 +224,7 @@ extension ContentView {
         // some other drag (a point, a track resize, the duration handle...)
         // is actively being tracked elsewhere in the app.
         RunLoop.main.add(playbackTimer, forMode: .common)
-        timer = playbackTimer
+        transport.timer = playbackTimer
     }
 
     func handleReceivedOSCMessage(_ message: String, _ args: [OSCValue]) {
@@ -232,16 +232,16 @@ extension ContentView {
         let normalized = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
         switch normalized {
         case "play":
-            if !enLecture {
+            if !transport.enLecture {
                 jumpToLoopZoneStartIfNeeded()
             }
-            enLecture = true
+            transport.enLecture = true
         case "pause":
-            enLecture = false
+            transport.enLecture = false
         case "stop":
-            enLecture = false
-            position = 0
-            lastSentEvents.removeAll()
+            transport.enLecture = false
+            transport.position = 0
+            pointDrag.lastSentEvents.removeAll()
         case "goto":
             // A string argument is a marker name; a numeric one is a time in
             // seconds — mirrors the app's own "Go to Position" popup, which
@@ -250,12 +250,12 @@ extension ContentView {
             case .string(let name):
                 goToMarkerByName(name)
             case .float(let seconds):
-                position = min(max(Double(seconds), 0), duree)
-                sendOSCMessagesForPosition(position)
+                transport.position = min(max(Double(seconds), 0), transport.duree)
+                sendOSCMessagesForPosition(transport.position)
                 centerOnPlayhead()
             case .int(let seconds):
-                position = min(max(Double(seconds), 0), duree)
-                sendOSCMessagesForPosition(position)
+                transport.position = min(max(Double(seconds), 0), transport.duree)
+                sendOSCMessagesForPosition(transport.position)
                 centerOnPlayhead()
             case .none:
                 break
@@ -282,10 +282,10 @@ extension ContentView {
             guard args.count >= 2,
                   let a = numericOSCValue(args[0]),
                   let b = numericOSCValue(args[1]) else { break }
-            let clampedA = min(max(a, 0), duree)
-            let clampedB = min(max(b, 0), duree)
-            loopZoneStart = min(clampedA, clampedB)
-            loopZoneEnd = max(clampedA, clampedB)
+            let clampedA = min(max(a, 0), transport.duree)
+            let clampedB = min(max(b, 0), transport.duree)
+            loopZone.loopZoneStart = min(clampedA, clampedB)
+            loopZone.loopZoneEnd = max(clampedA, clampedB)
             enBoucle = true
         case "mute":
             // First argument: the track's name (matched exactly first, then
@@ -320,31 +320,31 @@ extension ContentView {
     }
 
     func centerOnPlayhead() {
-        let outerWidth = max(timelineAreaWidth, 1)
-        // timelineAreaWidth already excludes the duration handle (the whole
+        let outerWidth = max(transport.timelineAreaWidth, 1)
+        // transport.timelineAreaWidth already excludes the duration handle (the whole
         // timeline area is padded by its width), so no extra subtraction here
         // — this must mirror the largeurTimeline used for drawing exactly.
-        let largeurTimeline = outerWidth * CGFloat(zoomX) - 140
+        let largeurTimeline = outerWidth * CGFloat(transport.zoomX) - 140
         guard largeurTimeline > 0 else { return }
-        let playheadX = 140 + CGFloat(position / duree) * largeurTimeline
-        scrollOffsetX = max(0, playheadX - outerWidth / 2)
+        let playheadX = 140 + CGFloat(transport.position / transport.duree) * largeurTimeline
+        transport.scrollOffsetX = max(0, playheadX - outerWidth / 2)
     }
 
     func goToNextMarker() {
         let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
         guard !sorted.isEmpty else { return }
-        let target = sorted.first(where: { $0.time > position + 0.001 })?.time ?? sorted[0].time
-        position = target
-        sendOSCMessagesForPosition(position)
+        let target = sorted.first(where: { $0.time > transport.position + 0.001 })?.time ?? sorted[0].time
+        transport.position = target
+        sendOSCMessagesForPosition(transport.position)
         centerOnPlayhead()
     }
 
     func goToPreviousMarker() {
         let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
         guard !sorted.isEmpty else { return }
-        let target = sorted.last(where: { $0.time < position - 0.001 })?.time ?? sorted[sorted.count - 1].time
-        position = target
-        sendOSCMessagesForPosition(position)
+        let target = sorted.last(where: { $0.time < transport.position - 0.001 })?.time ?? sorted[sorted.count - 1].time
+        transport.position = target
+        sendOSCMessagesForPosition(transport.position)
         centerOnPlayhead()
     }
 
@@ -352,26 +352,26 @@ extension ContentView {
     func goToMarkerByName(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            showGoToMarkerNoMatch = true
+            uiChrome.showGoToMarkerNoMatch = true
             return false
         }
         let sorted = pistes[0].evenements.sorted { $0.time < $1.time }
         let exactMatch = sorted.first(where: { $0.label.caseInsensitiveCompare(trimmed) == .orderedSame })
         let partialMatch = sorted.first(where: { $0.label.range(of: trimmed, options: .caseInsensitive) != nil })
         guard let match = exactMatch ?? partialMatch else {
-            showGoToMarkerNoMatch = true
+            uiChrome.showGoToMarkerNoMatch = true
             return false
         }
-        position = match.time
-        sendOSCMessagesForPosition(position)
+        transport.position = match.time
+        sendOSCMessagesForPosition(transport.position)
         centerOnPlayhead()
         return true
     }
 
     func goToTime(_ text: String) {
         guard let parsed = parseDuration(text) else { return }
-        position = min(max(parsed, 0), duree)
-        sendOSCMessagesForPosition(position)
+        transport.position = min(max(parsed, 0), transport.duree)
+        sendOSCMessagesForPosition(transport.position)
         centerOnPlayhead()
     }
 
@@ -385,74 +385,74 @@ extension ContentView {
         // had it, so a focus-based decision was unreliable. If a marker
         // name was typed, that's an unambiguous signal to search by marker;
         // otherwise fall back to the time field.
-        let trimmedMarker = goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedMarker = uiChrome.goToMarkerNameString.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedMarker.isEmpty {
             // Presenting the "No match" alert while this sheet is
             // simultaneously dismissing doesn't reliably show in SwiftUI —
             // so on failure, keep the sheet open and surface it inline
             // instead of dismissing blindly.
-            if goToMarkerByName(goToMarkerNameString) {
-                playheadMarkerNotFound = false
-                showPlayheadPositionChoice = false
+            if goToMarkerByName(uiChrome.goToMarkerNameString) {
+                uiChrome.playheadMarkerNotFound = false
+                pasteClipboard.showPlayheadPositionChoice = false
             } else {
-                playheadMarkerNotFound = true
+                uiChrome.playheadMarkerNotFound = true
             }
         } else {
-            goToTime(goToTimeString)
-            showPlayheadPositionChoice = false
+            goToTime(uiChrome.goToTimeString)
+            pasteClipboard.showPlayheadPositionChoice = false
         }
     }
 
     func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
-        guard !isPinchZooming else { return }
+        guard !transport.isPinchZooming else { return }
         let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
         guard largeurAvant > 0 else { return }
 
-        let anchorTime = min(max(position, 0), duree)
-        let absoluteContentXBefore = 140 + CGFloat(anchorTime / duree) * largeurAvant
-        let locationXInViewport = absoluteContentXBefore - scrollOffsetX
+        let anchorTime = min(max(transport.position, 0), transport.duree)
+        let absoluteContentXBefore = 140 + CGFloat(anchorTime / transport.duree) * largeurAvant
+        let locationXInViewport = absoluteContentXBefore - transport.scrollOffsetX
 
         let largeurApres = outerWidth * CGFloat(newZoom) - 140
         guard largeurApres > 0 else { return }
-        let absoluteContentXAfter = 140 + CGFloat(anchorTime / duree) * largeurApres
+        let absoluteContentXAfter = 140 + CGFloat(anchorTime / transport.duree) * largeurApres
         let maxX = max(0, outerWidth * CGFloat(newZoom) - outerWidth)
         let newOffsetX = max(0, min(absoluteContentXAfter - locationXInViewport, maxX))
-        scrollOffsetX = newOffsetX
+        transport.scrollOffsetX = newOffsetX
     }
 
     func commitDureeEdit() {
-        if let parsed = parseDuration(dureeText) {
-            duree = max(parsed.rounded(), 1)
+        if let parsed = parseDuration(transport.dureeText) {
+            transport.duree = max(parsed.rounded(), 1)
         }
-        dureeText = formattedDuration(duree)
+        transport.dureeText = formattedDuration(transport.duree)
     }
 
     func startDurationDragTimer() {
-        durationDragTimer?.invalidate()
+        durationHandle.durationDragTimer?.invalidate()
         let tickInterval = 0.02
         let newTimer = Timer(timeInterval: tickInterval, repeats: true) { _ in
             DispatchQueue.main.async {
-                let dx = Double(durationDragCurrentDeltaX)
+                let dx = Double(durationHandle.durationDragCurrentDeltaX)
                 let magnitude = pow(abs(dx), durationDragVelocityExponent) * durationDragVelocityScale
                 let ratePerSecond = dx < 0 ? -magnitude : magnitude
-                let rawDuree = duree + ratePerSecond * tickInterval
+                let rawDuree = transport.duree + ratePerSecond * tickInterval
                 let quantized = (rawDuree * 100).rounded() / 100
-                duree = max(0.1, quantized)
-                dureeText = formattedDuration(duree)
+                transport.duree = max(0.1, quantized)
+                transport.dureeText = formattedDuration(transport.duree)
             }
         }
         // Timer.scheduledTimer only runs in the .default run loop mode,
         // which AppKit suspends while actively tracking a mouse drag (the
         // run loop switches to .eventTracking mode during that time) — so
-        // the timer would silently never fire while the drag is held.
+        // the transport.timer would silently never fire while the drag is held.
         // Adding it in .common mode instead keeps it running throughout.
         RunLoop.main.add(newTimer, forMode: .common)
-        durationDragTimer = newTimer
+        durationHandle.durationDragTimer = newTimer
     }
 
     func stopDurationDragTimer() {
-        durationDragTimer?.invalidate()
-        durationDragTimer = nil
+        durationHandle.durationDragTimer?.invalidate()
+        durationHandle.durationDragTimer = nil
     }
 
 }

@@ -33,9 +33,9 @@ extension ContentView {
             togglePlayback()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierStop)) { _ in
-            enLecture = false
-            position = 0.0
-            lastSentEvents.removeAll()
+            transport.enLecture = false
+            transport.position = 0.0
+            pointDrag.lastSentEvents.removeAll()
         }
 
         let step2 = step1
@@ -52,13 +52,13 @@ extension ContentView {
             addTrack(couleur: Color(red: 0.608, green: 0.086, blue: 0.365), type: .step, height: 60)
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearAll)) { _ in
-            showClearAllConfirmation = true
+            autofill.showClearAllConfirmation = true
         }
 
         let step3 = step2
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToTime)) { _ in
-            goToTimeString = formattedDuration(position)
-            showGoToTimeDialog = true
+            uiChrome.goToTimeString = formattedDuration(transport.position)
+            uiChrome.showGoToTimeDialog = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarker)) { _ in
             goToNextMarker()
@@ -67,22 +67,22 @@ extension ContentView {
             goToPreviousMarker()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierEditLoopZone)) { _ in
-            loopZoneEditStartString = formattedDuration(loopZoneStart ?? 0)
-            loopZoneEditEndString = formattedDuration(loopZoneEnd ?? 0)
-            showLoopZoneEditor = true
+            loopZone.loopZoneEditStartString = formattedDuration(loopZone.loopZoneStart ?? 0)
+            loopZone.loopZoneEditEndString = formattedDuration(loopZone.loopZoneEnd ?? 0)
+            loopZone.showLoopZoneEditor = true
         }
         let step4 = step3
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierClearLoopZone)) { _ in
-            loopZoneStart = nil
-            loopZoneEnd = nil
+            loopZone.loopZoneStart = nil
+            loopZone.loopZoneEnd = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierGoToMarkerByName)) { _ in
-            goToMarkerNameString = ""
-            showGoToMarkerNameDialog = true
+            uiChrome.goToMarkerNameString = ""
+            uiChrome.showGoToMarkerNameDialog = true
         }
 
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetZoom)) { _ in
-            zoomX = 1.0
+            transport.zoomX = 1.0
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetTrackHeight)) { _ in
             // Only curve/step tracks are resizable (they're the ones with the
@@ -111,7 +111,7 @@ extension ContentView {
             muteUnmuteAll()
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteAllTracks)) { _ in
-            showDeleteAllTracksConfirmation = true
+            autofill.showDeleteAllTracksConfirmation = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierDeleteSelectedPoints)) { _ in
             deleteSelectedPoints()
@@ -121,7 +121,7 @@ extension ContentView {
             // delete it (same guard as Copy/Paste — only when there's a
             // selection and we're not mid-edit in some other text field);
             // otherwise fall back to the standard system text cut.
-            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+            if !selection.selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
                 copySelectedPoints()
                 deleteSelectedPoints()
             } else {
@@ -132,7 +132,7 @@ extension ContentView {
             // The menu's Copy item: copy the point selection if there is
             // one (and we're not mid-edit in some other text field);
             // otherwise fall back to the standard system text copy.
-            if !selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+            if !selection.selectedPointIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
                 copySelectedPoints()
             } else {
                 NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
@@ -142,8 +142,8 @@ extension ContentView {
             // The menu's Paste item: enter point paste mode if the point
             // clipboard has something (and we're not mid-edit elsewhere);
             // otherwise fall back to the standard system text paste.
-            if !pointClipboard.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
-                isPasteModeActive = true
+            if !pasteClipboard.pointClipboard.isEmpty, !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                pasteClipboard.isPasteModeActive = true
             } else {
                 NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
             }

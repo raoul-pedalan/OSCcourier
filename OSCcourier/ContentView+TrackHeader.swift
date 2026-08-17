@@ -27,8 +27,8 @@ extension ContentView {
                                                         .onTapGesture(count: 2) {
                                                             guard !tracksLocked else { return }
                                                             let piste = pistes[index]
-                                                            indexPisteARenommer = index
-                                                            nouveauNomPiste = piste.nom
+                                                            pointEditing.indexPisteARenommer = index
+                                                            pointEditing.nouveauNomPiste = piste.nom
                                                         }
 
                                                     // Drag handle for reordering this track among its siblings
@@ -45,35 +45,35 @@ extension ContentView {
                                                             DragGesture(minimumDistance: 3, coordinateSpace: .global)
                                                                 .onChanged { value in
                                                                     guard !tracksLocked else { return }
-                                                                    if reorderingIndex == nil {
-                                                                        reorderingIndex = index
-                                                                        reorderBaselineOffset = 0
+                                                                    if trackDragReorder.reorderingIndex == nil {
+                                                                        trackDragReorder.reorderingIndex = index
+                                                                        trackDragReorder.reorderBaselineOffset = 0
                                                                     }
-                                                                    guard let currentIndex = reorderingIndex else { return }
-                                                                    let effectiveTranslation = value.translation.height - reorderBaselineOffset
+                                                                    guard let currentIndex = trackDragReorder.reorderingIndex else { return }
+                                                                    let effectiveTranslation = value.translation.height - trackDragReorder.reorderBaselineOffset
 
                                                                     if effectiveTranslation > 0, currentIndex < pistes.count - 1 {
                                                                         let belowHeight = rowHeight(for: pistes[currentIndex + 1]) + 5
                                                                         if effectiveTranslation > belowHeight / 2 {
                                                                             pistes.swapAt(currentIndex, currentIndex + 1)
-                                                                            reorderBaselineOffset += belowHeight
-                                                                            reorderingIndex = currentIndex + 1
+                                                                            trackDragReorder.reorderBaselineOffset += belowHeight
+                                                                            trackDragReorder.reorderingIndex = currentIndex + 1
                                                                         }
                                                                     } else if effectiveTranslation < 0, currentIndex > 1 {
                                                                         let aboveHeight = rowHeight(for: pistes[currentIndex - 1]) + 5
                                                                         if effectiveTranslation < -aboveHeight / 2 {
                                                                             pistes.swapAt(currentIndex, currentIndex - 1)
-                                                                            reorderBaselineOffset -= aboveHeight
-                                                                            reorderingIndex = currentIndex - 1
+                                                                            trackDragReorder.reorderBaselineOffset -= aboveHeight
+                                                                            trackDragReorder.reorderingIndex = currentIndex - 1
                                                                         }
                                                                     }
 
-                                                                    reorderDragTranslation = value.translation.height - reorderBaselineOffset
+                                                                    trackDragReorder.reorderDragTranslation = value.translation.height - trackDragReorder.reorderBaselineOffset
                                                                 }
                                                                 .onEnded { _ in
-                                                                    reorderingIndex = nil
-                                                                    reorderDragTranslation = 0
-                                                                    reorderBaselineOffset = 0
+                                                                    trackDragReorder.reorderingIndex = nil
+                                                                    trackDragReorder.reorderDragTranslation = 0
+                                                                    trackDragReorder.reorderBaselineOffset = 0
                                                                 }
                                                         )
                                                         .onHover { isHovering in
@@ -233,7 +233,7 @@ extension ContentView {
                                                             // only hidden by folding — so ⌥-hover here never switches
                                                             // this button into duplicate mode; it always just clears.
                                                             pistes[index].evenements.removeAll()
-                                                            lastSentEvents.removeAll()
+                                                            pointDrag.lastSentEvents.removeAll()
                                                         }) {
                                                             Image(systemName: "xmark.circle.fill")
                                                                 .foregroundColor(.gray)
@@ -261,12 +261,12 @@ extension ContentView {
                                                     HStack(spacing: 5) {
                                                         if pistes[index].type == .curve || pistes[index].type == .step {
                                                             Button(action: {
-                                                                amplitudeEditorTrackIndex = index
-                                                                tempMinAmplitude = String(format: "%.2f", pistes[index].minAmplitude)
-                                                                tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
-                                                                tempIsGate = pistes[index].isGate
-                                                                tempQuantizeStep = String(format: "%g", pistes[index].quantizeStep)
-                                                                tempQuantizeEnabled = pistes[index].quantizeEnabled
+                                                                pointEditing.amplitudeEditorTrackIndex = index
+                                                                trackAmplitudeEdit.tempMinAmplitude = String(format: "%.2f", pistes[index].minAmplitude)
+                                                                trackAmplitudeEdit.tempMaxAmplitude = String(format: "%.2f", pistes[index].maxAmplitude)
+                                                                trackAmplitudeEdit.tempIsGate = pistes[index].isGate
+                                                                trackAmplitudeEdit.tempQuantizeStep = String(format: "%g", pistes[index].quantizeStep)
+                                                                trackAmplitudeEdit.tempQuantizeEnabled = pistes[index].quantizeEnabled
                                                             }) {
                                                                 Image(systemName: "slider.horizontal.3")
                                                             }
@@ -283,11 +283,11 @@ extension ContentView {
 
                                                         Button(action: {
                                                             guard !tracksLocked else { return }
-                                                            if isOptionHeldForCursor && duplicateHoverTrackIndex == index {
+                                                            if pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index {
                                                                 duplicateTrack(at: index)
                                                             } else {
                                                                 pistes[index].evenements.removeAll()
-                                                                lastSentEvents.removeAll()
+                                                                pointDrag.lastSentEvents.removeAll()
                                                             }
                                                         }) {
                                                             // Fixed frame: swapping between the two SF Symbols (they have
@@ -297,17 +297,17 @@ extension ContentView {
                                                             // Color stays gray in both modes — only the symbol itself
                                                             // changes (plus the tooltip) — so there's no color to pick
                                                             // that has to fight the track's own color for contrast.
-                                                            Image(systemName: (isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
+                                                            Image(systemName: (pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
                                                                 .foregroundColor(.gray)
                                                                 .frame(width: 16, height: 16)
                                                         }
                                                         .buttonStyle(.borderless)
                                                         .onHover { hovering in
-                                                            duplicateHoverTrackIndex = hovering ? index : (duplicateHoverTrackIndex == index ? nil : duplicateHoverTrackIndex)
+                                                            trackDragReorder.duplicateHoverTrackIndex = hovering ? index : (trackDragReorder.duplicateHoverTrackIndex == index ? nil : trackDragReorder.duplicateHoverTrackIndex)
                                                         }
-                                                        .help((isOptionHeldForCursor && duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
+                                                        .help((pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
 
-                                                        Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); lastSentEvents.removeAll() }) {
+                                                        Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); pointDrag.lastSentEvents.removeAll() }) {
                                                             Image(systemName: "minus.circle.fill").foregroundColor(.red)
                                                         }
                                                         .buttonStyle(.borderless)
@@ -361,15 +361,15 @@ extension ContentView {
                                                             .gesture(
                                                                 DragGesture(coordinateSpace: .global)
                                                                     .onChanged { value in
-                                                                        if draggedTrackIndex != index {
-                                                                            draggedTrackIndex = index
-                                                                            dragStartHeight = pistes[index].height
+                                                                        if trackDragReorder.draggedTrackIndex != index {
+                                                                            trackDragReorder.draggedTrackIndex = index
+                                                                            trackDragReorder.dragStartHeight = pistes[index].height
                                                                         }
-                                                                        let newHeight = max(30, dragStartHeight + value.translation.height)
+                                                                        let newHeight = max(30, trackDragReorder.dragStartHeight + value.translation.height)
                                                                         pistes[index].height = newHeight
                                                                     }
                                                                     .onEnded { _ in
-                                                                        draggedTrackIndex = nil
+                                                                        trackDragReorder.draggedTrackIndex = nil
                                                                     }
                                                             )
                                                             .onHover { isHovering in
