@@ -47,13 +47,17 @@ final class PointDragState: ObservableObject {
     // stray modifier-key change (e.g. releasing ⌘ right after ⌘V) clobber
     // the red crosshair with the arrow just because the mouse isn't
     // currently over a point.
-    func updateCursor(pasteModeActive: Bool, magneticGridSnap: Bool) {
+    // suppressShiftEraser: true while a point is actively being dragged —
+    // Shift during a drag means "constrain to one axis", not "delete on
+    // release" (that's only a plain Shift *click*, a separate gesture), so
+    // the delete-cursor would be misleading there.
+    func updateCursor(pasteModeActive: Bool, magneticGridSnap: Bool, suppressShiftEraser: Bool = false) {
         guard !pasteModeActive else { return }
         guard isHoveringPoint else {
             NSCursor.arrow.set()
             return
         }
-        if NSEvent.modifierFlags.contains(.shift) {
+        if NSEvent.modifierFlags.contains(.shift) && !suppressShiftEraser {
             cursor(fromSymbol: "eraser.badge.xmark").set()
         } else if NSEvent.modifierFlags.contains(.command) && isNearSnapZone {
             let color: NSColor = isNearestSnapGrid ? .gray : .black
@@ -82,7 +86,23 @@ final class PointDragState: ObservableObject {
             selection.selectedPointIDs.removeAll()
         }
 
-        var newPosition = (Double(value.location.x) / Double(largeurTimeline)) * transport.duree
+        // Shift (without Option, which is reserved for starting the lasso)
+        // constrains the drag to whichever axis has moved further from the
+        // drag's start — X-only (time) or Y-only (value) — recomputed every
+        // tick rather than locked once, so it stays forgiving if the
+        // dominant axis changes mid-drag.
+        var location = value.location
+        if NSEvent.modifierFlags.contains(.shift), !NSEvent.modifierFlags.contains(.option) {
+            let dx = abs(value.location.x - value.startLocation.x)
+            let dy = abs(value.location.y - value.startLocation.y)
+            if dx >= dy {
+                location.y = value.startLocation.y
+            } else {
+                location.x = value.startLocation.x
+            }
+        }
+
+        var newPosition = (Double(location.x) / Double(largeurTimeline)) * transport.duree
         isHoveringPoint = true
 
         // Cmd + within 7px of a marker or grid line: snap to it.
@@ -99,7 +119,7 @@ final class PointDragState: ObservableObject {
                   let gridSnapTime = nearestGridTime(showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: dragXPos, largeurTimeline: Double(largeurTimeline)) {
             newPosition = gridSnapTime
         }
-        updateCursor(pasteModeActive: pasteClipboard.isPasteModeActive, magneticGridSnap: magneticGridSnap)
+        updateCursor(pasteModeActive: pasteClipboard.isPasteModeActive, magneticGridSnap: magneticGridSnap, suppressShiftEraser: true)
 
         let clampedNewTime = min(max(newPosition, 0), transport.duree)
 
@@ -129,7 +149,7 @@ final class PointDragState: ObservableObject {
                     groupDragAnchorOriginalY = groupDragYBaseline[eventID]
                 }
                 if let anchorOriginalY = groupDragAnchorOriginalY {
-                    let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
+                    let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                     let rawY = pistes[index].minAmplitude + normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude)
                     let rawYDelta = rawY - anchorOriginalY
                     // Group-preserving clamp: shrink the delta itself
@@ -152,7 +172,7 @@ final class PointDragState: ObservableObject {
         } else if let eventIndex = pistes[index].evenements.firstIndex(where: { $0.id == eventID }) {
             pistes[index].evenements[eventIndex].time = clampedNewTime
             if pistes[index].type == .curve || pistes[index].type == .step {
-                let normalizedY = min(max(1 - (Double(value.location.y) / Double(pistes[index].height)), 0), 1)
+                let normalizedY = min(max(1 - (Double(location.y) / Double(pistes[index].height)), 0), 1)
                 let yValue = pistes[index].minAmplitude + (normalizedY * (pistes[index].maxAmplitude - pistes[index].minAmplitude))
                 pistes[index].evenements[eventIndex].y = gateSnappedY(yValue, forTrack: pistes[index])
             }
