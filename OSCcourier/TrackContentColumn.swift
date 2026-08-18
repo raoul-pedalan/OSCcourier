@@ -135,9 +135,12 @@ struct TrackContentColumn: View {
                                 let time = (Double(value.location.x) / Double(largeurTimeline)) * transport.duree
                                 if NSEvent.modifierFlags.contains(.shift),
                                    !NSEvent.modifierFlags.contains(.option),
-                                   let curveY = curveYPosition(forTime: time, track: pistes[index]),
-                                   abs(Double(value.location.y) - Double(curveY)) < 12 {
-                                    onToggleSegmentEnabled(time, index)
+                                   let curveY = curveYPosition(forTime: time, track: pistes[index]) {
+                                    let distance = abs(Double(value.location.y) - Double(curveY))
+                                    let threshold: Double = isSegmentEnabled(forTime: time, track: pistes[index]) ? 12 : 24
+                                    if distance < threshold {
+                                        onToggleSegmentEnabled(time, index)
+                                    }
                                 }
                             }
                     )
@@ -167,12 +170,6 @@ struct TrackContentColumn: View {
                             if pointDrag.isHoveringPoint {
                                 pointDrag.isHoveringPoint = false
                             }
-                            // Direct, imperative cursor control tied to actual
-                            // mouse movement — no @State involved, so it works
-                            // regardless of SwiftUI's render cycle.
-                            if NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.option) {
-                                applyShiftSegmentCursor(at: location, track: pistes[index], largeurTimeline: largeurTimeline, duree: transport.duree)
-                            }
                         case .ended:
                             if pointDrag.isNearCurveControlZone {
                                 pointDrag.isNearCurveControlZone = false
@@ -201,6 +198,34 @@ struct TrackContentColumn: View {
                 CursorOverlay(
                     isActive: pointDrag.isNearCurveControlZone && pointDrag.isOptionHeldForCursor && !pointDrag.isShiftHeldForCursor,
                     symbolName: "point.bottomleft.forward.to.point.topright.filled.scurvepath"
+                )
+                .frame(width: largeurTimeline, height: pistes[index].height)
+                .allowsHitTesting(false)
+
+                // Same AppKit cursor-rect mechanism as the bend cursor above,
+                // but with a dynamic resolver: the symbol depends on where
+                // (in time) the mouse currently is — eraser over a live
+                // segment near the line, pencil anywhere within a disabled
+                // one (no line drawn there to aim at), nothing otherwise.
+                // This replaced an imperative NSCursor.set() call driven by
+                // SwiftUI's onContinuousHover, which turned out not to fire
+                // reliably while a modifier key was held down during mouse
+                // movement.
+                CursorOverlay(
+                    isActive: pointDrag.isShiftHeldForCursor && !pointDrag.isOptionHeldForCursor && !tracksLocked && !pasteClipboard.isPasteModeActive,
+                    dynamicSymbol: { point in
+                        let time = (Double(point.x) / Double(largeurTimeline)) * transport.duree
+                        guard let curveY = curveYPosition(forTime: time, track: pistes[index]) else { return nil }
+                        let distance = abs(Double(point.y) - Double(curveY))
+                        if !isSegmentEnabled(forTime: time, track: pistes[index]) {
+                            // Disabled segment (a "hole"): nothing is drawn to
+                            // aim at, so a more generous band than the live
+                            // segment's counts as close enough to reconnect.
+                            return distance < 24 ? ("pencil.tip.crop.circle.badge.plus", .black) : nil
+                        } else {
+                            return distance < 12 ? ("eraser.badge.xmark", .black) : nil
+                        }
+                    }
                 )
                 .frame(width: largeurTimeline, height: pistes[index].height)
                 .allowsHitTesting(false)

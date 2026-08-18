@@ -100,23 +100,6 @@ func isSegmentEnabled(forTime time: Double, track piste: TimelineTrack) -> Bool 
     return true
 }
 
-// Pure computation + a cursor-image side effect — no ObservableObject
-// state, so any gesture handler can call it directly regardless of which
-// state object it otherwise belongs to.
-func applyShiftSegmentCursor(at location: CGPoint, track piste: TimelineTrack, largeurTimeline: CGFloat, duree: Double) {
-    let time = (Double(location.x) / Double(largeurTimeline)) * duree
-    if let curveY = curveYPosition(forTime: time, track: piste),
-       abs(Double(location.y) - Double(curveY)) < 12 {
-        if isSegmentEnabled(forTime: time, track: piste) {
-            cursor(fromSymbol: "eraser.fill").set()
-        } else {
-            cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
-        }
-    } else {
-        NSCursor.arrow.set()
-    }
-}
-
 // Fully pure: builds an NSCursor from an SF Symbol name. No ContentView
 // state at all.
 func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
