@@ -434,7 +434,7 @@ extension ContentView {
 
         // The view observes pointListStore, so no need to rebuild the hosting
         // view on reopen — it re-renders on its own whenever the store changes.
-        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore))
+        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore, selectionState: selection))
         hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
 
         let window = NSWindow(
