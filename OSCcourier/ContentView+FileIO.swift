@@ -57,7 +57,7 @@ extension ContentView {
 
         transport.enLecture = false
         transport.position = 0
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
         transport.duree = decoded.duree
         transport.dureeText = formattedDuration(decoded.duree)
         transport.zoomX = decoded.zoomX

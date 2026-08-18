@@ -42,7 +42,7 @@ extension ContentView {
         for i in pistes.indices {
             pistes[i].evenements.removeAll { idSet.contains($0.id) }
         }
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
     }
 
     func applyPointEdit(_ edit: PointEdit) {
@@ -59,14 +59,14 @@ extension ContentView {
             if let y = edit.y {
                 let piste = pistes[trackIndex]
                 let clamped = min(max(y, piste.minAmplitude), piste.maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(clamped, forTrackIndex: trackIndex)
+                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(clamped, forTrack: pistes[trackIndex])
             }
             if let comment = edit.comment {
                 pistes[trackIndex].evenements[eventIndex].comment = comment
             }
 
             pistes[trackIndex].evenements.sort()
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
             return
         }
     }
@@ -135,7 +135,7 @@ extension ContentView {
         }
         pistes[trackIndex].evenements.append(contentsOf: pasted)
         pistes[trackIndex].evenements.sort()
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
         // The freshly pasted points become the new selection, so they can
         // immediately be nudged as a group if the placement needs tweaking.
         selection.selectedPointIDs = newSelection
@@ -299,7 +299,7 @@ extension ContentView {
             }
 
             pistes[i].evenements.sort()
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
             break // the lasso only ever selects points on a single track
         }
     }
@@ -313,7 +313,7 @@ extension ContentView {
             pistes[i].evenements.removeAll { selection.selectedPointIDs.contains($0.id) }
         }
         selection.selectedPointIDs.removeAll()
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
     }
 
     func beginCreatingPoint(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
@@ -338,7 +338,7 @@ extension ContentView {
             label = ""
             let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
             let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            y = gateSnappedY(raw, forTrackIndex: trackIndex)
+            y = gateSnappedY(raw, forTrack: pistes[trackIndex])
         case .normal:
             label = ""
             y = 0.5
@@ -347,7 +347,7 @@ extension ContentView {
         let event = TimelineEvent(time: time, label: label, y: y)
         pistes[trackIndex].evenements.append(event)
         pistes[trackIndex].evenements.sort()
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
 
         pointEditing.creatingPointId = event.id
         pointEditing.creatingPointTrackIndex = trackIndex
@@ -365,10 +365,10 @@ extension ContentView {
         var newTime = (xPos / Double(largeurTimeline)) * transport.duree
 
         if NSEvent.modifierFlags.contains(.command),
-           let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline), excluding: id) {
+           let snapped = nearestSnapTime(markersTrack: pistes[0], showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: xPos, largeurTimeline: Double(largeurTimeline), excluding: id) {
             newTime = snapped
         } else if magneticGridSnap,
-                  let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                  let snapped = nearestGridTime(showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
             newTime = snapped
         }
         pistes[trackIndex].evenements[eventIndex].time = min(max(newTime, 0), transport.duree)
@@ -377,9 +377,9 @@ extension ContentView {
         if piste.type == .curve || piste.type == .step {
             let normalizedY = min(max(1 - (Double(location.y) / Double(piste.height)), 0), 1)
             let raw = piste.minAmplitude + normalizedY * (piste.maxAmplitude - piste.minAmplitude)
-            pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrackIndex: trackIndex)
+            pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(raw, forTrack: pistes[trackIndex])
         }
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
     }
 
     func finishCreatingPoint() {
@@ -397,14 +397,14 @@ extension ContentView {
             pistes[trackIndex].evenements[eventIndex].time = min(max(newPosition, 0), transport.duree)
             if (pistes[trackIndex].type == .curve || pistes[trackIndex].type == .step), let newY = Double(pointEditing.nouvelleYString) {
                 let constrainedY = min(max(newY, pistes[trackIndex].minAmplitude), pistes[trackIndex].maxAmplitude)
-                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrackIndex: trackIndex)
+                pistes[trackIndex].evenements[eventIndex].y = gateSnappedY(constrainedY, forTrack: pistes[trackIndex])
             }
             if trackIndex == 0 || pistes[trackIndex].type == .message {
                 pistes[trackIndex].evenements[eventIndex].label = pointEditing.nouveauLabel
             }
             pistes[trackIndex].evenements[eventIndex].comment = pointEditing.nouveauComment
             pistes[trackIndex].evenements.sort()
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
         }
         pointEditing.pointAEditer = nil
     }

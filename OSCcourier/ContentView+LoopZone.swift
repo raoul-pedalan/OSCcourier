@@ -60,10 +60,10 @@ extension ContentView {
             let xPos = Double(value.location.x - 140)
             var newTime = (xPos / Double(largeurTimeline)) * transport.duree
             if NSEvent.modifierFlags.contains(.command),
-               let snapped = nearestSnapTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+               let snapped = nearestSnapTime(markersTrack: pistes[0], showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
                 newTime = snapped
             } else if magneticGridSnap,
-                      let snapped = nearestGridTime(xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+                      let snapped = nearestGridTime(showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
                 newTime = snapped
             }
             newTime = min(max(newTime, 0), transport.duree)
@@ -91,12 +91,12 @@ extension ContentView {
             // one piece, keeping its length exactly.
             let startXPos = (newStart / transport.duree) * Double(largeurTimeline)
             if NSEvent.modifierFlags.contains(.command),
-               let snapped = nearestSnapTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+               let snapped = nearestSnapTime(markersTrack: pistes[0], showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
                 let snapDelta = snapped - newStart
                 newStart += snapDelta
                 newEnd += snapDelta
             } else if magneticGridSnap,
-                      let snapped = nearestGridTime(xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
+                      let snapped = nearestGridTime(showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: startXPos, largeurTimeline: Double(largeurTimeline)) {
                 let snapDelta = snapped - newStart
                 newStart += snapDelta
                 newEnd += snapDelta

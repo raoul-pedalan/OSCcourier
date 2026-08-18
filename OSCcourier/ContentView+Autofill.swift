@@ -1,6 +1,29 @@
 import SwiftUI
 import AppKit
 
+// Pure easing math shared by curveYPosition (a free function, since it's
+// called from gesture-handling code with no ContentView reference) and
+// the autofill wave generator below.
+func curvedProgress(_ t: Double, curvature: Double) -> Double {
+    guard curvature != 0 else { return t }
+    let k = pow(2, curvature)
+    if t < 0.5 {
+        return pow(t * 2, k) / 2
+    } else {
+        return 1 - pow((1 - t) * 2, k) / 2
+    }
+}
+
+func bulgeProgress(_ t: Double, bulge: Double) -> Double {
+    guard bulge != 0 else { return t }
+    let k = pow(2, bulge)
+    return pow(t, k)
+}
+
+func combinedProgress(_ t: Double, curvature: Double, bulge: Double) -> Double {
+    curvedProgress(bulgeProgress(t, bulge: bulge), curvature: curvature)
+}
+
 extension ContentView {
 
     func rectangleEvents(period: Double, phase: Double, pulseWidth: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
@@ -35,26 +58,6 @@ extension ContentView {
         }
 
         return events.sorted { $0.time < $1.time }
-    }
-
-    func curvedProgress(_ t: Double, curvature: Double) -> Double {
-        guard curvature != 0 else { return t }
-        let k = pow(2, curvature)
-        if t < 0.5 {
-            return pow(t * 2, k) / 2
-        } else {
-            return 1 - pow((1 - t) * 2, k) / 2
-        }
-    }
-
-    func bulgeProgress(_ t: Double, bulge: Double) -> Double {
-        guard bulge != 0 else { return t }
-        let k = pow(2, bulge)
-        return pow(t, k)
-    }
-
-    func combinedProgress(_ t: Double, curvature: Double, bulge: Double) -> Double {
-        curvedProgress(bulgeProgress(t, bulge: bulge), curvature: curvature)
     }
 
     func waveEvents(isSine: Bool, period: Double, phase: Double, skew: Double, ampMin: Double, ampMax: Double, duree: Double) -> [TimelineEvent] {
@@ -133,42 +136,6 @@ extension ContentView {
         return events
     }
 
-    func openAutofillPopup(for index: Int) {
-        guard !tracksLocked else { return }
-        if pistes[index].evenements.isEmpty {
-            proceedWithAutofill(for: index)
-        } else {
-            autofill.pendingAutofillIndex = index
-        }
-    }
-
-    func proceedWithAutofill(for index: Int) {
-        switch pistes[index].type {
-        case .step:
-            autofill.autofillTrackIndex = index
-            autofill.autofillPeriodString = "1.0"
-            autofill.autofillPhaseString = "0.0"
-            autofill.autofillPulseWidthString = "0.5"
-            autofill.autofillAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            autofill.autofillAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .curve:
-            autofill.waveTrackIndex = index
-            autofill.waveIsSine = true
-            autofill.wavePeriodString = "1.0"
-            autofill.wavePhaseString = "0.0"
-            autofill.waveSkewString = "0.5"
-            autofill.waveAmpMinString = String(format: "%.2f", pistes[index].minAmplitude)
-            autofill.waveAmpMaxString = String(format: "%.2f", pistes[index].maxAmplitude)
-        case .bang, .message:
-            autofill.bangTrackIndex = index
-            autofill.bangPeriodString = "1.0"
-            autofill.bangPhaseString = "0.0"
-            autofill.bangLabelPrefixString = pistes[index].type == .message ? "key" : "M"
-        case .normal:
-            break
-        }
-    }
-
     func commitAutofillRectangle() {
         if let index = autofill.autofillTrackIndex,
            let period = Double(autofill.autofillPeriodString),
@@ -184,7 +151,7 @@ extension ContentView {
                 ampMax: ampMax,
                 duree: transport.duree
             )
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
         }
         autofill.autofillTrackIndex = nil
     }
@@ -205,7 +172,7 @@ extension ContentView {
                 ampMax: ampMax,
                 duree: transport.duree
             )
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
         }
         autofill.waveTrackIndex = nil
     }
@@ -231,7 +198,7 @@ extension ContentView {
                 duree: transport.duree,
                 numberedLabelPrefix: numberedLabelPrefix
             )
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
         }
         autofill.bangTrackIndex = nil
     }

@@ -31,7 +31,7 @@ extension ContentView {
         // the mouse stays over the same point.
         if uiChrome.flagsChangedMonitor == nil {
             uiChrome.flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                updatePointCursor()
+                pointDrag.updateCursor(pasteModeActive: pasteClipboard.isPasteModeActive, magneticGridSnap: magneticGridSnap)
                 pointDrag.isOptionHeldForCursor = event.modifierFlags.contains(.option)
                 pointDrag.isShiftHeldForCursor = event.modifierFlags.contains(.shift)
                 return event

@@ -34,6 +34,12 @@ extension ContentView {
         // back, play again) re-sends them instead of silently treating
         // them as "already sent" from a previous, unrelated pass.
         pointDrag.lastSentEvents.removeAll()
+        // A muted step track forgets its last sent value, so unmuting makes
+        // it speak again immediately rather than being suppressed by an
+        // entry cached from before it was silenced.
+        for piste in pistes where piste.isMuted && piste.type == .step {
+            pointDrag.lastSentStepValues.removeValue(forKey: piste.nom)
+        }
         for piste in pistes where !piste.isMuted {
             if piste.type == .bang {
                 let tol = 0.01
@@ -72,15 +78,26 @@ extension ContentView {
                     sendOSCMessage(piste.nom + " " + String(format: "%.2f", interpolatedY), color: piste.couleur)
                 }
             } else if piste.type == .step {
-                // Zero-order hold: send the last event's value as-is, never interpolated.
+                // Zero-order hold: send the last event's value as-is, never
+                // interpolated — and only when that held value actually
+                // changes. A step track is constant between two points, so
+                // dragging the playhead across a single step would otherwise
+                // emit the same message on every drag tick. Matches what the
+                // playback loop already does via its crossing check.
                 let sortedEvents = piste.evenements.sorted { $0.time < $1.time }
                 if sortedEvents.isEmpty { continue }
 
+                let heldValue: Double
                 if let lastEventBefore = sortedEvents.last(where: { $0.time <= pos }) {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", lastEventBefore.y), color: piste.couleur)
+                    heldValue = lastEventBefore.y
                 } else if let firstEvent = sortedEvents.first {
-                    sendOSCMessage(piste.nom + " " + String(format: "%.2f", firstEvent.y), color: piste.couleur)
+                    heldValue = firstEvent.y
+                } else {
+                    continue
                 }
+                guard pointDrag.lastSentStepValues[piste.nom] != heldValue else { continue }
+                pointDrag.lastSentStepValues[piste.nom] = heldValue
+                sendOSCMessage(piste.nom + " " + String(format: "%.2f", heldValue), color: piste.couleur)
             }
         }
     }

@@ -35,7 +35,7 @@ extension ContentView {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierStop)) { _ in
             transport.enLecture = false
             transport.position = 0.0
-            pointDrag.lastSentEvents.removeAll()
+            pointDrag.invalidateSentCache()
         }
 
         let step2 = step1

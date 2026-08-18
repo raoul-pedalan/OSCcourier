@@ -1,160 +1,301 @@
 import SwiftUI
 import AppKit
 
-extension ContentView {
+// The collapsed-row height, shared by rowHeight(for:) below and by
+// foldedGhostTrace's own layout math further down. A free constant (not a
+// ContentView property) so rowHeight can be a free function too — it's
+// called from views that don't all have a ContentView reference.
+let foldedTrackHeight: CGFloat = 24
 
-    func rowHeight(for piste: TimelineTrack) -> CGFloat {
-        if piste.isFolded { return foldedTrackHeight }
-        return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
+// Pure function of the track alone: no ContentView state, so any view
+// (including the extracted track-header/track-content structs) can call
+// it directly.
+func rowHeight(for piste: TimelineTrack) -> CGFloat {
+    if piste.isFolded { return foldedTrackHeight }
+    return (piste.type == .bang || piste.type == .message) ? 45 : piste.height
+}
+
+// Half the minimum vertical padding reserved above/below a curve/step
+// track's drawable area, so a point never renders flush against the row's
+// edge. A free constant (like foldedTrackHeight) so the pure functions
+// below, and any view, can use it without a ContentView reference.
+let curveMargin: CGFloat = 6
+
+// Pure functions of a single track: no ContentView state, no array
+// indexing — so the extracted track-header/track-content views (which
+// only ever hold the one relevant `TimelineTrack`, not the whole array)
+// can call them directly.
+
+func gateSnappedY(_ y: Double, forTrack piste: TimelineTrack) -> Double {
+    if piste.type == .step && piste.isGate {
+        let midpoint = (piste.minAmplitude + piste.maxAmplitude) / 2
+        return y >= midpoint ? piste.maxAmplitude : piste.minAmplitude
     }
 
-    func gateSnappedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
+    guard piste.type == .curve || piste.type == .step else { return y }
+    return quantizedY(y, forTrack: piste)
+}
 
-        if piste.type == .step && piste.isGate {
-            let midpoint = (piste.minAmplitude + piste.maxAmplitude) / 2
-            return y >= midpoint ? piste.maxAmplitude : piste.minAmplitude
-        }
+func quantizedY(_ y: Double, forTrack piste: TimelineTrack) -> Double {
+    let step = piste.quantizeStep
+    guard piste.quantizeActive else { return y }
+    let offset = y - piste.minAmplitude
+    let snapped = piste.minAmplitude + (offset / step).rounded() * step
+    return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
+}
 
-        guard piste.type == .curve || piste.type == .step else { return y }
-        return quantizedY(y, forTrackIndex: index)
+func quantizeTickValues(forTrack piste: TimelineTrack) -> [Double] {
+    let step = piste.quantizeStep
+    let range = piste.maxAmplitude - piste.minAmplitude
+    guard piste.quantizeActive, range > 0 else { return [] }
+    let count = Int((range / step).rounded(.down))
+    guard count >= 1, count <= 500 else { return [] }
+    return (0...count).map { piste.minAmplitude + Double($0) * step }
+}
+
+func visibleQuantizeTicks(forTrack piste: TimelineTrack) -> [Double] {
+    let all = quantizeTickValues(forTrack: piste)
+    guard all.count > 1 else { return all }
+    let usableHeight = piste.height - 2 * curveMargin
+    guard usableHeight > 0 else { return [] }
+    let spacing = usableHeight / CGFloat(all.count - 1)
+    let minSpacing: CGFloat = 7
+    guard spacing < minSpacing else { return all }
+    let rawSkip = Double(minSpacing / spacing)
+    let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500]
+    let skip = Int(niceSteps.first(where: { $0 >= rawSkip }) ?? 500)
+    return all.enumerated().compactMap { i, v in i % skip == 0 ? v : nil }
+}
+
+// Pure functions of a single curve/step track: where its drawn line sits
+// at a given time, and whether the segment there is enabled. No
+// ContentView state — just the track and the time.
+
+func curveYPosition(forTime time: Double, track piste: TimelineTrack) -> CGFloat? {
+    let sorted = piste.evenements.sorted { $0.time < $1.time }
+    guard sorted.count > 1, let first = sorted.first, let last = sorted.last,
+          time >= first.time, time <= last.time else { return nil }
+
+    for i in 0..<(sorted.count - 1) {
+        let a = sorted[i]
+        let b = sorted[i + 1]
+        guard time >= a.time && time <= b.time else { continue }
+        let t = (b.time - a.time) > 0 ? (time - a.time) / (b.time - a.time) : 0
+        let curvedT = combinedProgress(t, curvature: a.segmentCurve, bulge: a.segmentBulge)
+        let value = a.y + (b.y - a.y) * curvedT
+        let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
+        let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
+        return curveMargin + (piste.height - 2 * curveMargin) * (1 - normalizedY)
     }
+    return nil
+}
 
-    func quantizedY(_ y: Double, forTrackIndex index: Int) -> Double {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        guard piste.quantizeActive else { return y }
-        let offset = y - piste.minAmplitude
-        let snapped = piste.minAmplitude + (offset / step).rounded() * step
-        return min(max(snapped, piste.minAmplitude), piste.maxAmplitude)
+func isSegmentEnabled(forTime time: Double, track piste: TimelineTrack) -> Bool {
+    let sorted = piste.evenements.sorted { $0.time < $1.time }
+    guard sorted.count > 1 else { return true }
+    for i in 0..<(sorted.count - 1) {
+        guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
+        return sorted[i].segmentEnabled
     }
+    return true
+}
 
-    func quantizeTickValues(forTrackIndex index: Int) -> [Double] {
-        let piste = pistes[index]
-        let step = piste.quantizeStep
-        let range = piste.maxAmplitude - piste.minAmplitude
-        guard piste.quantizeActive, range > 0 else { return [] }
-        let count = Int((range / step).rounded(.down))
-        guard count >= 1, count <= 500 else { return [] }
-        return (0...count).map { piste.minAmplitude + Double($0) * step }
-    }
-
-    func visibleQuantizeTicks(forTrackIndex index: Int) -> [Double] {
-        let all = quantizeTickValues(forTrackIndex: index)
-        guard all.count > 1 else { return all }
-        let usableHeight = pistes[index].height - 2 * curveMargin
-        guard usableHeight > 0 else { return [] }
-        let spacing = usableHeight / CGFloat(all.count - 1)
-        let minSpacing: CGFloat = 7
-        guard spacing < minSpacing else { return all }
-        let rawSkip = Double(minSpacing / spacing)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500]
-        let skip = Int(niceSteps.first(where: { $0 >= rawSkip }) ?? 500)
-        return all.enumerated().compactMap { i, v in i % skip == 0 ? v : nil }
-    }
-
-    @ViewBuilder
-    func foldedGhostTrace(for piste: TimelineTrack, largeurTimeline: CGFloat) -> some View {
-        let h = foldedTrackHeight
-        let margin: CGFloat = 3
-        switch piste.type {
-        case .bang, .message:
-            ForEach(piste.evenements) { event in
-                let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
-                Rectangle()
-                    .fill(piste.couleur.opacity(0.7))
-                    .frame(width: 1, height: h * 0.6)
-                    .position(x: xPos, y: h / 2)
-            }
-            .allowsHitTesting(false)
-        case .curve:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for value: Double) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
-                        let point = CGPoint(x: xPos, y: yPos(for: event.y))
-                        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1)
-                .allowsHitTesting(false)
-            }
-        case .step:
-            if piste.evenements.count > 1 {
-                Path { path in
-                    let sorted = piste.evenements.sorted { $0.time < $1.time }
-                    let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
-                    func yPos(for event: TimelineEvent) -> CGFloat {
-                        let normalizedY = amplitudeRange > 0 ? (event.y - piste.minAmplitude) / amplitudeRange : 0.5
-                        return margin + (h - 2 * margin) * (1 - normalizedY)
-                    }
-                    for (i, event) in sorted.enumerated() {
-                        let xPos = CGFloat(event.time / transport.duree) * largeurTimeline
-                        let y = yPos(for: event)
-                        if i == 0 {
-                            path.move(to: CGPoint(x: xPos, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
-                            path.addLine(to: CGPoint(x: xPos, y: y))
-                        }
-                    }
-                }
-                .stroke(piste.couleur.opacity(0.7), lineWidth: 1.5)
-                .allowsHitTesting(false)
-            }
-        case .normal:
-            EmptyView()
-        }
-    }
-
-    func curveYPosition(forTime time: Double, trackIndex: Int) -> CGFloat? {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1, let first = sorted.first, let last = sorted.last,
-              time >= first.time, time <= last.time else { return nil }
-
-        for i in 0..<(sorted.count - 1) {
-            let a = sorted[i]
-            let b = sorted[i + 1]
-            guard time >= a.time && time <= b.time else { continue }
-            let t = (b.time - a.time) > 0 ? (time - a.time) / (b.time - a.time) : 0
-            let curvedT = combinedProgress(t, curvature: a.segmentCurve, bulge: a.segmentBulge)
-            let value = a.y + (b.y - a.y) * curvedT
-            let amplitudeRange = pistes[trackIndex].maxAmplitude - pistes[trackIndex].minAmplitude
-            let normalizedY = amplitudeRange > 0 ? (value - pistes[trackIndex].minAmplitude) / amplitudeRange : 0.5
-            return curveMargin + (pistes[trackIndex].height - 2 * curveMargin) * (1 - normalizedY)
-        }
-        return nil
-    }
-
-    func isSegmentEnabled(forTime time: Double, trackIndex: Int) -> Bool {
-        let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
-        guard sorted.count > 1 else { return true }
-        for i in 0..<(sorted.count - 1) {
-            guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
-            return sorted[i].segmentEnabled
-        }
-        return true
-    }
-
-    func applyShiftSegmentCursor(at location: CGPoint, trackIndex: Int, largeurTimeline: CGFloat) {
-        let time = (Double(location.x) / Double(largeurTimeline)) * transport.duree
-        if let curveY = curveYPosition(forTime: time, trackIndex: trackIndex),
-           abs(Double(location.y) - Double(curveY)) < 12 {
-            if isSegmentEnabled(forTime: time, trackIndex: trackIndex) {
-                cursor(fromSymbol: "eraser.fill").set()
-            } else {
-                cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
-            }
+// Pure computation + a cursor-image side effect — no ObservableObject
+// state, so any gesture handler can call it directly regardless of which
+// state object it otherwise belongs to.
+func applyShiftSegmentCursor(at location: CGPoint, track piste: TimelineTrack, largeurTimeline: CGFloat, duree: Double) {
+    let time = (Double(location.x) / Double(largeurTimeline)) * duree
+    if let curveY = curveYPosition(forTime: time, track: piste),
+       abs(Double(location.y) - Double(curveY)) < 12 {
+        if isSegmentEnabled(forTime: time, track: piste) {
+            cursor(fromSymbol: "eraser.fill").set()
         } else {
-            NSCursor.arrow.set()
+            cursor(fromSymbol: "point.topleft.down.to.point.bottomright.curvepath.fill").set()
         }
+    } else {
+        NSCursor.arrow.set()
     }
+}
+
+// Fully pure: builds an NSCursor from an SF Symbol name. No ContentView
+// state at all.
+func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
+    let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        .applying(.init(paletteColors: [color]))
+    // Falls back to a known-valid symbol (rather than an empty NSImage)
+    // if `name` doesn't resolve — an invalid SF Symbol name would
+    // otherwise silently produce an invisible cursor, which is exactly
+    // the kind of bug that's very hard to notice/debug from testing
+    // alone.
+    let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
+        ?? NSImage()
+    let image = baseImage.withSymbolConfiguration(config) ?? baseImage
+    return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
+}
+
+// The grid-line and marker/point snapping chain: all pure functions of
+// the timeline's own data (the markers track, the grid settings, the
+// duration) rather than ContentView state — so any gesture handler
+// anywhere (RulerBar's, a point drag, the playhead's) can call into it
+// with just the values it already has.
+
+func gridLineTimes(period: Double, phase: Double, duree: Double) -> [Double] {
+    guard period > 0 else { return [] }
+    let phaseOffset = phase * period
+    var times: [Double] = []
+    var n = 0
+    while true {
+        let time = Double(n) * period + phaseOffset
+        if time > duree { break }
+        if time >= 0 { times.append(time) }
+        n += 1
+    }
+    return times
+}
+
+func visibleGridLineTimes(gridPeriod: Double, gridPhase: Double, duree: Double, largeurTimeline: CGFloat) -> [Double] {
+    let allTimes = gridLineTimes(period: gridPeriod, phase: gridPhase, duree: duree)
+    guard duree > 0, gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
+    let pixelsPerLine = largeurTimeline * CGFloat(gridPeriod / duree)
+    let minSpacing: CGFloat = 16
+    guard pixelsPerLine < minSpacing else { return allTimes }
+    // How many consecutive lines to fold into one to reach minSpacing —
+    // rounded up to a "nice" step (1, 2, 5, 10, 20, 50...) so the
+    // remaining visible lines still land on clean multiples of the
+    // original period rather than an arbitrary skip count.
+    let rawSkip = Double(minSpacing / pixelsPerLine)
+    let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+    let skip = niceSteps.first(where: { $0 >= rawSkip }) ?? (niceSteps.last ?? 1000)
+    return allTimes.enumerated().compactMap { index, time in
+        index % Int(skip) == 0 ? time : nil
+    }
+}
+
+// `excluding` lets a point being dragged skip itself as a snap candidate.
+// Without it, a marker being dragged would see its own (just-updated)
+// position among the candidates each tick, effectively "snapping to
+// wherever it was a moment ago" — a laggy, stuttery drag instead of a
+// smooth one, since the marker never advances a full step ahead but
+// trails the mouse in small catch-up jumps every frame.
+func snapCandidateTimes(markersTrack: TimelineTrack, showGrid: Bool, gridPeriod: Double, gridPhase: Double, duree: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> [Double] {
+    var times = markersTrack.evenements.filter { $0.id != excludedID }.map { $0.time }
+    if showGrid {
+        times.append(contentsOf: visibleGridLineTimes(gridPeriod: gridPeriod, gridPhase: gridPhase, duree: duree, largeurTimeline: CGFloat(largeurTimeline)))
+    }
+    return times
+}
+
+func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double, duree: Double) -> Double? {
+    guard !candidates.isEmpty, duree > 0 else { return nil }
+    let closest = candidates.min(by: { a, b in
+        let xA = (a / duree) * largeurTimeline
+        let xB = (b / duree) * largeurTimeline
+        return abs(xA - xPos) < abs(xB - xPos)
+    })
+    guard let closest = closest else { return nil }
+    let closestXPos = (closest / duree) * largeurTimeline
+    return abs(closestXPos - xPos) < 7 ? closest : nil
+}
+
+func nearestSnapTime(markersTrack: TimelineTrack, showGrid: Bool, gridPeriod: Double, gridPhase: Double, duree: Double, xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
+    nearestTime(
+        among: snapCandidateTimes(markersTrack: markersTrack, showGrid: showGrid, gridPeriod: gridPeriod, gridPhase: gridPhase, duree: duree, largeurTimeline: largeurTimeline, excluding: excludedID),
+        xPos: xPos, largeurTimeline: largeurTimeline, duree: duree
+    )
+}
+
+func nearestMarkerTime(markersTrack: TimelineTrack, duree: Double, xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
+    nearestTime(among: markersTrack.evenements.filter { $0.id != excludedID }.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline, duree: duree)
+}
+
+func nearestGridTime(showGrid: Bool, gridPeriod: Double, gridPhase: Double, duree: Double, xPos: Double, largeurTimeline: Double) -> Double? {
+    guard showGrid else { return nil }
+    return nearestTime(among: visibleGridLineTimes(gridPeriod: gridPeriod, gridPhase: gridPhase, duree: duree, largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline, duree: duree)
+}
+
+func isNearestSnapAGridLine(markersTrack: TimelineTrack, showGrid: Bool, gridPeriod: Double, gridPhase: Double, duree: Double, xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
+    let markerTime = nearestMarkerTime(markersTrack: markersTrack, duree: duree, xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID)
+    let gridTime = nearestGridTime(showGrid: showGrid, gridPeriod: gridPeriod, gridPhase: gridPhase, duree: duree, xPos: xPos, largeurTimeline: largeurTimeline)
+    guard let gridTime else { return false }
+    guard let markerTime else { return true }
+    let markerX = (markerTime / duree) * largeurTimeline
+    let gridX = (gridTime / duree) * largeurTimeline
+    return abs(gridX - xPos) < abs(markerX - xPos)
+}
+
+func isNearMarker(markersTrack: TimelineTrack, showGrid: Bool, gridPeriod: Double, gridPhase: Double, duree: Double, xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
+    nearestSnapTime(markersTrack: markersTrack, showGrid: showGrid, gridPeriod: gridPeriod, gridPhase: gridPhase, duree: duree, xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID) != nil
+}
+
+// Mutates a track's data (toggling a segment's enabled flag), so unlike
+// the pure functions above this stays a ContentView method — routed
+// through the `pistes` computed property (and its undo registration) the
+// same way every other track edit is.
+// A folded track's collapsed-height preview: markers as ticks, curve/step
+// as a thin traced line. Pure function of the track + the timeline
+// duration, so it's free rather than a ContentView method.
+@ViewBuilder
+func foldedGhostTrace(for piste: TimelineTrack, largeurTimeline: CGFloat, duree: Double) -> some View {
+    let h = foldedTrackHeight
+    let margin: CGFloat = 3
+    switch piste.type {
+    case .bang, .message:
+        ForEach(piste.evenements) { event in
+            let xPos = CGFloat(event.time / duree) * largeurTimeline
+            Rectangle()
+                .fill(piste.couleur.opacity(0.7))
+                .frame(width: 1, height: h * 0.6)
+                .position(x: xPos, y: h / 2)
+        }
+        .allowsHitTesting(false)
+    case .curve:
+        if piste.evenements.count > 1 {
+            Path { path in
+                let sorted = piste.evenements.sorted { $0.time < $1.time }
+                let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
+                func yPos(for value: Double) -> CGFloat {
+                    let normalizedY = amplitudeRange > 0 ? (value - piste.minAmplitude) / amplitudeRange : 0.5
+                    return margin + (h - 2 * margin) * (1 - normalizedY)
+                }
+                for (i, event) in sorted.enumerated() {
+                    let xPos = CGFloat(event.time / duree) * largeurTimeline
+                    let point = CGPoint(x: xPos, y: yPos(for: event.y))
+                    if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                }
+            }
+            .stroke(piste.couleur.opacity(0.7), lineWidth: 1)
+            .allowsHitTesting(false)
+        }
+    case .step:
+        if piste.evenements.count > 1 {
+            Path { path in
+                let sorted = piste.evenements.sorted { $0.time < $1.time }
+                let amplitudeRange = piste.maxAmplitude - piste.minAmplitude
+                func yPos(for event: TimelineEvent) -> CGFloat {
+                    let normalizedY = amplitudeRange > 0 ? (event.y - piste.minAmplitude) / amplitudeRange : 0.5
+                    return margin + (h - 2 * margin) * (1 - normalizedY)
+                }
+                for (i, event) in sorted.enumerated() {
+                    let xPos = CGFloat(event.time / duree) * largeurTimeline
+                    let y = yPos(for: event)
+                    if i == 0 {
+                        path.move(to: CGPoint(x: xPos, y: y))
+                    } else {
+                        path.addLine(to: CGPoint(x: xPos, y: path.currentPoint?.y ?? y))
+                        path.addLine(to: CGPoint(x: xPos, y: y))
+                    }
+                }
+            }
+            .stroke(piste.couleur.opacity(0.7), lineWidth: 1.5)
+            .allowsHitTesting(false)
+        }
+    case .normal:
+        EmptyView()
+    }
+}
+
+extension ContentView {
 
     func toggleSegmentEnabled(forTime time: Double, trackIndex: Int) {
         let sorted = pistes[trackIndex].evenements.sorted { $0.time < $1.time }
@@ -163,131 +304,9 @@ extension ContentView {
             guard time >= sorted[i].time && time <= sorted[i + 1].time else { continue }
             if let eventIndex = pistes[trackIndex].evenements.firstIndex(where: { $0.id == sorted[i].id }) {
                 pistes[trackIndex].evenements[eventIndex].segmentEnabled.toggle()
-                pointDrag.lastSentEvents.removeAll()
+                pointDrag.invalidateSentCache()
             }
             return
-        }
-    }
-
-    func cursor(fromSymbol name: String, color: NSColor = .black) -> NSCursor {
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            .applying(.init(paletteColors: [color]))
-        // Falls back to a known-valid symbol (rather than an empty NSImage)
-        // if `name` doesn't resolve — an invalid SF Symbol name would
-        // otherwise silently produce an invisible cursor, which is exactly
-        // the kind of bug that's very hard to notice/debug from testing
-        // alone.
-        let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "questionmark.circle.fill", accessibilityDescription: nil)
-            ?? NSImage()
-        let image = baseImage.withSymbolConfiguration(config) ?? baseImage
-        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
-    }
-
-    // `excluding` lets a point being dragged skip itself as a snap candidate.
-    // Without it, a marker being dragged would see its own (just-updated)
-    // transport.position among the candidates each tick, effectively "snapping to
-    // wherever it was a moment ago" — a laggy, stuttery drag instead of a
-    // smooth one, since the marker never advances a full step ahead but
-    // trails the mouse in small catch-up jumps every frame.
-    func snapCandidateTimes(largeurTimeline: Double, excluding excludedID: UUID? = nil) -> [Double] {
-        var times = pistes[0].evenements.filter { $0.id != excludedID }.map { $0.time }
-        if showGrid {
-            times.append(contentsOf: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)))
-        }
-        return times
-    }
-
-    func nearestTime(among candidates: [Double], xPos: Double, largeurTimeline: Double) -> Double? {
-        guard !candidates.isEmpty, transport.duree > 0 else { return nil }
-        let closest = candidates.min(by: { a, b in
-            let xA = (a / transport.duree) * largeurTimeline
-            let xB = (b / transport.duree) * largeurTimeline
-            return abs(xA - xPos) < abs(xB - xPos)
-        })
-        guard let closest = closest else { return nil }
-        let closestXPos = (closest / transport.duree) * largeurTimeline
-        return abs(closestXPos - xPos) < 7 ? closest : nil
-    }
-
-    func nearestSnapTime(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
-        nearestTime(among: snapCandidateTimes(largeurTimeline: largeurTimeline, excluding: excludedID), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
-
-    func nearestMarkerTime(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Double? {
-        nearestTime(among: pistes[0].evenements.filter { $0.id != excludedID }.map { $0.time }, xPos: xPos, largeurTimeline: largeurTimeline)
-    }
-
-    func nearestGridTime(xPos: Double, largeurTimeline: Double) -> Double? {
-        guard showGrid else { return nil }
-        return nearestTime(among: visibleGridLineTimes(largeurTimeline: CGFloat(largeurTimeline)), xPos: xPos, largeurTimeline: largeurTimeline)
-    }
-
-    func isNearestSnapAGridLine(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
-        let markerTime = nearestMarkerTime(xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID)
-        let gridTime = nearestGridTime(xPos: xPos, largeurTimeline: largeurTimeline)
-        guard let gridTime else { return false }
-        guard let markerTime else { return true }
-        let markerX = (markerTime / transport.duree) * largeurTimeline
-        let gridX = (gridTime / transport.duree) * largeurTimeline
-        return abs(gridX - xPos) < abs(markerX - xPos)
-    }
-
-    func isNearMarker(xPos: Double, largeurTimeline: Double, excluding excludedID: UUID? = nil) -> Bool {
-        nearestSnapTime(xPos: xPos, largeurTimeline: largeurTimeline, excluding: excludedID) != nil
-    }
-
-    func updatePointCursor() {
-        // Paste mode owns the cursor entirely while active — don't let a
-        // stray modifier-key change (e.g. releasing ⌘ right after ⌘V)
-        // clobber the red crosshair with the arrow just because the mouse
-        // isn't currently over a point.
-        guard !pasteClipboard.isPasteModeActive else { return }
-        guard pointDrag.isHoveringPoint else {
-            NSCursor.arrow.set()
-            return
-        }
-        if NSEvent.modifierFlags.contains(.shift) {
-            cursor(fromSymbol: "eraser.badge.xmark").set()
-        } else if NSEvent.modifierFlags.contains(.command) && pointDrag.isNearSnapZone {
-            let color: NSColor = pointDrag.isNearestSnapGrid ? .gray : .black
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: color).set()
-        } else if magneticGridSnap && pointDrag.isNearGridSnapZone {
-            cursor(fromSymbol: "arrowtriangle.right.and.line.vertical.and.arrowtriangle.left", color: .gray).set()
-        } else {
-            NSCursor.arrow.set()
-        }
-    }
-
-    func gridLineTimes(period: Double, phase: Double, duree: Double) -> [Double] {
-        guard period > 0 else { return [] }
-        let phaseOffset = phase * period
-        var times: [Double] = []
-        var n = 0
-        while true {
-            let time = Double(n) * period + phaseOffset
-            if time > duree { break }
-            if time >= 0 { times.append(time) }
-            n += 1
-        }
-        return times
-    }
-
-    func visibleGridLineTimes(largeurTimeline: CGFloat) -> [Double] {
-        let allTimes = gridLineTimes(period: uiChrome.gridPeriod, phase: uiChrome.gridPhase, duree: transport.duree)
-        guard transport.duree > 0, uiChrome.gridPeriod > 0, largeurTimeline > 0 else { return allTimes }
-        let pixelsPerLine = largeurTimeline * CGFloat(uiChrome.gridPeriod / transport.duree)
-        let minSpacing: CGFloat = 16
-        guard pixelsPerLine < minSpacing else { return allTimes }
-        // How many consecutive lines to fold into one to reach minSpacing —
-        // rounded up to a "nice" step (1, 2, 5, 10, 20, 50...) so the
-        // remaining visible lines still land on clean multiples of the
-        // original period rather than an arbitrary skip count.
-        let rawSkip = Double(minSpacing / pixelsPerLine)
-        let niceSteps: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
-        let skip = niceSteps.first(where: { $0 >= rawSkip }) ?? (niceSteps.last ?? 1000)
-        return allTimes.enumerated().compactMap { index, time in
-            index % Int(skip) == 0 ? time : nil
         }
     }
 
@@ -313,9 +332,9 @@ extension ContentView {
         // but its step value is kept, so returning to Float restores it.
         pistes[index].quantizeEnabled = false
         for i in pistes[index].evenements.indices {
-            pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrackIndex: index)
+            pistes[index].evenements[i].y = gateSnappedY(pistes[index].evenements[i].y, forTrack: pistes[index])
         }
-        pointDrag.lastSentEvents.removeAll()
+        pointDrag.invalidateSentCache()
     }
 
     func commitAmplitudeEdit() {

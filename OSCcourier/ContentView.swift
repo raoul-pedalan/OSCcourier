@@ -167,11 +167,6 @@ struct ContentView: View {
     // track so that points at the extreme values (0 or 1) aren't half-clipped.
     // Shared by the ruler labels, the path, and the point positions so they
     // all stay consistent with each other.
-    let curveMargin: CGFloat = 6
-
-    // Height a folded track's row is reduced to: just enough for the name,
-    // fold triangle, and reorder handle.
-    let foldedTrackHeight: CGFloat = 24
 
     // Width of the duration trim handle strip pinned to the window's right
     // edge. Shared so the timeline drawing width can reserve exactly this

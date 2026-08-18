@@ -14,7 +14,7 @@ extension ContentView {
                 for i in pistes.indices {
                     pistes[i].evenements.removeAll()
                 }
-                pointDrag.lastSentEvents.removeAll()
+                pointDrag.invalidateSentCache()
             }
         } message: {
             Text("This will erase every point on every track. This can't be undone.")
@@ -199,7 +199,7 @@ extension ContentView {
             }
             Button("Continue", role: .destructive) {
                 if let index = autofill.pendingAutofillIndex {
-                    proceedWithAutofill(for: index)
+                    autofill.proceedWithAutofill(for: index, track: pistes[index])
                 }
                 autofill.pendingAutofillIndex = nil
             }

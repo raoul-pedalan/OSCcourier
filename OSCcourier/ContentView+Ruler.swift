@@ -1,124 +1,29 @@
 import SwiftUI
 
-// The time ruler bar above the tracks: loop-zone band/drag preview, the
-// lock toggle, and the tick marks/labels (masked so they never spill over
-// the 140px track-header column). Split out of `body` verbatim — no logic
-// changes. Needs largeurTimeline/outerWidth/geometryWidth explicitly since
-// those are locals computed in body's nested GeometryReaders, not
-// ContentView members.
+// Thin adapter: builds the extracted `RulerBar` view, wiring it to the
+// ruler gesture handlers that still live on ContentView (they reach
+// across into snapping and track data, so they aren't a clean fit for
+// LoopZoneState alone).
 extension ContentView {
     func rulerBar(largeurTimeline: CGFloat, outerWidth: CGFloat, geometryWidth: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
-                                        Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
-                                        // The loop zone band: matches the Loop button's own colors
-                                        // exactly (solid yellow active, gray when off), so the zone
-                                        // and the button read as one and the same "loop" state.
-                                        if let start = loopZone.loopZoneStart, let end = loopZone.loopZoneEnd {
-                                            let x1 = CGFloat(min(start, end) / transport.duree) * largeurTimeline
-                                            let x2 = CGFloat(max(start, end) / transport.duree) * largeurTimeline
-                                            Rectangle()
-                                                .fill(enBoucle ? Color.yellow : Color.gray.opacity(0.15))
-                                                .frame(width: max(x2 - x1, 1), height: 24)
-                                                .offset(x: 140 + x1)
-                                        } else if let dragStart = loopZone.rulerDragStartTime, let dragCurrent = loopZone.rulerDragCurrentTime {
-                                            // Live preview while dragging out a brand new zone.
-                                            let x1 = CGFloat(min(dragStart, dragCurrent) / transport.duree) * largeurTimeline
-                                            let x2 = CGFloat(max(dragStart, dragCurrent) / transport.duree) * largeurTimeline
-                                            Rectangle()
-                                                .fill(Color.yellow)
-                                                .frame(width: max(x2 - x1, 1), height: 24)
-                                                .offset(x: 140 + x1)
-                                        }
-                                        if tracksLocked {
-                                            Rectangle().fill(Color.black).frame(width: 140, height: 24)
-                                        }
-                                        Color.clear
-                                            .contentShape(Rectangle())
-                                            .frame(height: 24)
-                                            .onContinuousHover { phase in
-                                                handleRulerHover(phase: phase, largeurTimeline: largeurTimeline)
-                                            }
-                                            .gesture(
-                                                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                                                    .onChanged { value in
-                                                        handleRulerDragChanged(value, largeurTimeline: largeurTimeline)
-                                                    }
-                                                    .onEnded { value in
-                                                        handleRulerDragEnded(value, largeurTimeline: largeurTimeline)
-                                                    }
-                                            )
-                                            .simultaneousGesture(
-                                                TapGesture(count: 2).onEnded {
-                                                    handleRulerDoubleClick()
-                                                }
-                                            )
-                                            .overlay {
-                                                CursorOverlay(
-                                                    isActive: loopZone.isNearLoopZoneEdge || loopZone.resizingLoopZoneEdge != nil,
-                                                    symbolName: "chevron.left.chevron.right"
-                                                )
-                                                .allowsHitTesting(false)
-                                            }
-                                        Button(action: { tracksLocked.toggle() }) {
-                                            Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
-                                                .font(.system(size: 18))
-                                                .foregroundColor(tracksLocked ? .red : .gray)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .padding(.leading, 10)
-                                        .help(tracksLocked ? "Tracks are locked" : "Tracks are unlocked")
-                                        // Dynamic tick interval: depends on pixels per second (so it already
-                                        // accounts for zoom, via largeurTimeline), not just the total duration —
-                                        // otherwise, zoomed in a lot on a long track, the interval would represent
-                                        // thousands of pixels and no tick would fall within the visible area.
-                                        let pixelsPerSecond = largeurTimeline / CGFloat(max(transport.duree, 0.001))
-                                        let minPixelSpacing: CGFloat = 100
-                                        let niceIntervals: [Double] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
-                                        let labelInterval = niceIntervals.first(where: { CGFloat($0) * pixelsPerSecond >= minPixelSpacing }) ?? (niceIntervals.last ?? 3600)
-
-                                        // Only generate ticks for the currently visible portion (plus a small
-                                        // buffer), not the whole duration: zoomed in a lot, computing ticks over
-                                        // an entire long track would be both useless (invisible) and costly
-                                        // (tens of thousands of elements).
-                                        let outerWidth = outerWidth
-                                        let buffer: CGFloat = 200
-                                        let visibleStartSeconde = max(0, Double((transport.scrollOffsetX - buffer - 140) / largeurTimeline) * transport.duree)
-                                        let visibleEndSeconde = min(transport.duree, Double((transport.scrollOffsetX + outerWidth + buffer - 140) / largeurTimeline) * transport.duree)
-                                        let firstTick = max(0, (visibleStartSeconde / labelInterval).rounded(.down) * labelInterval)
-
-                                        // The ticks are masked so that anything drawn left of the
-                                        // header margin is hidden. A label is centered on its
-                                        // graduation, so the first one ("00:00.00" at t=0) is
-                                        // wider than the space available to its left and would
-                                        // otherwise spill over the track headers. The tick marks
-                                        // and the playhead don't move at all — this only hides
-                                        // the overflow.
-                                        ZStack(alignment: .leading) {
-                                            ForEach(Array(stride(from: firstTick, through: max(firstTick, visibleEndSeconde), by: labelInterval)), id: \.self) { seconde in
-                                                VStack(spacing: 0) {
-                                                    // The label at t=0 is dropped: centered on its graduation,
-                                                    // it would sit half-over the track headers, and the mask
-                                                    // below just chopped it in half. The tick mark stays.
-                                                    Text(seconde == 0 ? "" : formattedTick(seconde, labelInterval: labelInterval))
-                                                        .font(.caption)
-                                                    Rectangle().fill(Color.gray).frame(width: 1, height: 5)
-                                                }
-                                                .frame(width: 70) // fixed, so the center stays exact regardless of label text width
-                                                .padding(.leading, 140)
-                                                .offset(x: CGFloat(seconde / transport.duree) * largeurTimeline - 35)
-                                            }
-                                        }
-                                        // Pinned to the full available width so the mask below lines
-                                        // up with real coordinates — otherwise the ZStack would size
-                                        // itself to its content and the mask's 140px would land
-                                        // somewhere else entirely.
-                                        .frame(width: geometryWidth, alignment: .leading)
-                                        .mask(
-                                            HStack(spacing: 0) {
-                                                Color.clear.frame(width: 140)
-                                                Color.black
-                                            }
-                                        )
-                                    }
+        RulerBar(
+            loopZone: loopZone,
+            transport: transport,
+            largeurTimeline: largeurTimeline,
+            outerWidth: outerWidth,
+            geometryWidth: geometryWidth,
+            onHover: { phase in
+                handleRulerHover(phase: phase, largeurTimeline: largeurTimeline)
+            },
+            onDragChanged: { value in
+                handleRulerDragChanged(value, largeurTimeline: largeurTimeline)
+            },
+            onDragEnded: { value in
+                handleRulerDragEnded(value, largeurTimeline: largeurTimeline)
+            },
+            onDoubleClick: {
+                handleRulerDoubleClick()
+            }
+        )
     }
 }
