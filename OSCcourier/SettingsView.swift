@@ -11,8 +11,6 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
-    @AppStorage("oscAddressPrefix") private var oscAddressPrefix: String = ""
-    @AppStorage("oscReceivePort") private var oscReceivePort: Int = 7500
     // How many OSC messages per second continuous (curve) tracks emit while
     // playing. Stored as an Int; the playback timer interval is 1/this.
     @AppStorage("oscMessagesPerSecond") private var oscMessagesPerSecond: Int = 20
@@ -48,17 +46,11 @@ struct SettingsView: View {
 
             Divider()
 
-            row("OSC send address prefix") {
-                TextField("", text: $oscAddressPrefix)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            row("OSC receive port") {
-                TextField("", value: $oscReceivePort, formatter: NumberFormatter())
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            Divider()
+            // OSC send address prefix and receive port moved to a per-window
+            // popover (next to the OSC address field in the toolbar) — they
+            // can't live here anymore now that they're per-window/per-project
+            // instead of a shared UserDefaults value, and Settings is a
+            // single app-wide window.
 
             row("OSC output rate (msg/s.)") {
                 resolutionControl

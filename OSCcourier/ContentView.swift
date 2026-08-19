@@ -200,9 +200,26 @@ struct ContentView: View {
 
 
 
-    // Shared with SettingsView via the same @AppStorage key.
-    @AppStorage("oscAddressPrefix") var oscAddressPrefix: String = ""
-    @AppStorage("oscReceivePort") var oscReceivePort: Int = 7500
+    // Per-window (not @AppStorage): each OSCcourier window/project has its
+    // own OSC receive port and address prefix, so multiple windows can each
+    // talk to/listen from a different OSC endpoint without colliding.
+    // Persisted in the project file itself (see SaveData) rather than
+    // UserDefaults, same as oscManager.address already is.
+    @State var oscAddressPrefix: String = ""
+    @State var oscReceivePort: Int
+
+    // Bumped once per new ContentView instance (i.e. per window) so that
+    // brand-new/untitled documents each start with a different default
+    // receive port instead of all colliding on 7500. Opening an existing
+    // project overrides this with the port saved in that file (see
+    // loadProject), so the counter only matters for fresh windows.
+    private static var nextReceivePortOffset = 0
+
+    init() {
+        let offset = ContentView.nextReceivePortOffset
+        ContentView.nextReceivePortOffset += 1
+        _oscReceivePort = State(initialValue: 7500 + offset)
+    }
     // Grid snap mode: false = grid lines only snap like markers do, via
     // ⌘+drag; true = "magnetic grid", points snap to the nearest grid line
     // automatically while dragging, no ⌘ needed. Markers themselves always
@@ -300,6 +317,13 @@ struct ContentView: View {
         .frame(minWidth: 1500, minHeight: 500)
         .background(Color.gray.opacity(0.07))
         .navigationTitle(savedFileURL?.deletingPathExtension().lastPathComponent ?? "OSCcourier")
+        // Keeps the separate Point List window's title (which repeats the
+        // file name so it's clear which document it belongs to, since
+        // several OSCcourier windows can be open at once) in sync whenever
+        // this window's file changes — load, Save As, etc.
+        .onChange(of: savedFileURL) { _, _ in
+            updatePointListWindowTitle()
+        }
         .onAppear {
             timelineStore.undoManager = undoManager
             setupOnAppear()

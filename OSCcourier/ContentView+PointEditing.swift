@@ -512,7 +512,7 @@ extension ContentView {
             backing: .buffered,
             defer: false
         )
-        window.title = "Point List"
+        window.title = pointListWindowTitle
         window.setFrameAutosaveName("PointListWindow")
         window.contentView = hostingView
         window.minSize = NSSize(width: 520, height: 300)
@@ -534,6 +534,17 @@ extension ContentView {
         windowManagement.pointListWindowController = NSWindowController(window: window)
         windowManagement.pointListWindowController?.showWindow(nil)
         windowManagement.isPointListWindowVisible = true
+    }
+
+    // Repeats the current file name in the title so it's clear which
+    // OSCcourier document this Point List window belongs to — several
+    // windows/documents can be open at once (see PendingFileLoad).
+    var pointListWindowTitle: String {
+        "Point List — " + (savedFileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
+    }
+
+    func updatePointListWindowTitle() {
+        windowManagement.pointListWindowController?.window?.title = pointListWindowTitle
     }
 
 }

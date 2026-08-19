@@ -19,10 +19,6 @@ extension ContentView {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierLoad)) { _ in
             loadProject()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierLoadRecentFile)) { notification in
-            guard let url = notification.object as? URL else { return }
-            loadProject(from: url)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowHelp)) { _ in
             openPDFWindow()
         }

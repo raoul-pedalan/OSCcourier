@@ -94,61 +94,36 @@ struct OSCcourierApp: App {
     @AppStorage("recentFilePaths") private var recentFilePathsData: String = ""
     @Environment(\.openWindow) private var openWindow
 
-    // Recent-file clicks (and anything similar in the future) need to know
-    // whether there's an actual ContentView window to receive the load
-    // notification, or whether one needs to be (re)created first — closing
-    // the last window doesn't quit the app, but it does mean nothing is
-    // listening for that notification anymore. Distinguished from our own
-    // secondary windows (Point List, OSC Messages, etc.) by their known
-    // fixed titles, since none of them should count as "the main window."
-    private var isMainWindowOpen: Bool {
-        let auxiliaryTitles: Set<String> = ["Point List", "OSC Messages", "Modifier Keys", "Help"]
-        return NSApp.windows.contains { window in
-            window.isVisible && !auxiliaryTitles.contains(window.title)
-        }
-    }
-
+    // Loading a file — whether via "Load…" or "Open Recent" — always opens
+    // it in a brand-new window and leaves any already-open windows alone.
+    // This used to post a notification that every open ContentView
+    // listened for, so with several windows open they'd ALL get
+    // overwritten with the loaded file; routing through PendingFileLoad +
+    // openWindow instead means exactly one (new) window ever receives it.
     private func openRecentFile(at path: String) {
         let url = URL(fileURLWithPath: path)
-        if isMainWindowOpen {
-            NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: url)
-        } else {
-            // With zero visible windows, the app may no longer be the
-            // active/frontmost application — and some AppKit actions
-            // (opening a new window among them) can be silently dropped
-            // until it's explicitly reactivated. Running from Xcode masks
-            // this, since the debugger keeps the app active throughout.
-            NSApp.activate(ignoringOtherApps: true)
-            PendingFileLoad.url = url
-            openWindow(id: "main")
-        }
+        // The app may not be the active/frontmost application when this
+        // fires (e.g. picked from the Dock menu) — and some AppKit actions
+        // (opening a new window among them) can be silently dropped until
+        // it's explicitly reactivated. Running from Xcode masks this, since
+        // the debugger keeps the app active throughout.
+        NSApp.activate(ignoringOtherApps: true)
+        PendingFileLoad.url = url
+        openWindow(id: "main")
     }
 
-    // "Load…" used to just post a notification for ContentView to show its
-    // own NSOpenPanel — which had exactly the same problem as Open Recent:
-    // nothing listens when there's no window. Showing the panel directly
-    // from here (NSOpenPanel doesn't need a ContentView to run) and then
-    // routing the chosen URL through the same isMainWindowOpen /
-    // PendingFileLoad path as Open Recent fixes both at once.
     private func loadFileFromMenu() {
-        if !isMainWindowOpen {
-            // Same reactivation as openRecentFile — needed here too, since
-            // NSOpenPanel itself can fail to appear at all while the app
-            // isn't active, which is exactly what was observed: nothing
-            // happened at all, not even the panel showing up.
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        // Same reactivation as openRecentFile — needed here too, since
+        // NSOpenPanel itself can fail to appear at all while the app isn't
+        // active.
+        NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if isMainWindowOpen {
-            NotificationCenter.default.post(name: .OSCcourierLoadRecentFile, object: url)
-        } else {
-            PendingFileLoad.url = url
-            openWindow(id: "main")
-        }
+        PendingFileLoad.url = url
+        openWindow(id: "main")
     }
 
     var body: some Scene {

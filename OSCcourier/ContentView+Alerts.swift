@@ -19,6 +19,14 @@ extension ContentView {
         } message: {
             Text("This will erase every point on every track. This can't be undone.")
         }
+        .alert("OSC listen error", isPresented: Binding<Bool>(
+            get: { oscManager.lastListenError != nil },
+            set: { if !$0 { oscManager.lastListenError = nil } }
+        )) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(oscManager.lastListenError ?? "")
+        }
         .alert("Delete all tracks?", isPresented: $autofill.showDeleteAllTracksConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {

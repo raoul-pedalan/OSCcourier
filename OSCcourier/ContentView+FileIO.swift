@@ -6,7 +6,14 @@ import UniformTypeIdentifiers
 extension ContentView {
 
     func encodedProjectData() -> Data? {
-        let data = SaveData(duree: transport.duree, oscAddress: oscManager.address, zoomX: transport.zoomX, pistes: pistes)
+        let data = SaveData(
+            duree: transport.duree,
+            oscAddress: oscManager.address,
+            oscAddressPrefix: oscAddressPrefix,
+            oscReceivePort: oscReceivePort,
+            zoomX: transport.zoomX,
+            pistes: pistes
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try? encoder.encode(data)
@@ -63,6 +70,12 @@ extension ContentView {
         transport.zoomX = decoded.zoomX
         oscManager.address = decoded.oscAddress
         oscManager.setupOSCConnection()
+        // Fall back to this window's current values (its own defaults) for
+        // project files saved before these existed, rather than silently
+        // resetting to some hardcoded value.
+        oscAddressPrefix = decoded.oscAddressPrefix ?? oscAddressPrefix
+        oscReceivePort = decoded.oscReceivePort ?? oscReceivePort
+        oscManager.startListening(port: oscReceivePort)
         pistes = decoded.pistes
         savedFileURL = url // further saves overwrite the file we just loaded
         addToRecentFiles(url)

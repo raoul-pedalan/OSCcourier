@@ -27,4 +27,8 @@ final class UIChromeState: ObservableObject {
 
     @Published var showTimeOffsetPopup: Bool = false
     @Published var timeOffsetString: String = "0.0"
+
+    @Published var showOSCIOSettingsPopup: Bool = false
+    @Published var oscAddressPrefixString: String = ""
+    @Published var oscReceivePortString: String = "7500"
 }

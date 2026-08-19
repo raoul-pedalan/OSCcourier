@@ -184,6 +184,11 @@ struct SaveData: Codable {
     var _comment: String = "OSCcourier project file. Contains all track/point data plus basic UI settings (duration, OSC address, zoom level)."
     var duree: Double
     var oscAddress: String
+    // Optional so older project files (saved before per-window OSC I/O
+    // settings existed) still decode fine — decodeIfPresent at load time
+    // falls back to the app's previous global defaults.
+    var oscAddressPrefix: String? = nil
+    var oscReceivePort: Int? = nil
     var zoomX: Double
     var pistes: [TimelineTrack]
 }

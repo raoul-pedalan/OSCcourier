@@ -423,6 +423,47 @@ extension ContentView {
         .frame(width: 280)
     }
 
+    var oscIOSettingsSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("OSC I/O")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Text("Per-window — saved with this project.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack {
+                Text("Send address prefix")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 140, alignment: .trailing)
+                TextField("", text: $uiChrome.oscAddressPrefixString)
+                    .onSubmit { commitOSCIOSettings() }
+            }
+            HStack {
+                Text("Receive port")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 140, alignment: .trailing)
+                TextField("", text: $uiChrome.oscReceivePortString)
+                    .onSubmit { commitOSCIOSettings() }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    uiChrome.showOSCIOSettingsPopup = false
+                }
+                Button("OK") {
+                    commitOSCIOSettings()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+
     // Presents each editor/autofill popup as a .sheet keyed to its own
     // optional-index/id @State. Split out of `body` verbatim — same
     // reasoning as ContentView+NotificationHandling.swift.
@@ -463,6 +504,9 @@ extension ContentView {
         }
         .sheet(isPresented: $uiChrome.showTimeOffsetPopup) {
             timeOffsetSheet
+        }
+        .sheet(isPresented: $uiChrome.showOSCIOSettingsPopup) {
+            oscIOSettingsSheet
         }
     }
 }

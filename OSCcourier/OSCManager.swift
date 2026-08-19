@@ -22,6 +22,11 @@ enum OSCValue {
 class OSCManager: ObservableObject {
     @Published var address: String = "127.0.0.1:7400"
     @Published var isConnected = true
+    // Set when startListening fails (most commonly: another window already
+    // has this port bound) — surfaced as an alert by ContentView instead of
+    // failing silently to the Xcode console, since each window can now pick
+    // its own port and a collision is easy to hit by accident.
+    @Published var lastListenError: String?
 
     // MARK: - Receiving OSC messages (transport control from the outside)
     private var listenSocketFD: Int32 = -1
@@ -133,7 +138,9 @@ class OSCManager: ObservableObject {
 
         let socketFD = socket(AF_INET, SOCK_DGRAM, 0)
         guard socketFD >= 0 else {
-            print("OSC: Impossible de créer le socket d'écoute (errno: \(errno))")
+            let message = "Impossible de créer le socket d'écoute (errno: \(errno))."
+            print("OSC: \(message)")
+            lastListenError = message
             return
         }
 
@@ -150,13 +157,16 @@ class OSCManager: ObservableObject {
         }
 
         guard bindResult == 0 else {
-            print("OSC: Impossible de réserver le port \(port) pour l'écoute (errno: \(errno))")
+            let message = "Impossible de réserver le port \(port) pour l'écoute OSC (errno: \(errno)). Une autre fenêtre l'utilise peut-être déjà — choisis un port différent."
+            print("OSC: \(message)")
+            lastListenError = message
             close(socketFD)
             return
         }
 
         listenSocketFD = socketFD
         isListening = true
+        lastListenError = nil
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var buffer = [UInt8](repeating: 0, count: 1024)

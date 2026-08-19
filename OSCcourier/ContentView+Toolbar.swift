@@ -73,24 +73,63 @@ extension ContentView {
                             .foregroundColor(.gray.opacity(0.6))
                             .offset(y: 23)
                     }
-                TextField("OSC", text: Binding(
-                    get: { oscManager.address },
-                    set: { newValue in
-                        oscManager.address = newValue
-                        oscManager.setupOSCConnection()
+                // The address field and the settings gear are one logical
+                // group ("OSC address" covers both — the gear just exposes
+                // the less-frequently-touched prefix/port for it), so a
+                // single bracket spans both instead of a caption centered
+                // under just the text field.
+                HStack(spacing: 6) {
+                    TextField("OSC", text: Binding(
+                        get: { oscManager.address },
+                        set: { newValue in
+                            oscManager.address = newValue
+                            oscManager.setupOSCConnection()
+                        }
+                    ))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(width: 105, height: 22)
+                    .focused($focusedField, equals: .oscAddress)
+                    .onSubmit {
+                        if focusedField == .oscAddress { focusedField = nil }
                     }
-                ))
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .frame(width: 150, height: 22)
-                .focused($focusedField, equals: .oscAddress)
-                .onSubmit {
-                    if focusedField == .oscAddress { focusedField = nil }
+                    // Prefix + receive port: per-window settings, but far
+                    // less frequently touched than the address above, so
+                    // they live behind this icon instead of two more
+                    // inline fields.
+                    Button(action: { openOSCIOSettingsPopup() }) {
+                        Image(systemName: "arrow.up.and.down.circle")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 22, height: 22)
+                    .help("OSC send address prefix / receive port")
                 }
                 .overlay(alignment: .bottom) {
-                    Text("OSC address")
-                        .font(.caption2)
-                        .foregroundColor(.gray.opacity(0.6))
-                        .offset(y: 23)
+                    // Two half-brackets flanking the label, same baseline
+                    // as every other caption (not a second row below it) —
+                    // each is a short upward tick at the group's outer edge
+                    // connected by a line running in to the text, so the
+                    // whole thing reads like "└── OSC address ──┘" spanning
+                    // the field + gear icon together.
+                    HStack(alignment: .bottom, spacing: 3) {
+                        HStack(alignment: .bottom, spacing: 0) {
+                            Rectangle().fill(Color.gray.opacity(0.6)).frame(width: 1, height: 5)
+                            Rectangle().fill(Color.gray.opacity(0.6)).frame(height: 1)
+                        }
+                        .offset(y: -6)
+                        Text("OSC address")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.6))
+                            .fixedSize()
+                        HStack(alignment: .bottom, spacing: 0) {
+                            Rectangle().fill(Color.gray.opacity(0.6)).frame(height: 1)
+                            Rectangle().fill(Color.gray.opacity(0.6)).frame(width: 1, height: 5)
+                        }
+                        .offset(y: -6)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .offset(y: 23)
                 }
                 HStack(spacing: 0) {
                     Button(action: {
@@ -265,5 +304,19 @@ extension ContentView {
             } else {
                 compactControlBar
             }
+    }
+
+    func openOSCIOSettingsPopup() {
+        uiChrome.oscAddressPrefixString = oscAddressPrefix
+        uiChrome.oscReceivePortString = String(oscReceivePort)
+        uiChrome.showOSCIOSettingsPopup = true
+    }
+
+    func commitOSCIOSettings() {
+        oscAddressPrefix = uiChrome.oscAddressPrefixString
+        if let port = Int(uiChrome.oscReceivePortString.trimmingCharacters(in: .whitespaces)) {
+            oscReceivePort = port
+        }
+        uiChrome.showOSCIOSettingsPopup = false
     }
 }
