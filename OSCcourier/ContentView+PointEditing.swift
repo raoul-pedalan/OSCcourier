@@ -275,6 +275,10 @@ extension ContentView {
     func nudgeSelection(timePixels: Int, valuePixels: Int) {
         guard !tracksLocked, !selection.selectedPointIDs.isEmpty else { return }
         for i in pistes.indices {
+            // The markers track is a navigation aid, not data — it never
+            // moves along with the rest of a nudged selection, even if a
+            // marker happens to be selected too.
+            guard i != 0 else { continue }
             let selected = pistes[i].evenements.filter { selection.selectedPointIDs.contains($0.id) }
             guard !selected.isEmpty else { continue }
 
@@ -343,7 +347,6 @@ extension ContentView {
 
             pistes[i].evenements.sort()
             pointDrag.invalidateSentCache()
-            break // the lasso only ever selects points on a single track
         }
     }
 

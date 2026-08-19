@@ -55,15 +55,18 @@ extension ContentView {
                     return nil
                 }
 
-                // Arrow keys: nudge the selection by one screen pixel.
+                // Arrow keys: nudge the selection by one screen pixel —
+                // ten, with Option held, for bigger moves without leaving
+                // the keyboard.
                 // 123=Left, 124=Right, 125=Down, 126=Up.
                 if [123, 124, 125, 126].contains(event.keyCode) {
                     guard !selection.selectedPointIDs.isEmpty else { return event }
+                    let step = event.modifierFlags.contains(.option) ? 10 : 1
                     switch event.keyCode {
-                    case 123: nudgeSelection(timePixels: -1, valuePixels: 0)
-                    case 124: nudgeSelection(timePixels: 1, valuePixels: 0)
-                    case 125: nudgeSelection(timePixels: 0, valuePixels: -1)
-                    case 126: nudgeSelection(timePixels: 0, valuePixels: 1)
+                    case 123: nudgeSelection(timePixels: -step, valuePixels: 0)
+                    case 124: nudgeSelection(timePixels: step, valuePixels: 0)
+                    case 125: nudgeSelection(timePixels: 0, valuePixels: -step)
+                    case 126: nudgeSelection(timePixels: 0, valuePixels: step)
                     default: break
                     }
                     return nil
