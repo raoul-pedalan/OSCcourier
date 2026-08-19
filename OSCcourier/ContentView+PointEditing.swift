@@ -60,10 +60,21 @@ extension ContentView {
             // most people want swept up in a bulk time shift, so it's
             // opt-in via the popup's checkbox.
             guard includeMarkers || trackIndex != 0 else { continue }
+            // A point shifted past 0 or duree is removed rather than
+            // clamped — same reasoning as nudgeSelection: this is a
+            // deliberate, typed-value action, and stacking points at the
+            // boundary isn't a useful result.
+            let overflowingIDs = Set(pistes[trackIndex].evenements
+                .filter { ids.contains($0.id) }
+                .filter { $0.time + delta < 0 || $0.time + delta > transport.duree }
+                .map { $0.id })
+            if !overflowingIDs.isEmpty {
+                pistes[trackIndex].evenements.removeAll { overflowingIDs.contains($0.id) }
+                selection.selectedPointIDs.subtract(overflowingIDs)
+            }
             var changed = false
             for eventIndex in pistes[trackIndex].evenements.indices where ids.contains(pistes[trackIndex].evenements[eventIndex].id) {
-                let newTime = min(max(pistes[trackIndex].evenements[eventIndex].time + delta, 0), transport.duree)
-                pistes[trackIndex].evenements[eventIndex].time = newTime
+                pistes[trackIndex].evenements[eventIndex].time += delta
                 changed = true
             }
             if changed {
@@ -284,20 +295,29 @@ extension ContentView {
 
             if timePixels != 0 {
                 // Mirrors largeurTimeline's own formula (geometry.size.width - 140,
-                // where that geometry is the zoomed content width).
+                // where that geometry is the zoomed content width). A point
+                // nudged past 0 or duree is removed rather than clamped —
+                // stacking several points on top of each other at the
+                // boundary isn't a useful end state, and a discrete
+                // keystroke-driven nudge is deliberate enough that losing
+                // the point isn't a surprise (unlike a live drag, which
+                // still clamps mid-gesture — see handlePointDragEnded).
                 let effectiveWidth = max((transport.timelineAreaWidth * CGFloat(transport.zoomX)) - 140, 1)
                 let secondsPerPixel = transport.duree / Double(effectiveWidth)
-                let rawDelta = secondsPerPixel * Double(timePixels)
-                var minAllowedDelta = -Double.infinity
-                var maxAllowedDelta = Double.infinity
-                for e in selected {
-                    minAllowedDelta = max(minAllowedDelta, 0 - e.time)
-                    maxAllowedDelta = min(maxAllowedDelta, transport.duree - e.time)
-                }
-                let delta = min(max(rawDelta, minAllowedDelta), maxAllowedDelta)
+                let delta = secondsPerPixel * Double(timePixels)
+                var idsToRemove: [UUID] = []
                 for id in selection.selectedPointIDs {
                     guard let idx = pistes[i].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                    pistes[i].evenements[idx].time += delta
+                    let newTime = pistes[i].evenements[idx].time + delta
+                    if newTime < 0 || newTime > transport.duree {
+                        idsToRemove.append(id)
+                    } else {
+                        pistes[i].evenements[idx].time = newTime
+                    }
+                }
+                if !idsToRemove.isEmpty {
+                    pistes[i].evenements.removeAll { idsToRemove.contains($0.id) }
+                    for id in idsToRemove { selection.selectedPointIDs.remove(id) }
                 }
             }
 

@@ -53,6 +53,22 @@ struct TrackContentColumn: View {
         colorScheme == .dark ? 0.18 : 0.3
     }
 
+    // Right-click menu — same content on all three background gesture
+    // layers below (bang/message, curve, step), so it's available
+    // regardless of where on the track's empty background the user
+    // right-clicks.
+    @ViewBuilder
+    private var selectAllTrackPointsMenuItem: some View {
+        Button("Select All Track Points") {
+            selection.selectAllPoints(onTrack: pistes[index])
+        }
+        Button("Time Offset Selection…") {
+            uiChrome.timeOffsetString = "0.0"
+            uiChrome.showTimeOffsetPopup = true
+        }
+        .disabled(selection.selectedPointIDs.isEmpty)
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
             Rectangle()
@@ -104,6 +120,7 @@ struct TrackContentColumn: View {
                                 onFinishCreatingPoint()
                             }
                     )
+                    .contextMenu { selectAllTrackPointsMenuItem }
             } else if pistes[index].type == .curve {
                 Color.clear
                     .contentShape(Rectangle())
@@ -189,6 +206,7 @@ struct TrackContentColumn: View {
                                 pointDrag.handleCurveBendDragEnded()
                             }
                     )
+                    .contextMenu { selectAllTrackPointsMenuItem }
 
                 // Purely cosmetic cursor layer: uses AppKit's own cursor-rect
                 // system (reliable even during plain hover, unlike NSCursor.set()
@@ -249,6 +267,7 @@ struct TrackContentColumn: View {
                                 onFinishCreatingPoint()
                             }
                     )
+                    .contextMenu { selectAllTrackPointsMenuItem }
             }
 
             if pistes[index].type == .curve && pistes[index].evenements.count > 1 {
@@ -465,7 +484,7 @@ struct TrackContentColumn: View {
                             )
                         }
                         .onEnded { _ in
-                            pointDrag.handlePointDragEnded(trackIndex: index, pistes: &pistes)
+                            pointDrag.handlePointDragEnded(trackIndex: index, pistes: &pistes, selection: selection)
                         }
                 )
                 .onTapGesture(count: 1) {

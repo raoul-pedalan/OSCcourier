@@ -10,6 +10,12 @@ import AppKit
 final class SelectionState: ObservableObject {
     @Published var selectedPointIDs: Set<UUID> = []
 
+    // Selects every point on a single track — the right-click "Select All
+    // Track Points" context menu item on that track's content column.
+    func selectAllPoints(onTrack piste: TimelineTrack) {
+        selectedPointIDs = Set(piste.evenements.map { $0.id })
+    }
+
     // Selects every point (on every track) whose time falls within
     // [start, end] — used by the "Select Points in Time Range" loop-zone
     // context menu and by "Select All", so a group of cue points spread

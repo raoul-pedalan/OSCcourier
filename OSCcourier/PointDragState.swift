@@ -29,6 +29,13 @@ final class PointDragState: ObservableObject {
     // disabled entirely for the duration of such a drag — only time
     // moves.
     @Published var groupDragSpansMultipleTracks: Bool = false
+    // Recomputed every tick during a group time-drag: which selected
+    // points are currently sitting clamped at 0 or duree because their
+    // *unclamped* target would have gone past it. Stacking them there is
+    // just an in-progress visual (so the gesture stays predictable while
+    // live), but on release (handlePointDragEnded) these get removed —
+    // same "clip rather than stack" rule as nudgeSelection/Time Offset.
+    @Published var groupDragOverflowingIDs: Set<UUID> = []
 
     @Published var curveDragSegmentID: UUID?
     @Published var curveDragBaseline: Double?
@@ -140,6 +147,11 @@ final class PointDragState: ObservableObject {
                 var baseline: [UUID: Double] = [:]
                 var touchedTracks: Set<Int> = []
                 for (trackIndex, piste) in pistes.enumerated() {
+                    // The markers track is a navigation aid, not data — it
+                    // never moves along with the rest of a group drag, even
+                    // if a marker got swept into the selection (e.g. via
+                    // Select All). Same rule as nudgeSelection.
+                    guard trackIndex != 0 else { continue }
                     for event in piste.evenements where selection.selectedPointIDs.contains(event.id) {
                         baseline[event.id] = event.time
                         touchedTracks.insert(trackIndex)
@@ -151,13 +163,19 @@ final class PointDragState: ObservableObject {
             }
             guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
             let delta = clampedNewTime - anchorOriginal
+            var overflowing: Set<UUID> = []
             for (id, originalTime) in groupDragBaseline {
+                let rawTime = originalTime + delta
+                if rawTime < 0 || rawTime > transport.duree {
+                    overflowing.insert(id)
+                }
                 for trackIndex in pistes.indices {
                     guard let idx = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                    pistes[trackIndex].evenements[idx].time = min(max(originalTime + delta, 0), transport.duree)
+                    pistes[trackIndex].evenements[idx].time = min(max(rawTime, 0), transport.duree)
                     break
                 }
             }
+            groupDragOverflowingIDs = overflowing
 
             // Y moves too, but only where it means something — and only
             // when the whole selection lives on this one track. Across
@@ -201,7 +219,7 @@ final class PointDragState: ObservableObject {
         }
     }
 
-    func handlePointDragEnded(trackIndex index: Int, pistes: inout [TimelineTrack]) {
+    func handlePointDragEnded(trackIndex index: Int, pistes: inout [TimelineTrack], selection: SelectionState) {
         // A group drag can have touched points on other tracks too (see
         // handlePointDragChanged) — re-sort every track that had a
         // selected point, not just the one the gesture started on.
@@ -212,12 +230,26 @@ final class PointDragState: ObservableObject {
                 pistes[trackIndex].evenements.sort()
             }
         }
+        // Points that spent the drag clamped at 0/duree (their unclamped
+        // target was past it) get removed now that the gesture is over —
+        // stacking was just an in-progress visual, not a useful end state.
+        // A single-point drag never populates this set (only isGroupDrag
+        // does), so a lone point dragged to the edge still just clamps,
+        // same as before.
+        if !groupDragOverflowingIDs.isEmpty {
+            let overflowing = groupDragOverflowingIDs
+            for trackIndex in pistes.indices {
+                pistes[trackIndex].evenements.removeAll { overflowing.contains($0.id) }
+            }
+            selection.selectedPointIDs.subtract(overflowing)
+        }
         invalidateSentCache()
         groupDragBaseline.removeAll()
         groupDragAnchorOriginalTime = nil
         groupDragYBaseline.removeAll()
         groupDragAnchorOriginalY = nil
         groupDragSpansMultipleTracks = false
+        groupDragOverflowingIDs.removeAll()
     }
 
     // A plain click: Shift (without Option) removes the point; otherwise a
