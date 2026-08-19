@@ -23,6 +23,12 @@ extension ContentView {
             },
             onDoubleClick: {
                 handleRulerDoubleClick()
+            },
+            onSelectPointsInLoopZone: {
+                selectPointsInLoopZone()
+            },
+            onTimeOffsetSelection: {
+                openTimeOffsetPopup()
             }
         )
     }

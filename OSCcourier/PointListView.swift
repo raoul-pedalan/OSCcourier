@@ -23,6 +23,15 @@ struct PointListView: View {
     @State private var draftY: String = ""
     @State private var draftComment: String = ""
 
+    // Same idea, for shifting a whole multi-row selection in time — its own
+    // local sheet (not ContentView's Edit-menu one) so it opens on THIS
+    // window too.
+    @State private var showOffsetSheet: Bool = false
+    @State private var offsetString: String = "0.0"
+    // Same key as ContentView's Time Offset popup, so the choice stays in
+    // sync/persisted regardless of which window it was last set from.
+    @AppStorage("includeMarkersInOffset") private var includeMarkersInOffset: Bool = false
+
     private var visibleRows: [PointListRow] {
         guard let filter = trackFilter else { return store.rows }
         return store.rows.filter { $0.trackName == filter }
@@ -101,6 +110,8 @@ struct PointListView: View {
                 .contextMenu(forSelectionType: UUID.self) { ids in
                     if ids.count == 1 {
                         Button("Edit Point…") { beginEditSelected() }
+                    } else if ids.count > 1 {
+                        Button("Offset…") { offsetString = "0.0"; showOffsetSheet = true }
                     }
                     Button("Delete \(ids.count == 1 ? "Point" : "\(ids.count) Points")", role: .destructive) {
                         deleteSelected(ids)
@@ -123,8 +134,12 @@ struct PointListView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
-                    Button("Edit Point…") { beginEditSelected() }
-                        .disabled(selectionState.selectedPointIDs.count != 1)
+                    if selectionState.selectedPointIDs.count > 1 {
+                        Button("Offset…") { offsetString = "0.0"; showOffsetSheet = true }
+                    } else {
+                        Button("Edit Point…") { beginEditSelected() }
+                            .disabled(selectionState.selectedPointIDs.count != 1)
+                    }
                     Button("Delete", role: .destructive) { deleteSelected(selectionState.selectedPointIDs) }
                         .disabled(selectionState.selectedPointIDs.isEmpty)
                 }
@@ -147,6 +162,9 @@ struct PointListView: View {
         )) {
             editorSheet
         }
+        .sheet(isPresented: $showOffsetSheet) {
+            offsetSheet
+        }
     }
 
     // Cells for fields the track doesn't have (a label on a bang, a value on a
@@ -160,6 +178,38 @@ struct PointListView: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .help(applicable ? "" : help)
+    }
+
+    private var offsetSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Time Offset")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Text("\(selectionState.selectedPointIDs.count) points selected")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack {
+                Text("Δt (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 60, alignment: .trailing)
+                TextField("", text: $offsetString)
+                    .onSubmit { commitOffset() }
+            }
+
+            Toggle("Include Markers Track", isOn: $includeMarkersInOffset)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { showOffsetSheet = false }
+                Button("OK") { commitOffset() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
     }
 
     private var editorSheet: some View {
@@ -236,6 +286,12 @@ struct PointListView: View {
         guard !ids.isEmpty else { return }
         store.onDeletePoints?(Array(ids))
         selectionState.selectedPointIDs.removeAll()
+    }
+
+    private func commitOffset() {
+        defer { showOffsetSheet = false }
+        guard let delta = Double(offsetString.trimmingCharacters(in: .whitespaces)) else { return }
+        store.onTimeOffset?(selectionState.selectedPointIDs, delta, includeMarkersInOffset)
     }
 
     private func beginEdit(_ row: PointListRow) {

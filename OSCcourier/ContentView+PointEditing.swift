@@ -45,6 +45,49 @@ extension ContentView {
         pointDrag.invalidateSentCache()
     }
 
+    // Shifts the given points' time by a fixed delta, wherever they
+    // live — unlike a live drag (which only ever reaches points on the
+    // track the gesture started on), this walks every track, so a
+    // selection spanning multiple tracks (e.g. via "Select Points in
+    // Time Range", or a multi-row selection in the Point List) moves
+    // together and stays perfectly in sync, with no ambiguity about Y
+    // (this never touches it). Shared by both the ruler/Edit-menu popup
+    // and the Point List window's "Offset…" action.
+    func offsetPointsInTime(ids: Set<UUID>, delta: Double, includeMarkers: Bool) {
+        guard !tracksLocked, !ids.isEmpty, delta != 0 else { return }
+        for trackIndex in pistes.indices {
+            // Track 0 is the markers track — a navigation aid, not data
+            // most people want swept up in a bulk time shift, so it's
+            // opt-in via the popup's checkbox.
+            guard includeMarkers || trackIndex != 0 else { continue }
+            var changed = false
+            for eventIndex in pistes[trackIndex].evenements.indices where ids.contains(pistes[trackIndex].evenements[eventIndex].id) {
+                let newTime = min(max(pistes[trackIndex].evenements[eventIndex].time + delta, 0), transport.duree)
+                pistes[trackIndex].evenements[eventIndex].time = newTime
+                changed = true
+            }
+            if changed {
+                pistes[trackIndex].evenements.sort()
+            }
+        }
+        pointDrag.invalidateSentCache()
+    }
+
+    func commitTimeOffset() {
+        defer { uiChrome.showTimeOffsetPopup = false }
+        guard let delta = Double(uiChrome.timeOffsetString.trimmingCharacters(in: .whitespaces)) else { return }
+        offsetPointsInTime(ids: selection.selectedPointIDs, delta: delta, includeMarkers: includeMarkersInOffset)
+    }
+
+    // Shared by the Edit-menu command and the loop-zone context menu item —
+    // both just want to open the same popup for whatever's currently
+    // selected.
+    func openTimeOffsetPopup() {
+        guard !selection.selectedPointIDs.isEmpty else { return }
+        uiChrome.timeOffsetString = "0.0"
+        uiChrome.showTimeOffsetPopup = true
+    }
+
     func applyPointEdit(_ edit: PointEdit) {
         guard !tracksLocked else { return }
         for trackIndex in pistes.indices {
@@ -419,6 +462,9 @@ extension ContentView {
         }
         pointListStore.onDeletePoints = { ids in
             deleteSpecificPoints(ids: ids)
+        }
+        pointListStore.onTimeOffset = { ids, delta, includeMarkers in
+            offsetPointsInTime(ids: ids, delta: delta, includeMarkers: includeMarkers)
         }
 
         if let controller = windowManagement.pointListWindowController {

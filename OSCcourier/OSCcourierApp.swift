@@ -191,12 +191,20 @@ struct OSCcourierApp: App {
 
                 Divider()
 
-                // No "Select All" here — deliberately omitted, since this
-                // app has no notion of "select all" outside the lasso.
+                Button("Select All") {
+                    NotificationCenter.default.post(name: .OSCcourierSelectAll, object: nil)
+                }
+                .keyboardShortcut("a", modifiers: .command)
+
                 Button("Delete Selection") {
                     NotificationCenter.default.post(name: .OSCcourierDeleteSelectedPoints, object: nil)
                 }
                 .keyboardShortcut(.delete, modifiers: [])
+
+                Button("Time Offset Selected Points…") {
+                    NotificationCenter.default.post(name: .OSCcourierTimeOffsetSelection, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .option])
             }
 
             CommandGroup(replacing: .saveItem) {

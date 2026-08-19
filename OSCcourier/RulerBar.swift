@@ -31,6 +31,8 @@ struct RulerBar: View {
     let onDragChanged: (DragGesture.Value) -> Void
     let onDragEnded: (DragGesture.Value) -> Void
     let onDoubleClick: () -> Void
+    let onSelectPointsInLoopZone: () -> Void
+    let onTimeOffsetSelection: () -> Void
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -77,6 +79,20 @@ struct RulerBar: View {
                         onDoubleClick()
                     }
                 )
+                .contextMenu {
+                    if loopZone.loopZoneStart != nil, loopZone.loopZoneEnd != nil {
+                        Button("Edit Loop Zone…") {
+                            onDoubleClick()
+                        }
+                        Divider()
+                        Button("Select Points in Time Range (All Tracks)") {
+                            onSelectPointsInLoopZone()
+                        }
+                        Button("Time Offset Selection…") {
+                            onTimeOffsetSelection()
+                        }
+                    }
+                }
                 .overlay {
                     CursorOverlay(
                         isActive: loopZone.isNearLoopZoneEdge || loopZone.resizingLoopZoneEdge != nil,

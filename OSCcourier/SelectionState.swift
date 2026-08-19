@@ -10,6 +10,23 @@ import AppKit
 final class SelectionState: ObservableObject {
     @Published var selectedPointIDs: Set<UUID> = []
 
+    // Selects every point (on every track) whose time falls within
+    // [start, end] — used by the "Select Points in Time Range" loop-zone
+    // context menu and by "Select All", so a group of cue points spread
+    // across tracks can be grabbed at once without needing a spatial
+    // multi-track lasso.
+    func selectPointsInTimeRange(_ start: Double, _ end: Double, pistes: [TimelineTrack]) {
+        let lo = min(start, end)
+        let hi = max(start, end)
+        var ids: Set<UUID> = []
+        for piste in pistes {
+            for event in piste.evenements where event.time >= lo && event.time <= hi {
+                ids.insert(event.id)
+            }
+        }
+        selectedPointIDs = ids
+    }
+
     @Published var lassoTrackIndex: Int?
     @Published var lassoStartLocation: CGPoint?
     @Published var lassoCurrentLocation: CGPoint?

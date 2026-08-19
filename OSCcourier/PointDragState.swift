@@ -23,6 +23,12 @@ final class PointDragState: ObservableObject {
     @Published var groupDragAnchorOriginalTime: Double?
     @Published var groupDragYBaseline: [UUID: Double] = [:]
     @Published var groupDragAnchorOriginalY: Double?
+    // Set once, on the first tick of a group drag: whether the selection
+    // touches more than one track. Y is meaningless to move together
+    // across tracks with different amplitude ranges/types, so it's
+    // disabled entirely for the duration of such a drag — only time
+    // moves.
+    @Published var groupDragSpansMultipleTracks: Bool = false
 
     @Published var curveDragSegmentID: UUID?
     @Published var curveDragBaseline: Double?
@@ -126,22 +132,38 @@ final class PointDragState: ObservableObject {
         if isGroupDrag {
             // Captured once, on the first tick — re-deriving from
             // a moving baseline each frame would compound
-            // snapping/rounding error across the drag.
+            // snapping/rounding error across the drag. Scans every
+            // track (not just this one), so a selection spanning
+            // multiple tracks (e.g. via "Select Points in Time Range")
+            // drags together in time, staying in sync.
             if groupDragBaseline.isEmpty {
-                groupDragBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
-                    .filter { selection.selectedPointIDs.contains($0.id) }
-                    .map { ($0.id, $0.time) })
+                var baseline: [UUID: Double] = [:]
+                var touchedTracks: Set<Int> = []
+                for (trackIndex, piste) in pistes.enumerated() {
+                    for event in piste.evenements where selection.selectedPointIDs.contains(event.id) {
+                        baseline[event.id] = event.time
+                        touchedTracks.insert(trackIndex)
+                    }
+                }
+                groupDragBaseline = baseline
                 groupDragAnchorOriginalTime = groupDragBaseline[eventID]
+                groupDragSpansMultipleTracks = touchedTracks.count > 1
             }
             guard let anchorOriginal = groupDragAnchorOriginalTime else { return }
             let delta = clampedNewTime - anchorOriginal
             for (id, originalTime) in groupDragBaseline {
-                guard let idx = pistes[index].evenements.firstIndex(where: { $0.id == id }) else { continue }
-                pistes[index].evenements[idx].time = min(max(originalTime + delta, 0), transport.duree)
+                for trackIndex in pistes.indices {
+                    guard let idx = pistes[trackIndex].evenements.firstIndex(where: { $0.id == id }) else { continue }
+                    pistes[trackIndex].evenements[idx].time = min(max(originalTime + delta, 0), transport.duree)
+                    break
+                }
             }
 
-            // Y moves too, but only where it means something.
-            if pistes[index].type == .curve || pistes[index].type == .step {
+            // Y moves too, but only where it means something — and only
+            // when the whole selection lives on this one track. Across
+            // tracks with different amplitude ranges/types, a shared Y
+            // delta wouldn't mean anything consistent.
+            if !groupDragSpansMultipleTracks, pistes[index].type == .curve || pistes[index].type == .step {
                 if groupDragYBaseline.isEmpty {
                     groupDragYBaseline = Dictionary(uniqueKeysWithValues: pistes[index].evenements
                         .filter { selection.selectedPointIDs.contains($0.id) }
@@ -180,12 +202,22 @@ final class PointDragState: ObservableObject {
     }
 
     func handlePointDragEnded(trackIndex index: Int, pistes: inout [TimelineTrack]) {
-        pistes[index].evenements.sort()
+        // A group drag can have touched points on other tracks too (see
+        // handlePointDragChanged) — re-sort every track that had a
+        // selected point, not just the one the gesture started on.
+        if groupDragBaseline.isEmpty {
+            pistes[index].evenements.sort()
+        } else {
+            for trackIndex in pistes.indices {
+                pistes[trackIndex].evenements.sort()
+            }
+        }
         invalidateSentCache()
         groupDragBaseline.removeAll()
         groupDragAnchorOriginalTime = nil
         groupDragYBaseline.removeAll()
         groupDragAnchorOriginalY = nil
+        groupDragSpansMultipleTracks = false
     }
 
     // A plain click: Shift (without Option) removes the point; otherwise a

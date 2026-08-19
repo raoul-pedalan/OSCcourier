@@ -155,6 +155,11 @@ extension ContentView {
         enBoucle = true
     }
 
+    func selectPointsInLoopZone() {
+        guard let start = loopZone.loopZoneStart, let end = loopZone.loopZoneEnd else { return }
+        selection.selectPointsInTimeRange(start, end, pistes: pistes)
+    }
+
     func handleRulerDoubleClick() {
         // Double-click opens the precise editor — never conflicts with
         // the single-click-moves-the-playhead behavior above, since

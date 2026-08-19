@@ -70,4 +70,8 @@ class PointListStore: ObservableObject {
     // (across whichever tracks they happen to live on, since this list can
     // span every track at once).
     var onDeletePoints: (([UUID]) -> Void)?
+    // Same reasoning: the window just describes "shift these points by
+    // this many seconds (and whether to include the markers track)",
+    // ContentView applies it across whichever tracks they live on.
+    var onTimeOffset: ((Set<UUID>, Double, Bool) -> Void)?
 }

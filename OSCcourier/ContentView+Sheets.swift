@@ -387,6 +387,42 @@ extension ContentView {
         .frame(width: 280)
     }
 
+    var timeOffsetSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Time Offset")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Text("\(selection.selectedPointIDs.count) point\(selection.selectedPointIDs.count == 1 ? "" : "s") selected")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack {
+                Text("Δt (s.)")
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(width: 80, alignment: .trailing)
+                TextField("", text: $uiChrome.timeOffsetString)
+                    .onSubmit { commitTimeOffset() }
+            }
+
+            Toggle("Include Markers Track", isOn: $includeMarkersInOffset)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    uiChrome.showTimeOffsetPopup = false
+                }
+                Button("OK") {
+                    commitTimeOffset()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(width: 280)
+    }
+
     // Presents each editor/autofill popup as a .sheet keyed to its own
     // optional-index/id @State. Split out of `body` verbatim — same
     // reasoning as ContentView+NotificationHandling.swift.
@@ -424,6 +460,9 @@ extension ContentView {
         }
         .sheet(isPresented: $uiChrome.showGridSettingsPopup) {
             gridSettingsSheet
+        }
+        .sheet(isPresented: $uiChrome.showTimeOffsetPopup) {
+            timeOffsetSheet
         }
     }
 }

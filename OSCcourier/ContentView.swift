@@ -208,6 +208,7 @@ struct ContentView: View {
     // automatically while dragging, no ⌘ needed. Markers themselves always
     // require ⌘ either way — this setting only affects grid-line snapping.
     @AppStorage("magneticGridSnap") var magneticGridSnap: Bool = false
+    @AppStorage("includeMarkersInOffset") var includeMarkersInOffset: Bool = false
 
 
 

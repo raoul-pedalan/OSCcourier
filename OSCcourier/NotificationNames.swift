@@ -35,4 +35,6 @@ extension Notification.Name {
     static let OSCcourierDuplicateSelection = Notification.Name("OSCcourierDuplicateSelection")
     static let OSCcourierCut = Notification.Name("OSCcourierCut")
     static let OSCcourierPaste = Notification.Name("OSCcourierPaste")
+    static let OSCcourierTimeOffsetSelection = Notification.Name("OSCcourierTimeOffsetSelection")
+    static let OSCcourierSelectAll = Notification.Name("OSCcourierSelectAll")
 }

@@ -96,6 +96,19 @@ extension ContentView {
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierShowPointList)) { _ in
             openPointListWindow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierTimeOffsetSelection)) { _ in
+            openTimeOffsetPopup()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierSelectAll)) { _ in
+            // Same guard as Cut/Copy/Paste: only select every point if
+            // we're not mid-edit in some other text field, otherwise fall
+            // back to the standard system text select-all.
+            if !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                selection.selectPointsInTimeRange(0, transport.duree, pistes: pistes)
+            } else {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierToggleFoldAll)) { _ in
             toggleFoldAll()
         }

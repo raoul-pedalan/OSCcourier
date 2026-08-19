@@ -24,4 +24,7 @@ final class UIChromeState: ObservableObject {
     @Published var gridPhaseString: String = "0.0"
     @Published var gridPeriod: Double = 1.0
     @Published var gridPhase: Double = 0.0
+
+    @Published var showTimeOffsetPopup: Bool = false
+    @Published var timeOffsetString: String = "0.0"
 }
