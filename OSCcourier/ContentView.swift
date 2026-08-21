@@ -156,7 +156,7 @@ struct ContentView: View {
     // Managing focus explicitly (defaulting to nil) stops macOS from
     // automatically giving keyboard focus to the first text field at launch.
     enum ToolbarField: Hashable {
-        case duree, oscAddress
+        case duree, oscAddress, oscPort
     }
     @FocusState var focusedField: ToolbarField?
     enum PlayheadPositionField: Hashable {
@@ -378,6 +378,11 @@ struct ContentView: View {
         }
         .onChange(of: oscReceivePort) { _, newPort in
             oscManager.startListening(port: newPort)
+            // The port field in the toolbar is a staged string (like
+            // Duration), so it stays in sync even when the port changes
+            // from somewhere other than that field itself — loading a
+            // project, or the per-window auto-increment on a fresh window.
+            uiChrome.oscReceivePortString = String(newPort)
         }
         .onChange(of: oscMessagesPerSecond) { _, _ in
             // Only rebuild the transport.timer if it's currently running — otherwise

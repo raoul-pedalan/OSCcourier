@@ -21,6 +21,11 @@ extension ContentView {
         }
 
         transport.dureeText = formattedDuration(transport.duree)
+        // The toolbar's receive-port field is a staged string (see
+        // oscReceivePortString), so it needs seeding once here — the
+        // onChange(of: oscReceivePort) handler only fires on later changes,
+        // not for the initial value a fresh/loaded window starts with.
+        uiChrome.oscReceivePortString = String(oscReceivePort)
 
         // Incoming OSC messages control transport from the outside.
         oscManager.onOSCMessageReceived = handleReceivedOSCMessage

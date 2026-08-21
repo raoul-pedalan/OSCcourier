@@ -101,6 +101,9 @@ struct RulerBar: View {
                     )
                     .allowsHitTesting(false)
                 }
+                .help(loopZone.loopZoneStart != nil && loopZone.loopZoneEnd != nil
+                      ? "Drag the edges to resize the loop zone, drag the middle to move it, double-click to edit it precisely (toggle looping with C)"
+                      : "Drag to create a loop zone (toggle looping with C)")
             Button(action: { uiChrome.tracksLocked.toggle() }) {
                 Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
                     .font(.system(size: 18))
@@ -108,7 +111,7 @@ struct RulerBar: View {
             }
             .buttonStyle(.plain)
             .padding(.leading, 10)
-            .help(tracksLocked ? "Tracks are locked" : "Tracks are unlocked")
+            .help(tracksLocked ? "Tracks are locked (⌘L)" : "Tracks are unlocked (⌘L)")
             // Dynamic tick interval: depends on pixels per second (so it already
             // accounts for zoom, via largeurTimeline), not just the total duration —
             // otherwise, zoomed in a lot on a long track, the interval would represent

@@ -55,18 +55,29 @@ struct TrackHeaderColumn: View {
                         pointEditing.indexPisteARenommer = index
                         pointEditing.nouveauNomPiste = piste.nom
                     }
+                    .help("Track name (double-click to rename)")
 
                 // Drag handle for reordering this track among its siblings
                 // ("markers" at index 0 stays pinned, never reordered).
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 10))
-                    // Dimmed when tracks are locked: the gesture below is a
-                    // no-op then, so the handle shouldn't look draggable.
-                    .foregroundColor(.black.opacity(tracksLocked ? 0.12 : 0.35))
-                    .padding(6)
-                    .contentShape(Rectangle())
-                    .offset(x: 116, y: 2)
-                    .gesture(
+                // Positioned via a real leading Spacer (HStack), not
+                // .offset() or .padding() wrapping the icon itself: either
+                // of those either broke the .help() tooltip (offset moves
+                // only what's drawn, not the layout frame AppKit uses for
+                // the tooltip tracking area) or over-grew the hoverable/
+                // cursor region to include the whole gap before the icon
+                // (padding applied before .onHover/.gesture becomes part
+                // of the view they're attached to). A sibling Spacer keeps
+                // the icon's own interactive bounds tight to just the icon.
+                HStack(spacing: 0) {
+                    Spacer().frame(width: 116)
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 10))
+                        // Dimmed when tracks are locked: the gesture below is a
+                        // no-op then, so the handle shouldn't look draggable.
+                        .foregroundColor(.black.opacity(tracksLocked ? 0.12 : 0.35))
+                        .padding(6)
+                        .contentShape(Rectangle())
+                        .gesture(
                         DragGesture(minimumDistance: 3, coordinateSpace: .global)
                             .onChanged { value in
                                 guard !tracksLocked else { return }
@@ -101,14 +112,18 @@ struct TrackHeaderColumn: View {
                                 trackDragReorder.reorderBaselineOffset = 0
                             }
                     )
-                    .onHover { isHovering in
-                        if isHovering {
-                            NSCursor.openHand.set()
-                        } else {
-                            NSCursor.arrow.set()
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.openHand.set()
+                            } else {
+                                NSCursor.arrow.set()
+                            }
                         }
-                    }
-                    .help("Drag to reorder this track")
+                        .help("Drag to reorder this track")
+                        .accessibilityLabel("Drag to reorder this track")
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
             }
 
             // Fold/unfold: collapses the track's header down to just its
@@ -122,7 +137,11 @@ struct TrackHeaderColumn: View {
                     .foregroundColor(.black.opacity(0.5))
             }
             .buttonStyle(.borderless)
-            .offset(x: 100, y: 6)
+            // .padding(), not .offset() — see the drag handle above for why:
+            // .offset() left the .help() tooltip's tracking area stuck at
+            // the pre-offset position instead of following the visible icon.
+            .padding(.leading, 100)
+            .padding(.top, 6)
             .help(pistes[index].isFolded ? "Unfold track" : "Fold track")
 
             if !pistes[index].isFolded && (pistes[index].type == .curve || pistes[index].type == .step) {
@@ -300,10 +319,22 @@ struct TrackHeaderColumn: View {
 
                     Button(action: {
                         guard !tracksLocked else { return }
+                        pistes[index].evenements.removeAll()
+                        pointDrag.invalidateSentCache()
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Clear all points on this track")
+
+                    Button(action: {
+                        guard !tracksLocked else { return }
                         if pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index {
                             timelineStore.duplicateTrack(at: index)
                         } else {
-                            pistes[index].evenements.removeAll()
+                            pistes.remove(at: index)
                             pointDrag.invalidateSentCache()
                         }
                     }) {
@@ -311,24 +342,18 @@ struct TrackHeaderColumn: View {
                         // slightly different intrinsic widths) must not nudge the
                         // neighboring buttons in this row — only the icon inside
                         // this fixed box changes, never the row's layout.
-                        // Color stays gray in both modes — only the symbol itself
+                        // Color stays red in both modes — only the symbol itself
                         // changes (plus the tooltip) — so there's no color to pick
                         // that has to fight the track's own color for contrast.
-                        Image(systemName: (pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                        Image(systemName: (pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "doc.on.doc.fill" : "minus.circle.fill")
+                            .foregroundColor(.red)
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.borderless)
                     .onHover { hovering in
                         trackDragReorder.duplicateHoverTrackIndex = hovering ? index : (trackDragReorder.duplicateHoverTrackIndex == index ? nil : trackDragReorder.duplicateHoverTrackIndex)
                     }
-                    .help((pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "Duplicate track" : "Clear all points on this track (hold ⌥ while hovering this button to duplicate the track instead)")
-
-                    Button(action: { guard !tracksLocked else { return }; pistes.remove(at: index); pointDrag.invalidateSentCache() }) {
-                        Image(systemName: "minus.circle.fill").foregroundColor(.red)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Delete this track")
+                    .help((pointDrag.isOptionHeldForCursor && trackDragReorder.duplicateHoverTrackIndex == index) ? "Duplicate track" : "Delete this track (hold ⌥ while hovering this button to duplicate the track instead)")
                 }
                 .padding(.trailing, 20)
                 .padding(.bottom, (pistes[index].type == .bang || pistes[index].type == .message) ? 6 : 10)

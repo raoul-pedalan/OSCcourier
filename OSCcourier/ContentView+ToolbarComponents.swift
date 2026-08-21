@@ -39,6 +39,7 @@ extension ContentView {
                 .onTapGesture(count: 2) {
                     showCommandBar = true
                 }
+                .help("Current playback position (double-click to show the full command bar, ⌘B)")
             Group {
                 if transport.enLecture {
                     Image(systemName: "play.fill")
