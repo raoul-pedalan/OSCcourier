@@ -232,10 +232,13 @@ extension ContentView {
         transport.timer?.invalidate()
         let rate = max(1, oscMessagesPerSecond)
         let interval = 1.0 / Double(rate)
+        // Called directly, not deferred via DispatchQueue.main.async — the
+        // timer is already added to RunLoop.main below, so it already runs
+        // on the main thread; the extra async hop just added an avoidable
+        // run-loop round-trip on every tick (up to 20/sec) for no benefit,
+        // and could make tick timing slightly less even.
         let playbackTimer = Timer(timeInterval: interval, repeats: true) { _ in
-            DispatchQueue.main.async {
-                advancePlaybackTick()
-            }
+            advancePlaybackTick()
         }
         // .common (not just .default) so playback keeps ticking even while
         // some other drag (a point, a track resize, the duration handle...)

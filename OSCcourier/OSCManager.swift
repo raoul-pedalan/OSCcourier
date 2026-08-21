@@ -45,6 +45,25 @@ class OSCManager: ObservableObject {
         isConnected = true
     }
 
+    // One UDP socket, opened lazily and kept open across sends — a curve
+    // track sends continuously during playback (every tick, not just at
+    // point crossings), so creating and closing a fresh socket() on every
+    // single sendMessage() call added a real, avoidable syscall cost on
+    // the main thread at up to 20 times/sec per curve track. Closed and
+    // reset in cancelConnection()/deinit.
+    private var sendSocketFD: Int32 = -1
+
+    private func ensureSendSocket() -> Int32? {
+        if sendSocketFD >= 0 { return sendSocketFD }
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else {
+            print("OSC: Impossible de créer le socket (errno: \(errno))")
+            return nil
+        }
+        sendSocketFD = fd
+        return fd
+    }
+
     func sendMessage(_ message: String) {
         let parts = address.split(separator: ":")
         guard parts.count == 2,
@@ -54,11 +73,7 @@ class OSCManager: ObservableObject {
             return
         }
 
-        let socketFD = socket(AF_INET, SOCK_DGRAM, 0)
-        guard socketFD >= 0 else {
-            print("OSC: Impossible de créer le socket (errno: \(errno))")
-            return
-        }
+        guard let socketFD = ensureSendSocket() else { return }
 
         var serverAddress = sockaddr_in()
         memset(&serverAddress, 0, MemoryLayout<sockaddr_in>.size)
@@ -68,8 +83,9 @@ class OSCManager: ObservableObject {
         var inAddr = in_addr()
         let hostString = String(host)
         if hostString.withCString({ inet_pton(AF_INET, $0, &inAddr) }) != 1 {
+            // Just a bad destination string — the (now persistent) send
+            // socket itself is still fine, so don't close it here.
             print("OSC: Adresse IP invalide")
-            close(socketFD)
             return
         }
         serverAddress.sin_addr = inAddr
@@ -117,15 +133,21 @@ class OSCManager: ObservableObject {
 
         if bytesSent < 0 {
             print("OSC: Echec (errno: \(errno))")
-        } else {
-            print("OSC: \(message) envoyé")
         }
-
-        close(socketFD)
     }
 
     func cancelConnection() {
         isConnected = false
+        if sendSocketFD >= 0 {
+            close(sendSocketFD)
+            sendSocketFD = -1
+        }
+    }
+
+    deinit {
+        if sendSocketFD >= 0 {
+            close(sendSocketFD)
+        }
     }
 
     // MARK: - Receiving
