@@ -150,6 +150,24 @@ struct RulerBar: View {
                     .frame(width: 70) // fixed, so the center stays exact regardless of label text width
                     .padding(.leading, 140)
                     .offset(x: CGFloat(seconde / transport.duree) * largeurTimeline - 35)
+
+                    // 9 unlabeled intermediate ticks, splitting each labeled
+                    // interval into 10 — half the height of the main ticks,
+                    // same top edge (right under where the label would be),
+                    // so they read as subdivisions rather than a second
+                    // competing scale.
+                    ForEach(1..<10, id: \.self) { sub in
+                        let subSeconde = seconde + labelInterval * Double(sub) / 10
+                        if subSeconde <= visibleEndSeconde {
+                            VStack(spacing: 0) {
+                                Text(" ").font(.caption).opacity(0)
+                                Rectangle().fill(Color.gray.opacity(0.5)).frame(width: 1, height: 2.5)
+                            }
+                            .frame(width: 70)
+                            .padding(.leading, 140)
+                            .offset(x: CGFloat(subSeconde / transport.duree) * largeurTimeline - 35)
+                        }
+                    }
                 }
             }
             // Pinned to the full available width so the mask below lines

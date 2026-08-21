@@ -57,7 +57,7 @@ class OSCManager: ObservableObject {
         if sendSocketFD >= 0 { return sendSocketFD }
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else {
-            print("OSC: Impossible de créer le socket (errno: \(errno))")
+            print("OSC: Could not create the socket (errno: \(errno))")
             return nil
         }
         sendSocketFD = fd
@@ -132,7 +132,7 @@ class OSCManager: ObservableObject {
         }
 
         if bytesSent < 0 {
-            print("OSC: Echec (errno: \(errno))")
+            print("OSC: Failed (errno: \(errno))")
         }
     }
 
@@ -160,9 +160,9 @@ class OSCManager: ObservableObject {
 
         let socketFD = socket(AF_INET, SOCK_DGRAM, 0)
         guard socketFD >= 0 else {
-            let message = "Impossible de créer le socket d'écoute (errno: \(errno))."
-            print("OSC: \(message)")
-            lastListenError = message
+            let errorCode = errno
+            print("OSC: Could not create the listen socket (errno: \(errorCode))")
+            lastListenError = "Could not create the listening connection needed to receive OSC. Try again, or restart the app if this keeps happening."
             return
         }
 
@@ -179,9 +179,13 @@ class OSCManager: ObservableObject {
         }
 
         guard bindResult == 0 else {
-            let message = "Impossible de réserver le port \(port) pour l'écoute OSC (errno: \(errno)). Une autre fenêtre l'utilise peut-être déjà — choisis un port différent."
-            print("OSC: \(message)")
-            lastListenError = message
+            let errorCode = errno
+            print("OSC: Could not bind to port \(port) (errno: \(errorCode))")
+            if errorCode == EADDRINUSE {
+                lastListenError = "Port \(port) is already in use — probably by another window, or another app. Choose a different port."
+            } else {
+                lastListenError = "Could not listen for OSC on port \(port). Try a different port."
+            }
             close(socketFD)
             return
         }

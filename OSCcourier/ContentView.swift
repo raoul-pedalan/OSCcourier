@@ -318,6 +318,14 @@ struct ContentView: View {
                                 VStack(spacing: 0) {
                                     rulerBar(largeurTimeline: largeurTimeline, outerWidth: outerGeometry.size.width, geometryWidth: geometry.size.width)
 
+                                    // A thin black separator between the ruler/loop-zone
+                                    // row and the markers track below it — in dark mode
+                                    // the two were nearly the same color and hard to
+                                    // tell apart at a glance.
+                                    Rectangle()
+                                        .fill(colorScheme == .dark ? Color.black : Color.white)
+                                        .frame(height: 1)
+
                                     ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
                                         trackRow(index: index, largeurTimeline: largeurTimeline)
                                     }

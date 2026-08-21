@@ -27,15 +27,23 @@ struct OSCMessagesView: View {
                     ForEach(messageStore.messages.reversed(), id: \.id) { message in
                         let parts = message.content.components(separatedBy: " ")
                         if parts.count > 0 {
-                            HStack(spacing: 6) {
+                            // Centered "register mark": address and value
+                            // sit in two equal-width flexible columns, so
+                            // the line between them (the row's midpoint)
+                            // stays fixed at the window's horizontal
+                            // center regardless of either side's length —
+                            // address right-flush against it, value
+                            // left-flush against it.
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text(parts[0])
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .frame(width: 70, alignment: .trailing)
-                                if parts.count > 1 {
-                                    Text(parts.dropFirst().joined(separator: " "))
-                                        .font(.system(size: 11, design: .monospaced))
-                                }
-                                Spacer(minLength: 0)
+                                    .lineLimit(1)
+                                    .truncationMode(.head)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                                Text(parts.count > 1 ? parts.dropFirst().joined(separator: " ") : "")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .foregroundColor(message.color)
                             .textSelection(.enabled)

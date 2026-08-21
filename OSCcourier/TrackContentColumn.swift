@@ -57,6 +57,19 @@ struct TrackContentColumn: View {
         colorScheme == .dark ? 0.18 : 0.3
     }
 
+    // The "x, y" / time coordinate readout shown next to each point when
+    // showPointCoordinates is on. The /markers track (index 0) keeps its
+    // original white in both modes — unchanged on purpose. Everywhere
+    // else stays black in light mode, but becomes a lighter medium gray
+    // in dark mode instead of stark black, which read too harsh against
+    // the app's darker background.
+    private var pointCoordinatesColorOnDarkMarker: Color {
+        Color.white
+    }
+    private var pointCoordinatesColorOnLightMarker: Color {
+        colorScheme == .dark ? Color(white: 0.72) : Color.black
+    }
+
     // Right-click menu — same content on all three background gesture
     // layers below (bang/message, curve, step), so it's available
     // regardless of where on the track's empty background the user
@@ -315,7 +328,7 @@ struct TrackContentColumn: View {
                             if showPointCoordinates {
                                 Text(String(format: "%.2f", event.time) + "s")
                                     .font(.caption2)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(pointCoordinatesColorOnDarkMarker)
                                     .offset(y: 12)
                             }
                         }
@@ -348,7 +361,7 @@ struct TrackContentColumn: View {
                                 if showPointCoordinates {
                                     Text(String(format: "%.2f", event.time) + "s")
                                         .font(.caption2)
-                                        .foregroundColor(.black)
+                                        .foregroundColor(pointCoordinatesColorOnLightMarker)
                                         .offset(y: 12)
                                 }
                             }
@@ -361,7 +374,7 @@ struct TrackContentColumn: View {
                             if showPointCoordinates {
                                 Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
                                     .font(.caption2)
-                                    .foregroundColor(.black)
+                                    .foregroundColor(pointCoordinatesColorOnLightMarker)
                                     .offset(y: 12)
                             }
                         } else {
@@ -401,7 +414,7 @@ struct TrackContentColumn: View {
                                 if showPointCoordinates {
                                     Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
                                         .font(.caption2)
-                                        .foregroundColor(.black)
+                                        .foregroundColor(pointCoordinatesColorOnLightMarker)
                                         .fixedSize()
                                         .offset(y: labelAbove ? -12 : 12)
                                 }
