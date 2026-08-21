@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import PDFKit
 import UniformTypeIdentifiers
 
@@ -14,7 +15,21 @@ struct ContentView: View {
     @StateObject var oscManager = OSCManager()
     @StateObject var messageStore = OSCMessageStore()
     @StateObject var pointListStore = PointListStore()
-    @AppStorage("enBoucle") var enBoucle: Bool = false
+    // Per-window (not @AppStorage, and not a @State here either): these
+    // six used to be shared across every OSCcourier window via
+    // UserDefaults, so toggling Loop or Show Grid in one window silently
+    // toggled it in every other open window too. The four that other
+    // views (RulerBar, TrackContentColumn, TrackHeaderColumn, TrackRow)
+    // also need to read now live on uiChrome/transport instead — the
+    // per-window ObservableObjects already threaded down to those views —
+    // with these as thin proxies so the rest of ContentView's own code
+    // (spread across its extension files) didn't need to change at all.
+    // Routed to/from the App-level menu (which has no ContentView instance
+    // of its own) via focusedSceneValue — see FocusedDocumentValues.swift.
+    var enBoucle: Bool {
+        get { transport.enBoucle }
+        nonmutating set { transport.enBoucle = newValue }
+    }
     // A loop zone, drawn as a yellow band in the ruler. When set, looping
     // wraps between these two times instead of the whole timeline. nil/nil
     // means "no zone" — Loop then loops the entire timeline as before.
@@ -123,6 +138,18 @@ struct ContentView: View {
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
     @State var savedFileURL: URL?
+    // This ContentView instance's own hosting NSWindow, captured via
+    // WindowAccessor — lets menu-command notification handlers tell
+    // whether THIS window is the frontmost one (see isFrontmostWindowGroup
+    // in ContentView+NotificationHandling), since several OSCcourier
+    // windows can be open and each gets the same broadcast notification.
+    @State var hostWindow: NSWindow?
+    // Extracted out of the modifier chain below — the type-checker choked
+    // ("unable to type-check this expression in reasonable time") once this
+    // constructor call was inlined directly inside .focusedSceneValue(...).
+    private var focusedDocumentValue: OSCcourierFocusedDocument {
+        OSCcourierFocusedDocument(transport: transport, uiChrome: uiChrome)
+    }
     // Shared with OSCcourierApp via the same @AppStorage key, so its "Open
     // Recent" submenu updates reactively whenever this list changes here.
     @AppStorage("recentFilePaths") var recentFilePathsData: String = ""
@@ -178,16 +205,30 @@ struct ContentView: View {
     // handles its own mouse-anchored centering during a pinch, so the viewport-center
     // recentering below (used for the RotaryKnob) should stand down while this is true.
     // Toggle for showing/hiding the "time, value" coordinate labels next to points.
-    @AppStorage("showPointCoordinates") var showPointCoordinates: Bool = true
+    var showPointCoordinates: Bool {
+        get { uiChrome.showPointCoordinates }
+        nonmutating set { uiChrome.showPointCoordinates = newValue }
+    }
     // Toggle for showing/hiding the timeline grid overlay.
-    @AppStorage("showGrid") var showGrid: Bool = false
+    var showGrid: Bool {
+        get { uiChrome.showGrid }
+        nonmutating set { uiChrome.showGrid = newValue }
+    }
     @AppStorage("oscMessagesPerSecond") var oscMessagesPerSecond: Int = 20
     // Toggles between the full command bar (toolbar with all controls) and
     // a compact, full-width control line (transport.position + play/loop indicators).
-    @AppStorage("showCommandBar") var showCommandBar: Bool = true
-    // Shared with OSCcourierApp's menu commands via the same @AppStorage keys.
-    @AppStorage("showMarkersTrack") var showMarkersTrack: Bool = true
-    @AppStorage("tracksLocked") var tracksLocked: Bool = false
+    var showCommandBar: Bool {
+        get { uiChrome.showCommandBar }
+        nonmutating set { uiChrome.showCommandBar = newValue }
+    }
+    var showMarkersTrack: Bool {
+        get { uiChrome.showMarkersTrack }
+        nonmutating set { uiChrome.showMarkersTrack = newValue }
+    }
+    var tracksLocked: Bool {
+        get { uiChrome.tracksLocked }
+        nonmutating set { uiChrome.tracksLocked = newValue }
+    }
     // "Go to (mm:ss)" dialog, triggered from the Play menu.
     // Grid line generation: evenly spaced dashed vertical lines across all
     // tracks, same period/phase model as the bang autofill.
@@ -316,6 +357,10 @@ struct ContentView: View {
         }
         .frame(minWidth: 1500, minHeight: 500)
         .background(Color.gray.opacity(0.07))
+        .background(WindowAccessor { window in
+            hostWindow = window
+        })
+        .focusedSceneValue(\.oscCourierDocument, focusedDocumentValue)
         .navigationTitle(savedFileURL?.deletingPathExtension().lastPathComponent ?? "OSCcourier")
         // Keeps the separate Point List window's title (which repeats the
         // file name so it's clear which document it belongs to, since

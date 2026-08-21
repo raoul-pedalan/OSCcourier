@@ -19,10 +19,13 @@ struct TrackHeaderColumn: View {
     @ObservedObject var trackAmplitudeEdit: TrackAmplitudeEditState
     @ObservedObject var trackDragReorder: TrackDragReorderState
     @ObservedObject var autofill: AutofillState
+    @ObservedObject var uiChrome: UIChromeState
 
     let index: Int
 
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
+    // Was @AppStorage, shared by every open window — now proxies to
+    // uiChrome (per-window, threaded in above).
+    private var tracksLocked: Bool { uiChrome.tracksLocked }
 
     private var pistes: [TimelineTrack] {
         get { timelineStore.pistes }

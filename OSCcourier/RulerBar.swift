@@ -14,18 +14,19 @@ import SwiftUI
 struct RulerBar: View {
     @ObservedObject var loopZone: LoopZoneState
     @ObservedObject var transport: TransportState
+    @ObservedObject var uiChrome: UIChromeState
 
     let largeurTimeline: CGFloat
     let outerWidth: CGFloat
     let geometryWidth: CGFloat
 
-    // Same @AppStorage keys as ContentView's, so these stay in sync
-    // automatically without being threaded through as bindings.
-    // `private` on purpose: keeps them out of the synthesized memberwise
-    // initializer, so the init signature is exactly the dependencies the
-    // call site passes — these read straight from UserDefaults instead.
-    @AppStorage("enBoucle") private var enBoucle: Bool = false
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
+    // enBoucle lives on transport, tracksLocked on uiChrome — both
+    // per-window ObservableObjects passed in above, rather than each
+    // reading its own @AppStorage straight from UserDefaults (which used
+    // to mean every open OSCcourier window shared the same Loop/Lock
+    // state instead of each window having its own).
+    private var enBoucle: Bool { transport.enBoucle }
+    private var tracksLocked: Bool { uiChrome.tracksLocked }
 
     let onHover: (HoverPhase) -> Void
     let onDragChanged: (DragGesture.Value) -> Void
@@ -100,7 +101,7 @@ struct RulerBar: View {
                     )
                     .allowsHitTesting(false)
                 }
-            Button(action: { tracksLocked.toggle() }) {
+            Button(action: { uiChrome.tracksLocked.toggle() }) {
                 Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
                     .font(.system(size: 18))
                     .foregroundColor(tracksLocked ? .red : .gray)

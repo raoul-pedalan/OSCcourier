@@ -27,9 +27,13 @@ struct TrackContentColumn: View {
     let index: Int
     let largeurTimeline: CGFloat
 
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
-    @AppStorage("showGrid") private var showGrid: Bool = false
-    @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
+    // These three used to be @AppStorage, read straight from
+    // UserDefaults — shared by every open OSCcourier window instead of
+    // being per-window. Now proxy to uiChrome (already threaded in above,
+    // per-window on ContentView).
+    private var tracksLocked: Bool { uiChrome.tracksLocked }
+    private var showGrid: Bool { uiChrome.showGrid }
+    private var showPointCoordinates: Bool { uiChrome.showPointCoordinates }
     @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme

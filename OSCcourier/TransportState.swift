@@ -19,4 +19,9 @@ final class TransportState: ObservableObject {
 
     @Published var isOSCFlashing: Bool = false
     @Published var oscFlashTimer: Timer?
+
+    // Was @AppStorage, shared by every open OSCcourier window — moved
+    // here (per-window, like everything else on this object) so looping
+    // in one window's document doesn't loop every other open window too.
+    @Published var enBoucle: Bool = false
 }

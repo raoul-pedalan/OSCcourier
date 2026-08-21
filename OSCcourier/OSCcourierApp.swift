@@ -81,18 +81,35 @@ struct OSCcourierApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // Shared with SettingsView and ContentView via the same @AppStorage key.
     @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.auto.rawValue
-    // Shared with ContentView via the same @AppStorage keys, so the menu's
-    // Toggle checkmarks stay in sync with the actual toolbar/track state.
-    @AppStorage("showGrid") private var showGrid: Bool = false
-    @AppStorage("showPointCoordinates") private var showPointCoordinates: Bool = true
-    @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
-    @AppStorage("showCommandBar") private var showCommandBar: Bool = true
-    @AppStorage("tracksLocked") private var tracksLocked: Bool = false
-    @AppStorage("enBoucle") private var enBoucle: Bool = false
+    // These six used to be @AppStorage, shared with every ContentView via
+    // the same UserDefaults keys — meaning e.g. toggling Loop affected
+    // every open window at once. Now routed to whichever window is
+    // actually focused via focusedSceneValue (see FocusedDocumentValues
+    // .swift and ContentView.swift); nil when no OSCcourier window is
+    // focused (e.g. only a Point List window is up front).
+    @FocusedValue(\.oscCourierDocument) private var focusedDocument
     // Shared with ContentView via the same @AppStorage key — updated there
     // on every save/load, read here to build the Open Recent submenu.
     @AppStorage("recentFilePaths") private var recentFilePathsData: String = ""
     @Environment(\.openWindow) private var openWindow
+
+    // Bindings for the six menu Toggles below, backed by whichever
+    // window is focused. Reaches through to the two objects' own
+    // properties rather than through per-field Bindings published
+    // directly (see OSCcourierFocusedDocument for why: that struct is
+    // kept Equatable-by-reference specifically so re-focusing doesn't
+    // rebuild these on every playback tick). Falls back to a constant
+    // when no window is focused, paired with .disabled(focusedDocument
+    // == nil) at each call site.
+    private func focusedBinding(default defaultValue: Bool, get: @escaping (OSCcourierFocusedDocument) -> Bool, set: @escaping (OSCcourierFocusedDocument, Bool) -> Void) -> Binding<Bool> {
+        guard let focusedDocument else {
+            return .constant(defaultValue)
+        }
+        return Binding(
+            get: { get(focusedDocument) },
+            set: { set(focusedDocument, $0) }
+        )
+    }
 
     // Loading a file — whether via "Load…" or "Open Recent" — always opens
     // it in a brand-new window and leaves any already-open windows alone.
@@ -234,7 +251,8 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: [])
 
-                Toggle("Loop", isOn: $enBoucle)
+                Toggle("Loop", isOn: focusedBinding(default: false, get: { $0.transport.enBoucle }, set: { $0.transport.enBoucle = $1 }))
+                    .disabled(focusedDocument == nil)
                     .keyboardShortcut("c", modifiers: [])
 
                 Divider()
@@ -278,7 +296,8 @@ struct OSCcourierApp: App {
             // caused the duplicate "View" menu before.
             CommandGroup(after: .toolbar) {
                 Divider()
-                Toggle("Command Bar", isOn: $showCommandBar)
+                Toggle("Command Bar", isOn: focusedBinding(default: true, get: { $0.uiChrome.showCommandBar }, set: { $0.uiChrome.showCommandBar = $1 }))
+                    .disabled(focusedDocument == nil)
                     .keyboardShortcut("b", modifiers: .command)
 
                 Divider()
@@ -297,7 +316,8 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("f", modifiers: .command)
 
-                Toggle("Show Point Coordinates", isOn: $showPointCoordinates)
+                Toggle("Show Point Coordinates", isOn: focusedBinding(default: true, get: { $0.uiChrome.showPointCoordinates }, set: { $0.uiChrome.showPointCoordinates = $1 }))
+                    .disabled(focusedDocument == nil)
                     .keyboardShortcut("x", modifiers: [.command, .option])
 
                 Divider()
@@ -307,12 +327,14 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("g", modifiers: [.command, .option])
 
-                Toggle("Show Grid", isOn: $showGrid)
+                Toggle("Show Grid", isOn: focusedBinding(default: false, get: { $0.uiChrome.showGrid }, set: { $0.uiChrome.showGrid = $1 }))
+                    .disabled(focusedDocument == nil)
                     .keyboardShortcut("g", modifiers: .command)
 
                 Divider()
 
-                Toggle("Show Markers Track", isOn: $showMarkersTrack)
+                Toggle("Show Markers Track", isOn: focusedBinding(default: true, get: { $0.uiChrome.showMarkersTrack }, set: { $0.uiChrome.showMarkersTrack = $1 }))
+                    .disabled(focusedDocument == nil)
 
                 Divider()
 
@@ -343,7 +365,8 @@ struct OSCcourierApp: App {
 
                 Divider()
 
-                Toggle("Lock Tracks", isOn: $tracksLocked)
+                Toggle("Lock Tracks", isOn: focusedBinding(default: false, get: { $0.uiChrome.tracksLocked }, set: { $0.uiChrome.tracksLocked = $1 }))
+                    .disabled(focusedDocument == nil)
                     .keyboardShortcut("l", modifiers: .command)
 
                 Divider()

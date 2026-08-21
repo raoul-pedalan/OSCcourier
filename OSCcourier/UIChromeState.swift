@@ -31,4 +31,20 @@ final class UIChromeState: ObservableObject {
     @Published var showOSCIOSettingsPopup: Bool = false
     @Published var oscAddressPrefixString: String = ""
     @Published var oscReceivePortString: String = "7500"
+
+    // These four used to be @AppStorage, independently read by several
+    // views (ContentView, RulerBar, TrackContentColumn, TrackHeaderColumn,
+    // TrackRow) straight from UserDefaults — which meant they were shared
+    // by every open OSCcourier window instead of being per-window. Now
+    // live here, on the one UIChromeState instance each ContentView
+    // already owns and threads down to those views, so every reader sees
+    // the same (per-window) value.
+    @Published var showGrid: Bool = false
+    @Published var showPointCoordinates: Bool = true
+    @Published var showMarkersTrack: Bool = true
+    @Published var tracksLocked: Bool = false
+    // Also moved here (from a plain @State on ContentView) so
+    // OSCcourierFocusedDocument can hold a stable object reference for
+    // it too — see FocusedDocumentValues.swift.
+    @Published var showCommandBar: Bool = true
 }

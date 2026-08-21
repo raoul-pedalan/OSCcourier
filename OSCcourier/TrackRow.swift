@@ -22,7 +22,9 @@ struct TrackRow: View {
     let index: Int
     let largeurTimeline: CGFloat
 
-    @AppStorage("showMarkersTrack") private var showMarkersTrack: Bool = true
+    // Was @AppStorage, shared by every open window — now proxies to
+    // uiChrome (per-window, already passed in above).
+    private var showMarkersTrack: Bool { uiChrome.showMarkersTrack }
     @AppStorage("magneticGridSnap") private var magneticGridSnap: Bool = false
 
     let onBeginCreatingPoint: (CGPoint, Int, CGFloat) -> Void
@@ -43,6 +45,7 @@ struct TrackRow: View {
                     trackAmplitudeEdit: trackAmplitudeEdit,
                     trackDragReorder: trackDragReorder,
                     autofill: autofill,
+                    uiChrome: uiChrome,
                     index: index
                 )
                 TrackContentColumn(

@@ -41,6 +41,16 @@ extension ContentView {
         // Backspace removes the current lasso selection.
         if pointDrag.keyDownMonitor == nil {
             pointDrag.keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                // Local monitors aren't scoped to the window that installed
+                // them — every open OSCcourier window's monitor fires for
+                // this same keyDown, so without this check nudging/copying
+                // the selection in the frontmost window would also nudge/
+                // copy in every other window that happens to have points
+                // selected. Returning the event unmodified (rather than
+                // nil) lets whichever window's monitor IS frontmost still
+                // handle it normally.
+                guard isFrontmostWindowGroup else { return event }
+
                 // Don't hijack any of these while the user is editing text
                 // somewhere else (renaming a track, a field in a sheet,
                 // Settings...) — let the key through as normal text editing.
