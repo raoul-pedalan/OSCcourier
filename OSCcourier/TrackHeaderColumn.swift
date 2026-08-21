@@ -222,17 +222,8 @@ struct TrackHeaderColumn: View {
                 // drawn, so a fine step on a short track doesn't turn into
                 // a solid block.
                 if !pistes[index].isGate {
-                    let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
-                    ZStack(alignment: .topLeading) {
-                        ForEach(visibleQuantizeTicks(forTrack: pistes[index]), id: \.self) { value in
-                            let normalized = range > 0 ? (value - pistes[index].minAmplitude) / range : 0
-                            let y = curveMargin + (trackHeight - 2 * curveMargin) * (1 - normalized)
-                            Rectangle()
-                                .fill(Color.blue.opacity(0.55))
-                                .frame(width: 15, height: 1)
-                                .offset(y: y)
-                        }
-                    }
+                    HeaderQuantizeTicksView(piste: pistes[index], trackHeight: trackHeight)
+                        .equatable()
                     // Right edge stays at 150, level with where the gray ticks
                     // end (144 + tickWidth); the left edge is pulled back so
                     // they only just reach into the header (which ends at 140).

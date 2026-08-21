@@ -88,19 +88,12 @@ struct TrackContentColumn: View {
                pistes[index].type == .curve || pistes[index].type == .step,
                !pistes[index].isGate,
                pistes[index].quantizeActive {
-                let trackH = rowHeight(for: pistes[index])
-                let range = pistes[index].maxAmplitude - pistes[index].minAmplitude
-                ForEach(visibleQuantizeTicks(forTrack: pistes[index]), id: \.self) { value in
-                    let normalized = range > 0 ? (value - pistes[index].minAmplitude) / range : 0
-                    let y = curveMargin + (trackH - 2 * curveMargin) * (1 - normalized)
-                    Rectangle()
-                        // Fainter than the short header ticks: a full-width line
-                        // at their opacity would compete with the curve itself.
-                        .fill(Color.blue.opacity(0.22))
-                        .frame(width: largeurTimeline, height: 1)
-                        .offset(y: y - trackH / 2)
-                }
-                .allowsHitTesting(false)
+                ContentQuantizeGridLinesView(
+                    piste: pistes[index],
+                    trackHeight: rowHeight(for: pistes[index]),
+                    largeurTimeline: largeurTimeline
+                )
+                .equatable()
             }
 
             if !pistes[index].isFolded {
