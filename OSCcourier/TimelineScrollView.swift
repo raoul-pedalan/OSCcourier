@@ -107,7 +107,18 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         if !context.coordinator.isSyncingUserScroll && abs(context.coordinator.lastKnownOffset - offsetX) > 0.5 {
             let maxX = max(0, contentWidth - scrollView.contentView.bounds.width)
             let clampedX = max(0, min(offsetX, maxX))
-            scrollView.contentView.scroll(to: NSPoint(x: clampedX, y: 0))
+            // Preserve whatever vertical scroll position the user is
+            // currently at instead of hardcoding y: 0. This path used to
+            // only fire on a zoom-driven horizontal recenter, where
+            // resetting to the top was harmless (zooming rarely happens
+            // mid-scroll through a tall stack of tracks). Now that
+            // followPlayheadDuringPlayback() also drives offsetX — once per
+            // page-flip during playback, tracks or not — hardcoding y: 0
+            // here snapped the vertical scroll back to the top of the
+            // tracks (right under the loop zone) on every single page-flip,
+            // discarding wherever the user had scrolled down to.
+            let currentY = scrollView.contentView.bounds.origin.y
+            scrollView.contentView.scroll(to: NSPoint(x: clampedX, y: currentY))
             scrollView.reflectScrolledClipView(scrollView.contentView)
             context.coordinator.lastKnownOffset = clampedX
         }
