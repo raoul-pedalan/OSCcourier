@@ -78,6 +78,21 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         context.coordinator.currentContentWidth = contentWidth
         context.coordinator.zoomSensitivity = zoomSensitivity
 
+        // Bracket BOTH the document-view resize below and the explicit
+        // scroll correction that follows it with isApplyingProgrammaticScroll.
+        // Shrinking the document view below the scroll view's current scroll
+        // position makes AppKit silently clamp that position back into range
+        // as a side effect of the resize itself (posting its own
+        // boundsDidChangeNotification) — separately from, and *before*, the
+        // explicit scroll(to:) call further down. Without covering the
+        // resize too, that implicit AppKit clamp was being misread by
+        // boundsChanged as a genuine user scroll, which set
+        // isSyncingUserScroll and caused the *next* real correction (the
+        // actual playhead/cursor-anchored recenter) to be skipped by the
+        // guard below, one tick later. That's what made zooming back OUT
+        // quickly momentarily lose the anchor.
+        context.coordinator.isApplyingProgrammaticScroll = true
+
         let newFrame = NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
         if context.coordinator.hostingView?.frame != newFrame {
             context.coordinator.hostingView?.frame = newFrame
@@ -96,6 +111,8 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
             scrollView.reflectScrolledClipView(scrollView.contentView)
             context.coordinator.lastKnownOffset = clampedX
         }
+
+        context.coordinator.isApplyingProgrammaticScroll = false
     }
 
     class Coordinator: NSObject {
@@ -113,6 +130,11 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         // updateNSView, which is a method of the enclosing
         // TimelineScrollView struct, not of Coordinator itself.
         var isSyncingUserScroll = false
+        // Set (also from updateNSView, not private for the same reason)
+        // around a scroll(to:) call we trigger ourselves, so boundsChanged
+        // can tell that echo apart from a real user-driven scroll instead
+        // of treating it the same way. See both call sites for why.
+        var isApplyingProgrammaticScroll = false
         // Coalesces a burst of scrollWheel events (a trackpad pan can
         // deliver several within one runloop tick) into a single SwiftUI
         // publish instead of one per event. See boundsChanged.
@@ -145,6 +167,18 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
 
         @objc func boundsChanged(_ note: Notification) {
             guard let clipView = note.object as? NSClipView else { return }
+            if isApplyingProgrammaticScroll {
+                // Echo of a scroll updateNSView just triggered itself (e.g.
+                // applying a zoom-driven recenter). lastKnownOffset was
+                // already set to this exact value by that caller, and the
+                // SwiftUI-side offsetX already holds it too (that's *why*
+                // we scrolled) — there's nothing to reconcile or publish
+                // back. Doing so anyway was the bug: it set
+                // isSyncingUserScroll, which then made the *next* real
+                // programmatic correction get skipped by updateNSView's
+                // guard, one tick later.
+                return
+            }
             lastKnownOffset = clipView.bounds.origin.x
             // Set before the async hop below and cleared only once it lands.
             // updateNSView runs on every SwiftUI re-render, not just when
