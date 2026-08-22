@@ -53,7 +53,7 @@ extension ContentView {
             backing: .buffered,
             defer: false
         )
-        window.title = "Outgoing OSC Messages"
+        window.title = oscMessagesWindowTitle
         window.setFrameAutosaveName("OSCMessagesWindow")
         window.setContentSize(NSSize(width: 220, height: 300))
         window.contentView = hostingView
@@ -85,6 +85,16 @@ extension ContentView {
         windowManagement.messagesWindowController = NSWindowController(window: window)
         windowManagement.messagesWindowController?.showWindow(nil)
         windowManagement.isOSCWindowVisible = true
+    }
+
+    // Filename first, then the window's own purpose — same order as the
+    // Point List window's title (see pointListWindowTitle).
+    var oscMessagesWindowTitle: String {
+        (savedFileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + " — OSC out"
+    }
+
+    func updateOSCMessagesWindowTitle() {
+        windowManagement.messagesWindowController?.window?.title = oscMessagesWindowTitle
     }
 
     func openModifierKeysHelpWindow() {

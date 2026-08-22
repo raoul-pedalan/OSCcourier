@@ -539,8 +539,10 @@ extension ContentView {
     // Repeats the current file name in the title so it's clear which
     // OSCcourier document this Point List window belongs to — several
     // windows/documents can be open at once (see PendingFileLoad).
+    // Filename first, then the window's own purpose — same order as the
+    // OSC Messages window's title.
     var pointListWindowTitle: String {
-        "Point List — " + (savedFileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
+        (savedFileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + " — Point List"
     }
 
     func updatePointListWindowTitle() {

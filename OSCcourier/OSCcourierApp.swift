@@ -111,7 +111,7 @@ struct OSCcourierApp: App {
         )
     }
 
-    // Loading a file — whether via "Load…" or "Open Recent" — always opens
+    // Loading a file — whether via "Open…" or "Open Recent" — always opens
     // it in a brand-new window and leaves any already-open windows alone.
     // This used to post a notification that every open ContentView
     // listened for, so with several windows open they'd ALL get
@@ -210,7 +210,7 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
 
-                Button("Load…") {
+                Button("Open…") {
                     loadFileFromMenu()
                 }
                 .keyboardShortcut("o", modifiers: .command)

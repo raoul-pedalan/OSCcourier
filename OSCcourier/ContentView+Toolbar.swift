@@ -355,7 +355,7 @@ extension ContentView {
                 }
                 .buttonStyle(.bordered)
                 .fixedSize()
-                .help("Load a project — opens in a new window (⌘O)")
+                .help("Load a project into this window, replacing its current content")
             }
             .overlay(alignment: .leading) {
                 // An overlay (not a regular HStack item) so it doesn't push

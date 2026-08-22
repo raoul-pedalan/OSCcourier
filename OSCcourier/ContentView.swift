@@ -376,6 +376,7 @@ struct ContentView: View {
         // this window's file changes — load, Save As, etc.
         .onChange(of: savedFileURL) { _, _ in
             updatePointListWindowTitle()
+            updateOSCMessagesWindowTitle()
         }
         .onAppear {
             timelineStore.undoManager = undoManager
