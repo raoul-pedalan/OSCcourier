@@ -485,7 +485,18 @@ extension ContentView {
     }
 
     func recenterOnZoomChange(oldZoom: Double, newZoom: Double, outerWidth: CGFloat) {
-        guard !transport.isPinchZooming else { return }
+        // Not just `guard !transport.isPinchZooming` (the flag TimelineScrollView's
+        // Coordinator flips true/false around a pinch or Cmd+scroll gesture): on a
+        // fast pinch, the gesture's last .changed and its .ended can land in the
+        // same SwiftUI render, so by the time this onChange(of: zoomX) handler
+        // fires, isPinchZooming can already be back to false even though newZoom
+        // came from that gesture — which used to make this run anyway and
+        // re-anchor on the playhead instead of the cursor, producing a visible
+        // jump. lastCursorAnchoredZoom is stamped by the gesture handlers
+        // themselves alongside their own cursor-anchored offsetX, so comparing
+        // against it catches every zoom value the gesture already handled,
+        // regardless of how the flag's timing lines up.
+        guard newZoom != transport.lastCursorAnchoredZoom else { return }
         let largeurAvant = outerWidth * CGFloat(oldZoom) - 140
         guard largeurAvant > 0 else { return }
 

@@ -26,9 +26,21 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
     @Binding var offsetY: CGFloat
     @Binding var zoomX: Double
     @Binding var isPinchZooming: Bool
+    @Binding var lastCursorAnchoredZoom: Double
     var zoomRange: ClosedRange<Double> = 1.0...10.0
     var duree: Double
     var contentWidth: CGFloat
+    // The outer geometry width, independent of zoom (contentWidth =
+    // outerWidth * zoomX). Tracked separately rather than derived from
+    // contentWidth/zoomX inside the Coordinator, because that derivation
+    // silently breaks during a fast pinch gesture: NSMagnificationGestureRecognizer
+    // delivers .changed events synchronously and faster than SwiftUI re-renders,
+    // so contentWidth (only refreshed by updateNSView, tied to SwiftUI's render
+    // cadence) can lag one or more zoom steps behind zoomXBinding.wrappedValue,
+    // which is read live. outerWidth itself never changes with zoom (only on
+    // window resize), so keeping it as its own tracked value sidesteps that
+    // staleness entirely. See handleMagnification/handleCommandScroll.
+    var outerWidth: CGFloat
     var contentHeight: CGFloat
     // Same per-pixel sensitivity used by the RotaryKnob (already scaled to
     // feel consistent regardless of track duration), reused here so Cmd+scroll
@@ -37,7 +49,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
     @ViewBuilder var content: () -> Content
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(offsetX: $offsetX, offsetY: $offsetY, zoomX: $zoomX, isPinchZooming: $isPinchZooming, zoomRange: zoomRange)
+        Coordinator(offsetX: $offsetX, offsetY: $offsetY, zoomX: $zoomX, isPinchZooming: $isPinchZooming, lastCursorAnchoredZoom: $lastCursorAnchoredZoom, zoomRange: zoomRange)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -107,6 +119,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         context.coordinator.zoomRange = zoomRange
         context.coordinator.duree = duree
         context.coordinator.currentContentWidth = contentWidth
+        context.coordinator.currentOuterWidth = outerWidth
         context.coordinator.zoomSensitivity = zoomSensitivity
 
         // Bracket BOTH the document-view resize below and the explicit
@@ -164,9 +177,11 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         var offsetYBinding: Binding<CGFloat>
         var zoomXBinding: Binding<Double>
         var isPinchZoomingBinding: Binding<Bool>
+        var lastCursorAnchoredZoomBinding: Binding<Double>
         var zoomRange: ClosedRange<Double>
         var duree: Double = 30
         var currentContentWidth: CGFloat = 0
+        var currentOuterWidth: CGFloat = 0
         var zoomSensitivity: Double = 0.05
         weak var hostingView: NSHostingView<Content>?
         weak var scrollView: NSScrollView?
@@ -183,11 +198,12 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         // pinch gesture) don't carry an explicit .ended phase to rely on.
         private var commandScrollResetWorkItem: DispatchWorkItem?
 
-        init(offsetX: Binding<CGFloat>, offsetY: Binding<CGFloat>, zoomX: Binding<Double>, isPinchZooming: Binding<Bool>, zoomRange: ClosedRange<Double>) {
+        init(offsetX: Binding<CGFloat>, offsetY: Binding<CGFloat>, zoomX: Binding<Double>, isPinchZooming: Binding<Bool>, lastCursorAnchoredZoom: Binding<Double>, zoomRange: ClosedRange<Double>) {
             self.offsetXBinding = offsetX
             self.offsetYBinding = offsetY
             self.zoomXBinding = zoomX
             self.isPinchZoomingBinding = isPinchZooming
+            self.lastCursorAnchoredZoomBinding = lastCursorAnchoredZoom
             self.zoomRange = zoomRange
         }
 
@@ -214,6 +230,34 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
                 // we scrolled) — there's nothing to reconcile or publish
                 // back — and republishing it here would fight whatever
                 // set it in the first place.
+                return
+            }
+            if isPinchZoomingBinding.wrappedValue {
+                // A magnify gesture (or Cmd+scroll zoom) is in progress.
+                // handleMagnification/handleCommandScroll are the sole
+                // source of truth for offsetX for the whole duration — they
+                // compute it themselves to keep the point under the cursor
+                // anchored, then push it through offsetXBinding, which
+                // updateNSView applies with its own explicit scroll(to:)
+                // (guarded by isApplyingProgrammaticScroll above).
+                //
+                // But a real pinch on a trackpad rarely holds the two
+                // fingers perfectly still — the same slight finger movement
+                // that drives NSMagnificationGestureRecognizer also reaches
+                // NSScrollView's own default scrollWheel handling as
+                // incidental panning, moving this clip view natively and
+                // posting this exact notification — NOT wrapped by
+                // isApplyingProgrammaticScroll above, since it didn't come
+                // from our own scroll(to:) call. Confirmed via ZOOMDBG: an
+                // updateNSView log with no preceding pinch log line, and an
+                // offsetX(prop) that didn't match the last cursor-anchored
+                // value computed by the gesture. Publishing that incidental
+                // drift as if it were real user intent stomped on the
+                // anchor math mid-gesture — that was the visible sideways
+                // jump on a fast pinch. Ignore it here; the next
+                // updateNSView pass (still driven by our own offsetX) will
+                // explicitly scroll the clip view back to where the
+                // cursor-anchored math says it belongs.
                 return
             }
             lastKnownOffset = clipView.bounds.origin.x
@@ -265,7 +309,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
                 isPinchZoomingBinding.wrappedValue = true
             case .changed:
                 let currentZoom = zoomXBinding.wrappedValue
-                let outerWidth = currentContentWidth / CGFloat(currentZoom)
+                let outerWidth = currentOuterWidth
                 let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
                 guard largeurAvant > 0 else { return }
 
@@ -288,8 +332,20 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
                 let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
                 let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
                 offsetXBinding.wrappedValue = newOffsetX
+                lastCursorAnchoredZoomBinding.wrappedValue = newZoom
             case .ended, .cancelled, .failed:
-                isPinchZoomingBinding.wrappedValue = false
+                // Deferred instead of synchronous: recenterOnZoomChange's
+                // onChange(of: zoomX) handler in ContentView guards on
+                // lastCursorAnchoredZoom now (see TransportState), not on
+                // this flag directly, so this is no longer racing that
+                // guard — but isPinchZooming also gates the Cmd+scroll
+                // sensitivity elsewhere, and flipping it the instant the
+                // gesture ends (rather than after SwiftUI has had a chance
+                // to render the final .changed's values at least once)
+                // still isn't necessary to rush.
+                DispatchQueue.main.async { [weak self] in
+                    self?.isPinchZoomingBinding.wrappedValue = false
+                }
             default:
                 break
             }
@@ -300,7 +356,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         // above but driven by scrollingDeltaY instead of a pinch gesture.
         func handleCommandScroll(_ event: NSEvent, in scrollView: NSScrollView) {
             let currentZoom = zoomXBinding.wrappedValue
-            let outerWidth = currentContentWidth / CGFloat(currentZoom)
+            let outerWidth = currentOuterWidth
             let largeurAvant = outerWidth * CGFloat(currentZoom) - 140
             guard largeurAvant > 0 else { return }
 
@@ -338,6 +394,7 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
             let maxX = max(0, outerWidth * CGFloat(newZoom) - scrollView.contentView.bounds.width)
             let newOffsetX = max(0, min(absoluteContentXAfter - locationX, maxX))
             offsetXBinding.wrappedValue = newOffsetX
+            lastCursorAnchoredZoomBinding.wrappedValue = newZoom
         }
     }
 }

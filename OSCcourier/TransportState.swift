@@ -22,6 +22,18 @@ final class TransportState: ObservableObject {
     // stay aligned with whichever rows are currently in view.
     @Published var scrollOffsetY: CGFloat = 0
     @Published var isPinchZooming: Bool = false
+    // Stamped by TimelineScrollView's Coordinator every time a pinch or
+    // Cmd+scroll gesture sets zoomX together with its own cursor-anchored
+    // scrollOffsetX, so ContentView's onChange(of: zoomX)-driven
+    // recenterOnZoomChange (which anchors on the playhead instead) can tell
+    // "this exact zoom value was already anchored by the gesture, nothing to
+    // redo" via a plain value comparison — instead of trusting isPinchZooming
+    // alone, which can already be back to false by the time this fires: a fast
+    // gesture's last .changed and its .ended can land in the same SwiftUI
+    // render, so the live flag isn't a reliable signal for which zoomX values
+    // came from the gesture. See recenterOnZoomChange and handleMagnification/
+    // handleCommandScroll.
+    @Published var lastCursorAnchoredZoom: Double = 0
     @Published var timelineAreaWidth: CGFloat = 1500
 
     @Published var isOSCFlashing: Bool = false

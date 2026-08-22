@@ -89,9 +89,11 @@ extension ContentView {
             offsetY: $transport.scrollOffsetY,
             zoomX: $transport.zoomX,
             isPinchZooming: $transport.isPinchZooming,
+            lastCursorAnchoredZoom: $transport.lastCursorAnchoredZoom,
             zoomRange: 1.0...maxZoomX,
             duree: transport.duree,
             contentWidth: outerGeometry.size.width * CGFloat(transport.zoomX),
+            outerWidth: outerGeometry.size.width,
             contentHeight: max(outerGeometry.size.height - rulerStripTotalHeight, totalTracksHeight),
             zoomSensitivity: zoomKnobSensitivity
         ) {
