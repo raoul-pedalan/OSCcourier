@@ -32,58 +32,26 @@ extension ContentView {
         // No per-window appearance handling here anymore: NSApp.appearance
         // (set app-wide from the Appearance setting) already covers every
         // window, including this one and its title bar.
-        if let controller = windowManagement.messagesWindowController {
-            if windowManagement.isOSCWindowVisible {
-                controller.window?.close()
-                windowManagement.isOSCWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                windowManagement.isOSCWindowVisible = true
-            }
+        if toggleAuxiliaryPanel(
+            windowManagement.messagesWindowController,
+            isVisible: windowManagement.isOSCWindowVisible,
+            setVisible: { windowManagement.isOSCWindowVisible = $0 }
+        ) {
             return
         }
 
-        let contentView = OSCMessagesView(messageStore: messageStore)
-        let hostingView = NSHostingView(rootView: contentView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 300)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 300),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
+        let (controller, delegate) = makeAuxiliaryPanel(
+            content: OSCMessagesView(messageStore: messageStore),
+            title: oscMessagesWindowTitle,
+            autosaveName: "OSCMessagesWindow",
+            initialSize: NSSize(width: 220, height: 300),
+            minSize: NSSize(width: 50, height: 300),
+            position: .topRightCorner(margin: 20),
+            onClose: { windowManagement.isOSCWindowVisible = false }
         )
-        window.title = oscMessagesWindowTitle
-        window.setFrameAutosaveName("OSCMessagesWindow")
-        window.setContentSize(NSSize(width: 220, height: 300))
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 50, height: 300)
-        // Without this, closing a manually-created NSWindow (not from a
-        // nib) can release it out from under us, leaving our controller
-        // holding a stale reference on the next toggle.
-        window.isReleasedWhenClosed = false
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            windowManagement.isOSCWindowVisible = false
-        }
-        window.delegate = delegate
+        windowManagement.messagesWindowController = controller
         windowManagement.oscWindowCloseDelegate = delegate
-
-        // Top-right of the screen, with a small margin from the edges —
-        // applied after setFrameAutosaveName so it always ends up there,
-        // rather than wherever a previously saved frame happened to be.
-        if let screenFrame = NSScreen.main?.visibleFrame {
-            let margin: CGFloat = 20
-            let origin = NSPoint(
-                x: screenFrame.maxX - window.frame.width - margin,
-                y: screenFrame.maxY - window.frame.height - margin
-            )
-            window.setFrameOrigin(origin)
-        }
-
-        windowManagement.messagesWindowController = NSWindowController(window: window)
-        windowManagement.messagesWindowController?.showWindow(nil)
+        controller.showWindow(nil)
         windowManagement.isOSCWindowVisible = true
     }
 
@@ -98,50 +66,27 @@ extension ContentView {
     }
 
     func openModifierKeysHelpWindow() {
-        if let controller = windowManagement.modifierKeysWindowController {
-            if windowManagement.isModifierKeysWindowVisible {
-                controller.window?.close()
-                windowManagement.isModifierKeysWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                windowManagement.isModifierKeysWindowVisible = true
-            }
+        if toggleAuxiliaryPanel(
+            windowManagement.modifierKeysWindowController,
+            isVisible: windowManagement.isModifierKeysWindowVisible,
+            setVisible: { windowManagement.isModifierKeysWindowVisible = $0 }
+        ) {
             return
         }
 
-        let hostingView = NSHostingView(rootView: ModifierKeysHelpView())
-        // Sized from the view's own natural (un-scrolled, fixed-content)
-        // size rather than a guessed constant — with no ScrollView inside,
-        // fittingSize reports the real height needed to show every entry
-        // at once, so the window opens at the right size the first time.
-        hostingView.frame = NSRect(x: 0, y: 0, width: 380, height: 420)
-        let fittingSize = hostingView.fittingSize
-        let contentWidth = max(fittingSize.width, 380)
-        let contentHeight = max(fittingSize.height, 240)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
+        let (controller, delegate) = makeAuxiliaryPanel(
+            content: ModifierKeysHelpView(),
+            title: "Modifier Keys",
+            autosaveName: "ModifierKeysWindow",
+            initialSize: NSSize(width: 380, height: 420),
+            minSize: NSSize(width: 380, height: 240),
+            position: .center,
+            sizeToFitContent: true,
+            onClose: { windowManagement.isModifierKeysWindowVisible = false }
         )
-        window.title = "Modifier Keys"
-        window.setFrameAutosaveName("ModifierKeysWindow")
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 380, height: 240)
-        window.isReleasedWhenClosed = false
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            windowManagement.isModifierKeysWindowVisible = false
-        }
-        window.delegate = delegate
+        windowManagement.modifierKeysWindowController = controller
         windowManagement.modifierKeysCloseDelegate = delegate
-
-        window.center()
-
-        windowManagement.modifierKeysWindowController = NSWindowController(window: window)
-        windowManagement.modifierKeysWindowController?.showWindow(nil)
+        controller.showWindow(nil)
         windowManagement.isModifierKeysWindowVisible = true
     }
 

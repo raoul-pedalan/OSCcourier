@@ -490,49 +490,32 @@ extension ContentView {
             offsetPointsInTime(ids: ids, delta: delta, includeMarkers: includeMarkers)
         }
 
-        if let controller = windowManagement.pointListWindowController {
-            if windowManagement.isPointListWindowVisible {
-                controller.window?.close()
-                windowManagement.isPointListWindowVisible = false
-            } else {
-                controller.showWindow(nil)
-                windowManagement.isPointListWindowVisible = true
-            }
+        if toggleAuxiliaryPanel(
+            windowManagement.pointListWindowController,
+            isVisible: windowManagement.isPointListWindowVisible,
+            setVisible: { windowManagement.isPointListWindowVisible = $0 }
+        ) {
             return
         }
 
         // The view observes pointListStore, so no need to rebuild the hosting
         // view on reopen — it re-renders on its own whenever the store changes.
-        let hostingView = NSHostingView(rootView: PointListView(store: pointListStore, selectionState: selection))
-        hostingView.frame = NSRect(x: 0, y: 0, width: 640, height: 380)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 380),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = pointListWindowTitle
-        window.setFrameAutosaveName("PointListWindow")
-        window.contentView = hostingView
-        window.minSize = NSSize(width: 520, height: 300)
-        window.isReleasedWhenClosed = false
         // Deliberately NOT a floating window: a floating list parked in the
         // middle of the screen would sit on top of every sheet the main window
         // opens (point editor, autofill, grid settings...), hiding them.
-
-        let delegate = OSCWindowCloseDelegate()
-        delegate.onClose = {
-            windowManagement.isPointListWindowVisible = false
-        }
-        delegate.sharedUndoManager = timelineStore.undoManager
-        window.delegate = delegate
+        let (controller, delegate) = makeAuxiliaryPanel(
+            content: PointListView(store: pointListStore, selectionState: selection),
+            title: pointListWindowTitle,
+            autosaveName: "PointListWindow",
+            initialSize: NSSize(width: 640, height: 380),
+            minSize: NSSize(width: 520, height: 300),
+            position: .center,
+            sharedUndoManager: timelineStore.undoManager,
+            onClose: { windowManagement.isPointListWindowVisible = false }
+        )
+        windowManagement.pointListWindowController = controller
         windowManagement.pointListCloseDelegate = delegate
-
-        window.center()
-
-        windowManagement.pointListWindowController = NSWindowController(window: window)
-        windowManagement.pointListWindowController?.showWindow(nil)
+        controller.showWindow(nil)
         windowManagement.isPointListWindowVisible = true
     }
 

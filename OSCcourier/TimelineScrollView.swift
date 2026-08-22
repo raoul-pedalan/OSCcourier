@@ -84,9 +84,12 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         }
 
         // Only push our own offset into the scroll view if it actually changed
-        // (i.e. it was set programmatically from outside, e.g. on zoom change).
-        // This avoids fighting with the user's own trackpad/scroll input.
-        if abs(context.coordinator.lastKnownOffset - offsetX) > 0.5 {
+        // (i.e. it was set programmatically from outside, e.g. on zoom change)
+        // AND we're not in the middle of reflecting the user's own scroll back
+        // up to SwiftUI (see boundsChanged/isSyncingUserScroll) — otherwise this
+        // can catch `offsetX` still holding its pre-scroll value and snap the
+        // content straight back to where the user just panned from.
+        if !context.coordinator.isSyncingUserScroll && abs(context.coordinator.lastKnownOffset - offsetX) > 0.5 {
             let maxX = max(0, contentWidth - scrollView.contentView.bounds.width)
             let clampedX = max(0, min(offsetX, maxX))
             scrollView.contentView.scroll(to: NSPoint(x: clampedX, y: 0))
@@ -106,6 +109,14 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
         weak var hostingView: NSHostingView<Content>?
         weak var scrollView: NSScrollView?
         var lastKnownOffset: CGFloat = 0
+        // See boundsChanged / updateNSView. Not private: read from
+        // updateNSView, which is a method of the enclosing
+        // TimelineScrollView struct, not of Coordinator itself.
+        var isSyncingUserScroll = false
+        // Coalesces a burst of scrollWheel events (a trackpad pan can
+        // deliver several within one runloop tick) into a single SwiftUI
+        // publish instead of one per event. See boundsChanged.
+        private var offsetFlushScheduled = false
         private var zoomAtGestureStart: Double = 1.0
         // Debounces isPinchZoomingBinding back to false after Cmd+scroll
         // activity stops, since discrete mouse-wheel events (unlike a real
@@ -134,10 +145,38 @@ struct TimelineScrollView<Content: View>: NSViewRepresentable {
 
         @objc func boundsChanged(_ note: Notification) {
             guard let clipView = note.object as? NSClipView else { return }
-            let x = clipView.bounds.origin.x
-            lastKnownOffset = x
+            lastKnownOffset = clipView.bounds.origin.x
+            // Set before the async hop below and cleared only once it lands.
+            // updateNSView runs on every SwiftUI re-render, not just when
+            // offsetX changes, so during the gap between updating
+            // lastKnownOffset here and the binding actually landing on the
+            // main queue, some unrelated re-render could call updateNSView
+            // while offsetX still holds its old (pre-scroll) value — which
+            // then reads as an external change and scrolls the content
+            // straight back to that old position. That race is what was
+            // causing the two-finger-pan jitter/snap-back when zoomed in
+            // (only visible once zoomed, since only then is there anything
+            // to actually scroll). Skipping the correction while a sync is
+            // in flight avoids it.
+            isSyncingUserScroll = true
+
+            // Coalesce: if a flush is already scheduled for this runloop
+            // tick, just let it pick up the latest lastKnownOffset above
+            // instead of scheduling another one. A fast trackpad pan can
+            // deliver several scrollWheel events per tick, and each one
+            // used to schedule its own SwiftUI publish — i.e. a full
+            // re-render pass over ContentView's tree (RulerBar and others
+            // observe the whole `transport` object) — for every single
+            // sub-frame delta. That redundant work is part of why panning
+            // felt less than fluid; publishing once per tick with the
+            // freshest value is all SwiftUI actually needs to stay in sync.
+            guard !offsetFlushScheduled else { return }
+            offsetFlushScheduled = true
             DispatchQueue.main.async { [weak self] in
-                self?.offsetXBinding.wrappedValue = x
+                guard let self else { return }
+                self.offsetFlushScheduled = false
+                self.offsetXBinding.wrappedValue = self.lastKnownOffset
+                self.isSyncingUserScroll = false
             }
         }
 

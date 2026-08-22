@@ -68,6 +68,6 @@ struct ModifierKeysHelpView: View {
                 }
             }
         }
-        .frame(width: 380)
+        .frame(minWidth: 380, idealWidth: 380)
     }
 }
