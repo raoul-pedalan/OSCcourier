@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The time ruler bar above the tracks: the loop-zone band (and its live
 /// drag preview), the lock toggle, and the tick marks/labels (masked so
@@ -34,9 +35,31 @@ struct RulerBar: View {
     let onDoubleClick: () -> Void
     let onSelectPointsInLoopZone: () -> Void
     let onTimeOffsetSelection: () -> Void
+    // The click-to-scrub strip and the playhead triangle used to live
+    // separately, further down in the scrollable tracks content (see
+    // ContentView+MarkersGridPlayhead.swift) — moved here now that the
+    // ruler is pinned above the tracks instead of scrolling away with
+    // them, so this is the one place the playhead stays reachable however
+    // far you've scrolled down.
+    let onScrubTap: (CGPoint) -> Void
+    let onPlayheadDragChanged: (DragGesture.Value) -> Void
+    let onPlayheadDoubleClick: () -> Void
 
     var body: some View {
         ZStack(alignment: .leading) {
+            // Everything that must occupy exactly the ruler's 24pt band —
+            // grouped into its own ZStack, explicitly sized and clipped to
+            // that height. Without this, RulerBar's OUTER ZStack sized
+            // itself (and centered its children) around whichever child was
+            // tallest — usually the tick labels, a point or two taller than
+            // 24pt once font metrics are counted — which nudged the loop
+            // zone/background rects (fixed at exactly 24pt, top-to-bottom)
+            // off-center from the ticks by that same sliver, showing as a
+            // gap between the loop zone band and the tick marks/labels it's
+            // supposed to sit directly behind. Pinning this group to the
+            // top of a hard 24pt frame keeps every one of them flush
+            // against the same edge instead of independently centered.
+            ZStack(alignment: .leading) {
             Rectangle().fill(Color.gray.opacity(0.1)).frame(height: 24)
             // The loop zone band: matches the Loop button's own colors
             // exactly (solid yellow active, gray when off), so the zone
@@ -181,6 +204,90 @@ struct RulerBar: View {
                     Color.black
                 }
             )
+            }
+            .frame(height: 24, alignment: .top)
+            .clipped()
+
+            // Thin click-to-scrub strip right above the tick marks — not on
+            // the ruler's own tap area, which is dedicated to the loop
+            // zone. Added BEFORE the triangle below so the triangle (added
+            // later, on top in z-order) keeps first dibs on hit-testing
+            // over its own small area — otherwise this band would swallow
+            // every click/double-click meant for the triangle itself.
+            DiagonalStripes(stripeWidth: 3, spacing: 3)
+                .stroke(Color.gray.opacity(0.5), lineWidth: 3)
+                .frame(height: 15)
+                // Padded to the same 24pt reference height as the ruler's
+                // "core" band (top-aligned) before the offset below. The
+                // outer ZStack above centers children vertically by
+                // default (alignment: .leading only pins the horizontal
+                // axis) — without this, the core band (naturally 24pt)
+                // and this 15pt strip get centered independently, landing
+                // this strip (24-15)/2 = 4.5pt lower than the offset below
+                // assumes. That's exactly the ~4px overlap into the top of
+                // the loop zone that kept showing up: the stripe pattern
+                // bleeding down over what should have been solid yellow.
+                // Padding to 24 first makes this strip's reported size
+                // match the core band's, so centering has no effect on
+                // either, and the offset below lands it exactly flush.
+                .frame(height: 24, alignment: .top)
+                .offset(y: -15)
+                .allowsHitTesting(false)
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(height: 15)
+                .frame(height: 24, alignment: .top)
+                .offset(y: -15)
+                .onTapGesture { location in
+                    onScrubTap(location)
+                }
+
+            // The playhead: a short flagpole through the ruler's own
+            // height plus the draggable triangle above it. The line
+            // continues on down through the tracks separately (see
+            // ContentView+MarkersGridPlayhead.swift) — that half stays
+            // purely visual now, since dragging happens up here where the
+            // playhead is always reachable.
+            ZStack(alignment: .topLeading) {
+                Rectangle().fill(Color.red).frame(width: 2, height: 24)
+                Image(systemName: "triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+                    .rotationEffect(.degrees(180))
+                    .offset(x: -6, y: -12)
+            }
+            // .offset() shifts the triangle's RENDERED position but not this
+            // ZStack's own hit-testable bounds, which stay anchored to the
+            // thin 2pt-wide line — so without this, dragging only worked from
+            // the line itself, never from the triangle that visually pokes out
+            // above and to the side of it. An explicit Path-based content
+            // shape doesn't affect layout size/position (only which region
+            // responds to gestures), so the existing offset/coordinate math
+            // below is untouched.
+            .contentShape(Path(CGRect(x: -8, y: -14, width: 16, height: 24 + 14)))
+            .offset(x: CGFloat(transport.position / transport.duree) * largeurTimeline + 140)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        onPlayheadDragChanged(value)
+                    }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    // simultaneousGesture (not .onTapGesture): the drag
+                    // above uses minimumDistance 0, which would otherwise
+                    // win exclusive recognition and swallow every tap
+                    // before a double-tap could ever be detected.
+                    onPlayheadDoubleClick()
+                }
+            )
+            .onHover { isHovering in
+                if isHovering {
+                    NSCursor.resizeLeftRight.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
         }
     }
 }

@@ -371,6 +371,35 @@ extension ContentView {
         }
     }
 
+    // Moved here from the old inline playhead triangle (now on the pinned
+    // ruler strip — see RulerBar): dragging it snaps to the nearest
+    // marker/grid line while ⌘ is held, same candidates and snap zone as
+    // dragging a point.
+    func handlePlayheadDragChanged(_ value: DragGesture.Value, largeurTimeline: CGFloat) {
+        let xPos = Double(value.location.x - 140)
+        var newPosition = (xPos / Double(largeurTimeline)) * transport.duree
+        if NSEvent.modifierFlags.contains(.command),
+           let snapped = nearestSnapTime(markersTrack: pistes[0], showGrid: showGrid, gridPeriod: uiChrome.gridPeriod, gridPhase: uiChrome.gridPhase, duree: transport.duree, xPos: xPos, largeurTimeline: Double(largeurTimeline)) {
+            newPosition = snapped
+        }
+        transport.position = min(max(newPosition, 0), transport.duree)
+        sendOSCMessagesForPosition(transport.position)
+    }
+
+    func handlePlayheadDoubleClick() {
+        uiChrome.goToTimeString = formattedDuration(transport.position)
+        uiChrome.goToMarkerNameString = ""
+        pasteClipboard.showPlayheadPositionChoice = true
+    }
+
+    // The thin click-to-scrub strip just above the ruler's tick marks.
+    func handleScrubTap(_ location: CGPoint, largeurTimeline: CGFloat) {
+        guard location.x > 140 else { return }
+        let clicked = (Double(location.x - 140) / Double(largeurTimeline)) * transport.duree
+        transport.position = min(max(clicked, 0), transport.duree)
+        sendOSCMessagesForPosition(transport.position)
+    }
+
     func centerOnPlayhead() {
         let outerWidth = max(transport.timelineAreaWidth, 1)
         // transport.timelineAreaWidth already excludes the duration handle (the whole

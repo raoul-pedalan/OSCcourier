@@ -56,12 +56,14 @@ extension ContentView {
         showMarkersTrack ? pistes : Array(pistes.dropFirst())
     }
 
-    // Real total height of the ruler + all tracks (mirrors the `totalHeight` computed
-    // inside the inner GeometryReader), plus the top padding reserved for the playhead
-    // triangle. Used as the document's actual height so vertical scrolling can reveal
-    // tracks that would otherwise be clipped below the visible viewport.
+    // Real total height of just the tracks (mirrors the `totalHeight` computed
+    // inside the inner GeometryReader) — the ruler and its playhead-triangle
+    // headroom now live in their own pinned strip above the scroll view, so
+    // they're no longer part of this document's height. Used as the
+    // document's actual height so vertical scrolling can reveal tracks that
+    // would otherwise be clipped below the visible viewport.
     var totalTracksHeight: CGFloat {
-        24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5) + 14
+        visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
     }
 
     // Shared naming counter across all track types (bang or curve), so a new

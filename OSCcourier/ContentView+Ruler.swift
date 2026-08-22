@@ -30,6 +30,15 @@ extension ContentView {
             },
             onTimeOffsetSelection: {
                 openTimeOffsetPopup()
+            },
+            onScrubTap: { location in
+                handleScrubTap(location, largeurTimeline: largeurTimeline)
+            },
+            onPlayheadDragChanged: { value in
+                handlePlayheadDragChanged(value, largeurTimeline: largeurTimeline)
+            },
+            onPlayheadDoubleClick: {
+                handlePlayheadDoubleClick()
             }
         )
     }

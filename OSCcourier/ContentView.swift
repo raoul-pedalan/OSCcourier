@@ -293,62 +293,107 @@ struct ContentView: View {
 
 
             GeometryReader { outerGeometry in
-                TimelineScrollView(
-                    offsetX: $transport.scrollOffsetX,
-                    zoomX: $transport.zoomX,
-                    isPinchZooming: $transport.isPinchZooming,
-                    zoomRange: 1.0...maxZoomX,
-                    duree: transport.duree,
-                    contentWidth: outerGeometry.size.width * CGFloat(transport.zoomX),
-                    contentHeight: max(outerGeometry.size.height, totalTracksHeight),
-                    zoomSensitivity: zoomKnobSensitivity
-                ) {
-                        GeometryReader { geometry in
-                            // NOTE: do NOT subtract durationHandleWidth here. The playhead,
-                            // grid and marker lines are drawn in the outer coordinate space
-                            // (offset by +140) while the points live inside each track's own
-                            // space — both derive from this same largeurTimeline, so shrinking
-                            // it here desynchronised them (playhead/grid drifted left of the
-                            // points). The handle's 18px are reserved on the container
-                            // instead, further down, which keeps a single consistent scale.
-                            let largeurTimeline = geometry.size.width - 140
-                            let totalHeight = 24 + visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
+                let rulerContentWidth = outerGeometry.size.width * CGFloat(transport.zoomX)
+                let rulerLargeurTimeline = rulerContentWidth - 140
+                // The ruler's own 24pt height, plus 14pt of headroom above
+                // it for the playhead triangle (and the click-to-scrub
+                // strip), which both poke above the ruler's own y=0 via an
+                // internal negative offset — same margin the old shared
+                // .padding(.top, 14) used to reserve for them.
+                let rulerVisualHeight: CGFloat = 24 + 14
+                // ...plus the 1px separator directly below the ruler strip.
+                let rulerStripTotalHeight: CGFloat = rulerVisualHeight + 1
 
-                            ZStack(alignment: .topLeading) {
-                                VStack(spacing: 0) {
-                                    rulerBar(largeurTimeline: largeurTimeline, outerWidth: outerGeometry.size.width, geometryWidth: geometry.size.width)
+                VStack(spacing: 0) {
+                    // Ruler + loop-zone strip, pinned above the tracks: it no
+                    // longer lives inside the scrollable content (below), so
+                    // it stays visible however far down you've scrolled
+                    // through a lot of expanded tracks. It still shifts
+                    // horizontally in lockstep with the zoomed/panned content
+                    // via the same transport.scrollOffsetX the main scroll
+                    // view already publishes — offset here, then clipped to
+                    // the fixed viewport width, the same "big content,
+                    // shifted, clipped to a window" trick NSScrollView used
+                    // to do for us automatically when the ruler was part of
+                    // its document.
+                    //
+                    // alignment: .bottom (rather than reserving the
+                    // triangle's headroom with a separate .padding, applied
+                    // on top of an assumed-24pt-tall ruler) bottom-anchors
+                    // the ruler's own 24pt content against this frame's
+                    // bottom edge directly, regardless of RulerBar's exact
+                    // measured height — which is what was leaving a stray
+                    // sliver of the loop-zone band poking into the
+                    // click-to-scrub stripes above it.
+                    rulerBar(largeurTimeline: rulerLargeurTimeline, outerWidth: outerGeometry.size.width, geometryWidth: rulerContentWidth)
+                        // Without this, the .frame(height: rulerVisualHeight)
+                        // below doesn't just POSITION RulerBar within a taller
+                        // box — it PROPOSES that taller height down into
+                        // RulerBar's own body, whose top-level ZStack happily
+                        // resizes to fill it and re-centers its children
+                        // within that larger box instead of staying flush at
+                        // its real ~24pt height. fixedSize forces RulerBar to
+                        // report (and keep) its true intrinsic height, so the
+                        // frame below only positions it, rather than
+                        // reshaping it.
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: rulerContentWidth, height: rulerVisualHeight, alignment: .bottom)
+                        .offset(x: -transport.scrollOffsetX)
+                        .frame(width: outerGeometry.size.width, height: rulerVisualHeight, alignment: .topLeading)
+                        .clipped()
 
-                                    // A thin black separator between the ruler/loop-zone
-                                    // row and the markers track below it — in dark mode
-                                    // the two were nearly the same color and hard to
-                                    // tell apart at a glance.
-                                    Rectangle()
-                                        .fill(colorScheme == .dark ? Color.black : Color.white)
-                                        .frame(height: 1)
+                    // Same separator as before, now directly below the fixed
+                    // ruler strip instead of inside the scrollable content.
+                    Rectangle()
+                        .fill(colorScheme == .dark ? Color.black : Color.white)
+                        .frame(height: 1)
 
-                                    ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
-                                        trackRow(index: index, largeurTimeline: largeurTimeline)
+                    TimelineScrollView(
+                        offsetX: $transport.scrollOffsetX,
+                        zoomX: $transport.zoomX,
+                        isPinchZooming: $transport.isPinchZooming,
+                        zoomRange: 1.0...maxZoomX,
+                        duree: transport.duree,
+                        contentWidth: outerGeometry.size.width * CGFloat(transport.zoomX),
+                        contentHeight: max(outerGeometry.size.height - rulerStripTotalHeight, totalTracksHeight),
+                        zoomSensitivity: zoomKnobSensitivity
+                    ) {
+                            GeometryReader { geometry in
+                                // NOTE: do NOT subtract durationHandleWidth here. The playhead,
+                                // grid and marker lines are drawn in the outer coordinate space
+                                // (offset by +140) while the points live inside each track's own
+                                // space — both derive from this same largeurTimeline, so shrinking
+                                // it here desynchronised them (playhead/grid drifted left of the
+                                // points). The handle's 18px are reserved on the container
+                                // instead, further down, which keeps a single consistent scale.
+                                let largeurTimeline = geometry.size.width - 140
+                                let totalHeight = visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
+
+                                ZStack(alignment: .topLeading) {
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
+                                            trackRow(index: index, largeurTimeline: largeurTimeline)
+                                        }
                                     }
-                                }
 
-                                markersGridAndPlayhead(largeurTimeline: largeurTimeline, totalHeight: totalHeight)
+                                    markersGridAndPlayhead(largeurTimeline: largeurTimeline, totalHeight: totalHeight)
+                                }
                             }
-                            .padding(.top, 14) // room for the playhead triangle, which pokes above y=0
-                        }
-                        .frame(width: outerGeometry.size.width * CGFloat(transport.zoomX))
-                }
-                .onChange(of: transport.zoomX) { oldZoom, newZoom in
-                    recenterOnZoomChange(oldZoom: oldZoom, newZoom: newZoom, outerWidth: outerGeometry.size.width)
-                }
-                .onAppear {
-                    transport.timelineAreaWidth = outerGeometry.size.width
-                }
-                .onChange(of: outerGeometry.size.width) { _, newWidth in
-                    transport.timelineAreaWidth = newWidth
-                    transport.zoomX = min(transport.zoomX, maxZoomX)
-                }
-                .onChange(of: transport.duree) { _, _ in
-                    transport.zoomX = min(transport.zoomX, maxZoomX)
+                            .frame(width: outerGeometry.size.width * CGFloat(transport.zoomX))
+                    }
+                    .onChange(of: transport.zoomX) { oldZoom, newZoom in
+                        recenterOnZoomChange(oldZoom: oldZoom, newZoom: newZoom, outerWidth: outerGeometry.size.width)
+                    }
+                    .onAppear {
+                        transport.timelineAreaWidth = outerGeometry.size.width
+                    }
+                    .onChange(of: outerGeometry.size.width) { _, newWidth in
+                        transport.timelineAreaWidth = newWidth
+                        transport.zoomX = min(transport.zoomX, maxZoomX)
+                    }
+                    .onChange(of: transport.duree) { _, _ in
+                        transport.zoomX = min(transport.zoomX, maxZoomX)
+                    }
                 }
             }
             // Shrinks the whole timeline area (and with it geometry.size.width,
