@@ -165,6 +165,8 @@ extension ContentView {
         // as freshly crossed.
         let effectivePrev = justLooped ? wrapTarget - 1.0 : prev
 
+        followPlayheadDuringPlayback()
+
         for piste in pistes {
             guard piste.type == .bang, !piste.isMuted else { continue }
             let tol = 0.001
@@ -336,6 +338,36 @@ extension ContentView {
         case .float(let v): return Double(v)
         case .int(let v): return Double(v)
         case .string: return nil
+        }
+    }
+
+    // Page-turn auto-scroll during playback: at higher zoom levels the
+    // playhead used to just run off the right edge of the viewport with
+    // nothing scrolling to keep up, making playback impossible to follow.
+    // Rather than scrolling continuously to keep the playhead centered
+    // (which makes the whole timeline swim under the eye while playing),
+    // this only jumps once the playhead reaches the edge of what's
+    // currently visible, landing it just past the track-label column —
+    // the same "page flip" behavior as most DAWs' timeline views.
+    func followPlayheadDuringPlayback() {
+        let outerWidth = max(transport.timelineAreaWidth, 1)
+        let largeurTimeline = outerWidth * CGFloat(transport.zoomX) - 140
+        guard largeurTimeline > 0 else { return }
+        let maxX = max(0, outerWidth * CGFloat(transport.zoomX) - outerWidth)
+        // Nothing to scroll — the whole timeline already fits in the
+        // viewport at this zoom level.
+        guard maxX > 0 else { return }
+
+        let playheadX = 140 + CGFloat(transport.position / transport.duree) * largeurTimeline
+        let localX = playheadX - transport.scrollOffsetX
+
+        // Off-screen to the right (normal forward playback outrunning the
+        // current page) or to the left/behind the label column (e.g. right
+        // after a loop-zone wrap or a seek to an earlier time) — either way,
+        // jump so the playhead reappears just past the labels.
+        if localX < 140 || localX > outerWidth {
+            let margin: CGFloat = 20
+            transport.scrollOffsetX = max(0, min(playheadX - 140 - margin, maxX))
         }
     }
 
