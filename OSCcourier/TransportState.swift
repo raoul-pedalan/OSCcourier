@@ -14,6 +14,13 @@ final class TransportState: ObservableObject {
 
     @Published var zoomX: Double = 1.0
     @Published var scrollOffsetX: CGFloat = 0
+    // Published the same way as scrollOffsetX (from TimelineScrollView's
+    // Coordinator via boundsChanged) but read-only from the outside — nothing
+    // currently drives vertical scroll programmatically the way zoom/playhead
+    // drive scrollOffsetX. Exists so the pinned track-header column (see
+    // ContentView.swift) can mirror the tracks' vertical scroll position and
+    // stay aligned with whichever rows are currently in view.
+    @Published var scrollOffsetY: CGFloat = 0
     @Published var isPinchZooming: Bool = false
     @Published var timelineAreaWidth: CGFloat = 1500
 

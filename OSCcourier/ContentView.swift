@@ -348,52 +348,17 @@ struct ContentView: View {
                         .fill(colorScheme == .dark ? Color.black : Color.white)
                         .frame(height: 1)
 
-                    TimelineScrollView(
-                        offsetX: $transport.scrollOffsetX,
-                        zoomX: $transport.zoomX,
-                        isPinchZooming: $transport.isPinchZooming,
-                        zoomRange: 1.0...maxZoomX,
-                        duree: transport.duree,
-                        contentWidth: outerGeometry.size.width * CGFloat(transport.zoomX),
-                        contentHeight: max(outerGeometry.size.height - rulerStripTotalHeight, totalTracksHeight),
-                        zoomSensitivity: zoomKnobSensitivity
-                    ) {
-                            GeometryReader { geometry in
-                                // NOTE: do NOT subtract durationHandleWidth here. The playhead,
-                                // grid and marker lines are drawn in the outer coordinate space
-                                // (offset by +140) while the points live inside each track's own
-                                // space — both derive from this same largeurTimeline, so shrinking
-                                // it here desynchronised them (playhead/grid drifted left of the
-                                // points). The handle's 18px are reserved on the container
-                                // instead, further down, which keeps a single consistent scale.
-                                let largeurTimeline = geometry.size.width - 140
-                                let totalHeight = visiblePistes.reduce(CGFloat(0)) { $0 + rowHeight(for: $1) } + CGFloat(visiblePistes.count * 5)
-
-                                ZStack(alignment: .topLeading) {
-                                    VStack(spacing: 0) {
-                                        ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
-                                            trackRow(index: index, largeurTimeline: largeurTimeline)
-                                        }
-                                    }
-
-                                    markersGridAndPlayhead(largeurTimeline: largeurTimeline, totalHeight: totalHeight)
-                                }
-                            }
-                            .frame(width: outerGeometry.size.width * CGFloat(transport.zoomX))
-                    }
-                    .onChange(of: transport.zoomX) { oldZoom, newZoom in
-                        recenterOnZoomChange(oldZoom: oldZoom, newZoom: newZoom, outerWidth: outerGeometry.size.width)
-                    }
-                    .onAppear {
-                        transport.timelineAreaWidth = outerGeometry.size.width
-                    }
-                    .onChange(of: outerGeometry.size.width) { _, newWidth in
-                        transport.timelineAreaWidth = newWidth
-                        transport.zoomX = min(transport.zoomX, maxZoomX)
-                    }
-                    .onChange(of: transport.duree) { _, _ in
-                        transport.zoomX = min(transport.zoomX, maxZoomX)
-                    }
+                    // Extracted to ContentView+TracksArea.swift: folding all
+                    // of this (pinned header column + TimelineScrollView +
+                    // its GeometryReader/ZStack/ForEach content + 4 onChange
+                    // modifiers) inline here, alongside the already-nontrivial
+                    // ruler block above, pushed `body` past the type-checker's
+                    // complexity budget ("unable to type-check this expression
+                    // in reasonable time"). Splitting it into real functions
+                    // — same reasoning as TrackRow/TrackHeaderColumn/
+                    // TrackContentColumn already being their own View types —
+                    // lets the compiler check each piece independently.
+                    tracksArea(outerGeometry: outerGeometry, rulerStripTotalHeight: rulerStripTotalHeight)
                 }
             }
             // Shrinks the whole timeline area (and with it geometry.size.width,
