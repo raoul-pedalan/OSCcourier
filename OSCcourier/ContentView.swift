@@ -379,6 +379,21 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                             .padding(.leading, 10)
                             .help(tracksLocked ? "Tracks are locked (⌘L)" : "Tracks are unlocked (⌘L)")
+
+                            // Fold/unfold all — same triangle glyph, same
+                            // size, and the same 100pt leading position as
+                            // each track's own fold triangle
+                            // (TrackHeaderColumn), so this one sits directly
+                            // above that column and reads as "the same
+                            // control, for everything at once."
+                            Button(action: { toggleFoldAll() }) {
+                                Image(systemName: pistes.allSatisfy { $0.isFolded } ? "arrowtriangle.right.fill" : "arrowtriangle.down.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.gray)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 100)
+                            .help("Fold/Unfold All Tracks (⌘F)")
                         }
                         .frame(width: 140, height: 24)
                         .frame(width: 140, height: rulerVisualHeight, alignment: .bottom)

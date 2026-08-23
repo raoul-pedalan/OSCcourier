@@ -116,11 +116,11 @@ func makeAuxiliaryPanel<Content: View>(
 }
 
 /// Shared open/close toggle for an auxiliary panel that may already exist:
-/// if `controller` is non-nil, this closes or re-shows its window and
-/// flips the visibility flag, and returns `true` so the caller can
-/// `return` early instead of rebuilding the window from scratch. Returns
-/// `false` (doing nothing) when there's no existing controller yet, i.e.
-/// this is the first time the panel is being opened.
+/// if `controller` is non-nil, this closes, re-shows, or brings forward
+/// its window and flips the visibility flag as needed, and returns `true`
+/// so the caller can `return` early instead of rebuilding the window from
+/// scratch. Returns `false` (doing nothing) when there's no existing
+/// controller yet, i.e. this is the first time the panel is being opened.
 func toggleAuxiliaryPanel(
     _ controller: NSWindowController?,
     isVisible: Bool,
@@ -128,8 +128,20 @@ func toggleAuxiliaryPanel(
 ) -> Bool {
     guard let controller else { return false }
     if isVisible {
-        controller.window?.close()
-        setVisible(false)
+        // Only close it if it's already the key window — otherwise the
+        // panel is open but sitting behind something else (the main
+        // window, most often), and closing it on the next invocation of
+        // the same menu item reads as "nothing happened" at best or "my
+        // window vanished" at worst. Bringing it forward instead matches
+        // how a "Show X" command behaves everywhere else; closing only
+        // once it's already frontmost keeps this feeling like a toggle
+        // rather than losing the close path entirely.
+        if controller.window?.isKeyWindow == true {
+            controller.window?.close()
+            setVisible(false)
+        } else {
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
     } else {
         controller.showWindow(nil)
         setVisible(true)
