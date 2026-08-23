@@ -512,6 +512,42 @@ extension ContentView {
         transport.scrollOffsetX = newOffsetX
     }
 
+    // Zooms (and scrolls) so the loop zone exactly fills the visible track
+    // content width — a no-op if none is currently defined ("si dispo"),
+    // same as Edit/Clear Loop Zone in the Play menu not bothering to
+    // disable themselves for that case either.
+    func zoomToFitLoopZone() {
+        guard let start = loopZone.loopZoneStart, let end = loopZone.loopZoneEnd else { return }
+        let loopDuration = abs(end - start)
+        guard loopDuration > 0, transport.duree > 0 else { return }
+
+        // Same outerWidth transport.timelineAreaWidth stands in for
+        // elsewhere (maxZoomX, referenceMaxZoomX) when the actual
+        // GeometryReader width isn't in scope — this runs from a menu
+        // command, not from within tracksArea's geometry closure.
+        let outerWidth = max(transport.timelineAreaWidth, 1)
+        let visibleContentWidth = outerWidth - 140
+        guard visibleContentWidth > 0 else { return }
+
+        // Solve for the zoom at which the loop zone's duration maps to
+        // exactly the visible track-content width: largeurTimeline =
+        // outerWidth*zoomX - 140 should equal visibleContentWidth *
+        // (duree/loopDuration) — i.e. the loop zone, at that zoom, spans
+        // the full width available for track content.
+        let proposedZoom = (Double(visibleContentWidth) * transport.duree / loopDuration + 140) / Double(outerWidth)
+        let newZoom = min(max(proposedZoom, 1.0), maxZoomX)
+        transport.zoomX = newZoom
+
+        // Scroll so the loop zone's start lands at the left edge of the
+        // visible track content (screen x = 140, right where the pinned
+        // header column ends) — same anchor math as recenterOnZoomChange
+        // above, anchored on the loop zone start instead of the playhead.
+        let largeurTimeline = outerWidth * CGFloat(newZoom) - 140
+        let absoluteStartX = 140 + CGFloat(min(start, end) / transport.duree) * largeurTimeline
+        let maxOffsetX = max(0, outerWidth * CGFloat(newZoom) - outerWidth)
+        transport.scrollOffsetX = max(0, min(absoluteStartX - 140, maxOffsetX))
+    }
+
     func commitDureeEdit() {
         if let parsed = parseDuration(transport.dureeText) {
             transport.duree = max(parsed.rounded(), 1)

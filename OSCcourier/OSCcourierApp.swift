@@ -306,6 +306,14 @@ struct OSCcourierApp: App {
                 }
                 .keyboardShortcut("z", modifiers: [])
 
+                // No .disabled(...) for the no-loop-zone case, same as
+                // Edit/Clear Loop Zone in the Play menu: zoomToFitLoopZone()
+                // itself is just a no-op when none is defined.
+                Button("Zoom to Loop Zone") {
+                    NotificationCenter.default.post(name: .OSCcourierZoomToLoopZone, object: nil)
+                }
+                .keyboardShortcut("z", modifiers: [.option])
+
                 Button("Reset Track Height") {
                     NotificationCenter.default.post(name: .OSCcourierResetTrackHeight, object: nil)
                 }

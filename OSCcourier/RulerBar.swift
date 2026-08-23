@@ -2,8 +2,12 @@ import SwiftUI
 import AppKit
 
 /// The time ruler bar above the tracks: the loop-zone band (and its live
-/// drag preview), the lock toggle, and the tick marks/labels (masked so
-/// they never spill over the 140px track-header column).
+/// drag preview) and the tick marks/labels (masked so they never spill
+/// over the 140px track-header column). The lock toggle used to live here
+/// too, but moved out to ContentView's own fixed pane above the header
+/// column (see rulerBar in ContentView.swift) once that pane stopped
+/// scrolling with the ruler — this view no longer touches tracksLocked at
+/// all.
 ///
 /// A real `View` rather than a `ContentView` method, so SwiftUI gives it
 /// its own identity for diffing: it re-renders when the loop zone or
@@ -15,19 +19,16 @@ import AppKit
 struct RulerBar: View {
     @ObservedObject var loopZone: LoopZoneState
     @ObservedObject var transport: TransportState
-    @ObservedObject var uiChrome: UIChromeState
 
     let largeurTimeline: CGFloat
     let outerWidth: CGFloat
     let geometryWidth: CGFloat
 
-    // enBoucle lives on transport, tracksLocked on uiChrome — both
-    // per-window ObservableObjects passed in above, rather than each
-    // reading its own @AppStorage straight from UserDefaults (which used
-    // to mean every open OSCcourier window shared the same Loop/Lock
-    // state instead of each window having its own).
+    // enBoucle lives on transport — a per-window ObservableObject passed
+    // in above, rather than reading its own @AppStorage straight from
+    // UserDefaults (which used to mean every open OSCcourier window
+    // shared the same Loop state instead of each window having its own).
     private var enBoucle: Bool { transport.enBoucle }
-    private var tracksLocked: Bool { uiChrome.tracksLocked }
 
     let onHover: (HoverPhase) -> Void
     let onDragChanged: (DragGesture.Value) -> Void
@@ -80,9 +81,6 @@ struct RulerBar: View {
                     .frame(width: max(x2 - x1, 1), height: 24)
                     .offset(x: 140 + x1)
             }
-            if tracksLocked {
-                Rectangle().fill(Color.black).frame(width: 140, height: 24)
-            }
             Color.clear
                 .contentShape(Rectangle())
                 .frame(height: 24)
@@ -127,14 +125,6 @@ struct RulerBar: View {
                 .help(loopZone.loopZoneStart != nil && loopZone.loopZoneEnd != nil
                       ? "Drag the edges to resize the loop zone, drag the middle to move it, double-click to edit it precisely (toggle looping with C)"
                       : "Drag to create a loop zone (toggle looping with C)")
-            Button(action: { uiChrome.tracksLocked.toggle() }) {
-                Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
-                    .font(.system(size: 18))
-                    .foregroundColor(tracksLocked ? .red : .gray)
-            }
-            .buttonStyle(.plain)
-            .padding(.leading, 10)
-            .help(tracksLocked ? "Tracks are locked (⌘L)" : "Tracks are unlocked (⌘L)")
             // Dynamic tick interval: depends on pixels per second (so it already
             // accounts for zoom, via largeurTimeline), not just the total duration —
             // otherwise, zoomed in a lot on a long track, the interval would represent

@@ -9,7 +9,6 @@ extension ContentView {
         RulerBar(
             loopZone: loopZone,
             transport: transport,
-            uiChrome: uiChrome,
             largeurTimeline: largeurTimeline,
             outerWidth: outerWidth,
             geometryWidth: geometryWidth,

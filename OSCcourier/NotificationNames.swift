@@ -22,6 +22,7 @@ extension Notification.Name {
     static let OSCcourierClearLoopZone = Notification.Name("OSCcourierClearLoopZone")
     static let OSCcourierGoToMarkerByName = Notification.Name("OSCcourierGoToMarkerByName")
     static let OSCcourierResetZoom = Notification.Name("OSCcourierResetZoom")
+    static let OSCcourierZoomToLoopZone = Notification.Name("OSCcourierZoomToLoopZone")
     static let OSCcourierResetTrackHeight = Notification.Name("OSCcourierResetTrackHeight")
     static let OSCcourierShowPointList = Notification.Name("OSCcourierShowPointList")
     static let OSCcourierToggleFoldAll = Notification.Name("OSCcourierToggleFoldAll")

@@ -325,22 +325,65 @@ struct ContentView: View {
                     // measured height — which is what was leaving a stray
                     // sliver of the loop-zone band poking into the
                     // click-to-scrub stripes above it.
-                    rulerBar(largeurTimeline: rulerLargeurTimeline, outerWidth: outerGeometry.size.width, geometryWidth: rulerContentWidth)
-                        // Without this, the .frame(height: rulerVisualHeight)
-                        // below doesn't just POSITION RulerBar within a taller
-                        // box — it PROPOSES that taller height down into
-                        // RulerBar's own body, whose top-level ZStack happily
-                        // resizes to fill it and re-centers its children
-                        // within that larger box instead of staying flush at
-                        // its real ~24pt height. fixedSize forces RulerBar to
-                        // report (and keep) its true intrinsic height, so the
-                        // frame below only positions it, rather than
-                        // reshaping it.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: rulerContentWidth, height: rulerVisualHeight, alignment: .bottom)
-                        .offset(x: -transport.scrollOffsetX)
-                        .frame(width: outerGeometry.size.width, height: rulerVisualHeight, alignment: .topLeading)
-                        .clipped()
+                    ZStack(alignment: .topLeading) {
+                        rulerBar(largeurTimeline: rulerLargeurTimeline, outerWidth: outerGeometry.size.width, geometryWidth: rulerContentWidth)
+                            // Without this, the .frame(height: rulerVisualHeight)
+                            // below doesn't just POSITION RulerBar within a taller
+                            // box — it PROPOSES that taller height down into
+                            // RulerBar's own body, whose top-level ZStack happily
+                            // resizes to fill it and re-centers its children
+                            // within that larger box instead of staying flush at
+                            // its real ~24pt height. fixedSize forces RulerBar to
+                            // report (and keep) its true intrinsic height, so the
+                            // frame below only positions it, rather than
+                            // reshaping it.
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: rulerContentWidth, height: rulerVisualHeight, alignment: .bottom)
+                            .offset(x: -transport.scrollOffsetX)
+                            .frame(width: outerGeometry.size.width, height: rulerVisualHeight, alignment: .topLeading)
+                            .clipped()
+
+                        // Covers the ruler's own leading 140pt — the same
+                        // margin the timeline content reserves for the
+                        // track-header column — so that once scrolled, real
+                        // ruler ticks/loop-zone striping sliding leftward
+                        // don't end up visible above the pinned header
+                        // column below. Mirrors pinnedTrackHeaderColumn's
+                        // opaque overlay in ContentView+TracksArea.swift,
+                        // which does the same job one row down for the
+                        // track content.
+                        //
+                        // The lock toggle used to live inside RulerBar's
+                        // own scrolling content, in this exact 140pt margin
+                        // — which meant it silently scrolled out of view
+                        // (behind this very cover) once the ruler stopped
+                        // spanning past it. Moved here instead, onto the
+                        // fixed pane, bottom-aligned against the ruler's
+                        // 24pt band the same way it always was (the extra
+                        // 14pt above is the playhead triangle's headroom,
+                        // shared with the ruler itself).
+                        ZStack(alignment: .leading) {
+                            Color(nsColor: .windowBackgroundColor)
+                            if tracksLocked {
+                                Color.black
+                            }
+                            // No explicit font size here — same as most
+                            // other icons across the app (track header
+                            // buttons, toolbar play/pause/stop, etc.),
+                            // which also just take the ambient default
+                            // rather than an explicit .font(size:) override.
+                            Button(action: { uiChrome.tracksLocked.toggle() }) {
+                                Image(systemName: tracksLocked ? "lock.fill" : "lock.open")
+                                    .foregroundColor(tracksLocked ? .red : .gray)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 10)
+                            .help(tracksLocked ? "Tracks are locked (⌘L)" : "Tracks are unlocked (⌘L)")
+                        }
+                        .frame(width: 140, height: 24)
+                        .frame(width: 140, height: rulerVisualHeight, alignment: .bottom)
+                    }
+                    .frame(width: outerGeometry.size.width, height: rulerVisualHeight, alignment: .topLeading)
 
                     // Same separator as before, now directly below the fixed
                     // ruler strip instead of inside the scrollable content.

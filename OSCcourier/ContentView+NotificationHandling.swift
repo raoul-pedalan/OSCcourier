@@ -120,6 +120,10 @@ extension ContentView {
             guard isFrontmostWindowGroup else { return }
             transport.zoomX = 1.0
         }
+        .onReceive(NotificationCenter.default.publisher(for: .OSCcourierZoomToLoopZone)) { _ in
+            guard isFrontmostWindowGroup else { return }
+            zoomToFitLoopZone()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .OSCcourierResetTrackHeight)) { _ in
             guard isFrontmostWindowGroup else { return }
             // Only curve/step tracks are resizable (they're the ones with the
