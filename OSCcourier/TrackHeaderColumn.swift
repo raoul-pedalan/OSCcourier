@@ -2,9 +2,11 @@ import SwiftUI
 import AppKit
 
 /// The left-hand header column of a single track row: name (double-click
-/// to rename), mute/clear/duplicate/delete buttons, fold triangle,
-/// reorder handle, and (curve/step tracks) the amplitude range +
-/// quantization tick labels.
+/// to rename), mute/clear/duplicate/delete buttons, fold triangle, and
+/// reorder handle. The curve/step amplitude-range labels + quantization
+/// ticks that used to live here too have moved to a separate overlay pane
+/// (trackRowGraduations / pinnedTrackGraduationsOverlay) — see the comment
+/// where they used to sit, below, for why.
 ///
 /// A real `View` rather than a `ContentView` method, so SwiftUI gives
 /// each track's header its own identity for diffing — dragging one
@@ -154,113 +156,16 @@ struct TrackHeaderColumn: View {
             .padding(.top, 6)
             .help(pistes[index].isFolded ? "Unfold track" : "Fold track")
 
-            if !pistes[index].isFolded && (pistes[index].type == .curve || pistes[index].type == .step) {
-                let trackHeight = pistes[index].height
-                let topY = curveMargin
-                let midY = trackHeight / 2
-                let bottomY = trackHeight - curveMargin
-                let tickWidth: CGFloat = 6
-
-                if pistes[index].type == .step && pistes[index].isGate {
-                    // Gate mode is strictly boolean — no middle value, so just
-                    // show TRUE (top) / FALSE (bottom) instead of 3 numeric ticks.
-                    ZStack(alignment: .topLeading) {
-                        HStack(spacing: 3) {
-                            // Hidden only when quantization is on, since the blue
-                            // ticks then occupy this same column — no point having
-                            // two tick scales stacked on each other. A clear spacer
-                            // keeps the labels in place either way.
-                            Rectangle()
-                                .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
-                                .frame(width: tickWidth, height: 1)
-                            Text("OPEN")
-                                .font(.caption2)
-                                .foregroundColor(.gray.opacity(0.5))
-                        }
-                        .offset(y: topY - 6)
-
-                        HStack(spacing: 3) {
-                            // Hidden only when quantization is on, since the blue
-                            // ticks then occupy this same column — no point having
-                            // two tick scales stacked on each other. A clear spacer
-                            // keeps the labels in place either way.
-                            Rectangle()
-                                .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
-                                .frame(width: tickWidth, height: 1)
-                            Text("CLOSED")
-                                .font(.caption2)
-                                .foregroundColor(.gray.opacity(0.5))
-                        }
-                        .offset(y: bottomY - 6)
-                    }
-                    .frame(width: 60, height: trackHeight, alignment: .topLeading)
-                    .offset(x: 144)
-                } else {
-                    ZStack(alignment: .topLeading) {
-                        HStack(spacing: 3) {
-                            // Hidden only when quantization is on, since the blue
-                            // ticks then occupy this same column — no point having
-                            // two tick scales stacked on each other. A clear spacer
-                            // keeps the labels in place either way.
-                            Rectangle()
-                                .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
-                                .frame(width: tickWidth, height: 1)
-                            Text(String(format: "%.2f", pistes[index].maxAmplitude))
-                                .font(.caption2)
-                                .foregroundColor(.gray.opacity(0.5))
-                        }
-                        .offset(y: topY - 6)
-
-                        HStack(spacing: 3) {
-                            // Hidden only when quantization is on, since the blue
-                            // ticks then occupy this same column — no point having
-                            // two tick scales stacked on each other. A clear spacer
-                            // keeps the labels in place either way.
-                            Rectangle()
-                                .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
-                                .frame(width: tickWidth, height: 1)
-                            Text(String(format: "%.2f", (pistes[index].minAmplitude + pistes[index].maxAmplitude) / 2))
-                                .font(.caption2)
-                                .foregroundColor(.gray.opacity(0.5))
-                        }
-                        .offset(y: midY - 6)
-
-                        HStack(spacing: 3) {
-                            // Hidden only when quantization is on, since the blue
-                            // ticks then occupy this same column — no point having
-                            // two tick scales stacked on each other. A clear spacer
-                            // keeps the labels in place either way.
-                            Rectangle()
-                                .fill(pistes[index].quantizeActive ? Color.clear : Color.gray.opacity(0.5))
-                                .frame(width: tickWidth, height: 1)
-                            Text(String(format: "%.2f", pistes[index].minAmplitude))
-                                .font(.caption2)
-                                .foregroundColor(.gray.opacity(0.5))
-                        }
-                        .offset(y: bottomY - 6)
-                    }
-                    .frame(width: 60, height: trackHeight, alignment: .topLeading)
-                    .offset(x: 144)
-                }
-
-                // Quantization ticks. They now occupy the column where the
-                // range labels' own gray ticks used to be (those are gone),
-                // so there's a single tick scale instead of two competing
-                // ones. Blue keeps them readable as the quantization grid.
-                // Only the visible subset (see visibleQuantizeTicks) is
-                // drawn, so a fine step on a short track doesn't turn into
-                // a solid block.
-                if !pistes[index].isGate {
-                    HeaderQuantizeTicksView(piste: pistes[index], trackHeight: trackHeight)
-                        .equatable()
-                    // Right edge stays at 150, level with where the gray ticks
-                    // end (144 + tickWidth); the left edge is pulled back so
-                    // they only just reach into the header (which ends at 140).
-                    .frame(width: 15, height: trackHeight, alignment: .topLeading)
-                    .offset(x: 135)
-                    .allowsHitTesting(false)
-                }
-            }
+            // The amplitude-range labels and quantization ticks used to be
+            // drawn right here, but they're designed to poke past x=140
+            // (up to x=204) into the start of the track content — which
+            // worked when header and content were the same unclipped view,
+            // but is invisible now that this column is its own opaque,
+            // clipped-at-140 pane. Moved to pinnedTrackGraduationsOverlay
+            // (ContentView+TracksArea.swift), a separate semi-transparent,
+            // non-interactive pane drawn OVER both this header column and
+            // the scrolling content, so it can still spill across that
+            // boundary the way it originally did.
 
             if !pistes[index].isFolded {
             if index == 0 {

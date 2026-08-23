@@ -48,8 +48,46 @@ extension ContentView {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             pinnedTrackHeaderColumn(availableHeight: availableHeight)
+
+            // Drawn last (on top of both the scrolling content and the
+            // opaque header column) so its semi-transparent labels/ticks
+            // stay visible wherever they land, including the sliver that
+            // overlaps the header column itself.
+            pinnedTrackGraduationsOverlay(availableHeight: availableHeight)
         }
         .frame(height: availableHeight, alignment: .top)
+    }
+
+    // Curve/step amplitude-range labels + quantization ticks (see
+    // trackRowGraduations, ContentView+TrackRow.swift), pinned the same
+    // way as the header column — fixed horizontally regardless of
+    // zoom/pan, scrolling vertically in lockstep via the same
+    // transport.scrollOffsetY — but NOT opaque and NOT clipped at 140:
+    // they're meant to sit semi-transparent on top of both the header
+    // column and the start of the scrolling track content, poking past
+    // the 140pt boundary the way they did before header/content were
+    // split into separate panes. allowsHitTesting(false) so they never
+    // steal clicks/drags meant for the track content underneath.
+    func pinnedTrackGraduationsOverlay(availableHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(pistes.enumerated()), id: \.element.id) { index, _ in
+                trackRowGraduations(index: index)
+            }
+        }
+        // Forces the VStack's own reported width to exactly 210 (matching
+        // each row's own frame) — without this, the 5pt Color.clear
+        // Rectangle spacer between rows (no width of its own, so it wants
+        // to expand) makes the VStack greedily fill the whole ZStack's
+        // width, and VStack's default .center alignment then centers each
+        // 210-wide row within that — which is what put this whole pane
+        // dead center of the window instead of pinned at the left. Same
+        // fix pinnedTrackHeaderColumn already applies for its own 140.
+        .frame(width: 210, alignment: .top)
+        .offset(y: -transport.scrollOffsetY)
+        .frame(height: availableHeight, alignment: .top)
+        .clipped()
+        .allowsHitTesting(false)
+        .opacity(0.75)
     }
 
     // Track-header column, pinned at the left: unlike the ruler (which
