@@ -27,6 +27,14 @@ extension ContentView {
         } message: {
             Text(oscManager.lastListenError ?? "")
         }
+        .alert("File error", isPresented: Binding<Bool>(
+            get: { fileIOErrorMessage != nil },
+            set: { if !$0 { fileIOErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(fileIOErrorMessage ?? "")
+        }
         .alert("Delete all tracks?", isPresented: $autofill.showDeleteAllTracksConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {

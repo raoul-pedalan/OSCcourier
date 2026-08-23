@@ -63,6 +63,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Apply the saved appearance once, app-wide, as soon as NSApp exists.
         AppearanceMode.current.apply()
     }
+
+    // Cmd+Q bypasses each window's own windowShouldClose by default (that's
+    // only consulted for an individual close — red button, Cmd+W, or a
+    // programmatic close() call), which is how a WindowGroup app can quit
+    // straight past unsaved changes with no prompt at all. Replaying the
+    // same check across every open window here closes that gap, stopping
+    // at the first window whose delegate refuses (Cancel), same as
+    // closing them one by one would.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for window in NSApp.windows {
+            if let shouldClose = window.delegate?.windowShouldClose?(window), !shouldClose {
+                return .terminateCancel
+            }
+        }
+        return .terminateNow
+    }
 }
 
 // Holds a file to load for the next window that appears, when "Open

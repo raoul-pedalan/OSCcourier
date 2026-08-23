@@ -138,6 +138,17 @@ struct ContentView: View {
     // Remembers the file chosen on the first Save, so subsequent saves
     // silently overwrite it instead of prompting again.
     @State var savedFileURL: URL?
+    // Snapshot of encodedProjectData() as of the last successful
+    // save/load (or, for a brand-new window, its initial state) — the
+    // baseline hasUnsavedChanges() diffs the live state against. nil only
+    // very briefly before that first baseline is captured in onAppear.
+    @State var lastSavedProjectData: Data?
+    // Retains the main window's close-confirmation delegate — NSWindow's
+    // own `delegate` property is unowned, so nothing else keeps it alive.
+    @State var mainWindowCloseDelegate: MainWindowCloseDelegate?
+    // Message shown by the "File error" alert (ContentView+Alerts.swift)
+    // when a save or load fails — set from ContentView+FileIO.swift.
+    @State var fileIOErrorMessage: String?
     // This ContentView instance's own hosting NSWindow, captured via
     // WindowAccessor — lets menu-command notification handlers tell
     // whether THIS window is the frontmost one (see isFrontmostWindowGroup
@@ -435,6 +446,18 @@ struct ContentView: View {
         .background(Color.gray.opacity(0.07))
         .background(WindowAccessor { window in
             hostWindow = window
+            guard let window else { return }
+            // Only skip if WE already installed it (viewDidMoveToWindow can
+            // fire more than once for the same window) — SwiftUI itself
+            // apparently already assigns its own delegate here (a "only if
+            // nil" guard silently never installed ours at all), so this
+            // now deliberately overwrites whatever was there.
+            guard !(window.delegate is MainWindowCloseDelegate) else { return }
+            let delegate = MainWindowCloseDelegate()
+            delegate.hasUnsavedChanges = { hasUnsavedChanges() }
+            delegate.save = { saveProject() }
+            window.delegate = delegate
+            mainWindowCloseDelegate = delegate
         })
         .focusedSceneValue(\.oscCourierDocument, focusedDocumentValue)
         .navigationTitle(savedFileURL?.deletingPathExtension().lastPathComponent ?? "OSCcourier")
@@ -449,6 +472,12 @@ struct ContentView: View {
         .onAppear {
             timelineStore.undoManager = undoManager
             setupOnAppear()
+            // Baseline for hasUnsavedChanges() — only set once, so a
+            // second onAppear firing (e.g. view reappearing) can't paper
+            // over real unsaved changes by re-capturing "now" as clean.
+            if lastSavedProjectData == nil {
+                lastSavedProjectData = encodedProjectData()
+            }
         }
         .onDisappear {
             tearDownOnDisappear()

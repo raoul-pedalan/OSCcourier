@@ -5,6 +5,15 @@ import UniformTypeIdentifiers
 
 extension ContentView {
 
+    // Whether the live project state differs from the last successful
+    // save/load. nil baseline (shouldn't normally happen past onAppear)
+    // fails open — treated as "no changes" rather than risking a window
+    // that can never close.
+    func hasUnsavedChanges() -> Bool {
+        guard let lastSavedProjectData else { return false }
+        return encodedProjectData() != lastSavedProjectData
+    }
+
     func encodedProjectData() -> Data? {
         let data = SaveData(
             duree: transport.duree,
@@ -19,31 +28,57 @@ extension ContentView {
         return try? encoder.encode(data)
     }
 
-    func saveProject() {
-        guard let jsonData = encodedProjectData() else { return }
+    // Returns whether the save actually completed — used both to decide
+    // whether it's safe to close the window afterward (see
+    // MainWindowCloseDelegate) and to know whether to update the
+    // unsaved-changes baseline.
+    @discardableResult
+    func saveProject() -> Bool {
+        guard let jsonData = encodedProjectData() else {
+            fileIOErrorMessage = "Could not prepare the project data to save."
+            return false
+        }
 
         if let url = savedFileURL {
-            try? jsonData.write(to: url)
-            addToRecentFiles(url)
+            do {
+                try jsonData.write(to: url)
+                addToRecentFiles(url)
+                lastSavedProjectData = jsonData
+                return true
+            } catch {
+                fileIOErrorMessage = "Could not save \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+                return false
+            }
         } else {
-            promptAndSave(jsonData)
+            return promptAndSave(jsonData)
         }
     }
 
-    func saveProjectAs() {
-        guard let jsonData = encodedProjectData() else { return }
-        promptAndSave(jsonData)
+    @discardableResult
+    func saveProjectAs() -> Bool {
+        guard let jsonData = encodedProjectData() else {
+            fileIOErrorMessage = "Could not prepare the project data to save."
+            return false
+        }
+        return promptAndSave(jsonData)
     }
 
-    func promptAndSave(_ jsonData: Data) {
+    @discardableResult
+    func promptAndSave(_ jsonData: Data) -> Bool {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = "OSCcourier.json"
         panel.canCreateDirectories = true
-        if panel.runModal() == .OK, let url = panel.url {
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        do {
+            try jsonData.write(to: url)
             savedFileURL = url
-            try? jsonData.write(to: url)
             addToRecentFiles(url)
+            lastSavedProjectData = jsonData
+            return true
+        } catch {
+            fileIOErrorMessage = "Could not save \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -59,8 +94,15 @@ extension ContentView {
     // Shared by the "Load…" panel above and by clicking an entry in the
     // File > Open Recent submenu — both just need a URL to load from.
     func loadProject(from url: URL) {
-        guard let jsonData = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(SaveData.self, from: jsonData) else { return }
+        let jsonData: Data
+        let decoded: SaveData
+        do {
+            jsonData = try Data(contentsOf: url)
+            decoded = try JSONDecoder().decode(SaveData.self, from: jsonData)
+        } catch {
+            fileIOErrorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+            return
+        }
 
         transport.enLecture = false
         transport.position = 0
@@ -79,6 +121,12 @@ extension ContentView {
         pistes = decoded.pistes
         savedFileURL = url // further saves overwrite the file we just loaded
         addToRecentFiles(url)
+        // Re-encode from the state we just applied (rather than reusing the
+        // raw file bytes) so this exactly matches what encodedProjectData()
+        // will produce on the next dirty-check — avoids a false "unsaved
+        // changes" the instant a project is loaded, from incidental
+        // formatting differences between the file on disk and our encoder.
+        lastSavedProjectData = encodedProjectData()
     }
 
     // Recent files are shared with OSCcourierApp via the same @AppStorage

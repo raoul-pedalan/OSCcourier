@@ -341,7 +341,7 @@ extension ContentView {
                         .offset(y: 22)
                 }
 
-                Button(action: saveProject) {
+                Button(action: { saveProject() }) {
                     Text("Save")
                         .frame(width: 60, height: 20)
                 }

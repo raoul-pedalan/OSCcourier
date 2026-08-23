@@ -23,6 +23,44 @@ class OSCWindowCloseDelegate: NSObject, NSWindowDelegate {
     }
 }
 
+// Confirms before closing the main document window if it has unsaved
+// changes — WindowGroup gives no built-in "Save changes?" prompt the way
+// DocumentGroup/NSDocument does, so this fills that gap directly at the
+// NSWindowDelegate level. Installed on each ContentView's own NSWindow via
+// WindowAccessor.
+//
+// Also reused for Cmd+Q: AppDelegate.applicationShouldTerminate loops over
+// every open window and calls this same windowShouldClose, so quitting
+// with unsaved changes anywhere prompts exactly like closing that window
+// individually would, one window at a time, stopping at the first Cancel.
+class MainWindowCloseDelegate: NSObject, NSWindowDelegate {
+    var hasUnsavedChanges: (() -> Bool)?
+    // Runs Save for this window; returns whether it actually completed —
+    // false if the user cancels the save panel, or the write fails, in
+    // which case the window must NOT close (that would discard the very
+    // changes "Save" was supposed to keep).
+    var save: (() -> Bool)?
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard hasUnsavedChanges?() == true else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = "Do you want to save the changes made to this document?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: // Save
+            return save?() ?? false
+        case .alertSecondButtonReturn: // Don't Save
+            return true
+        default: // Cancel
+            return false
+        }
+    }
+}
+
 // MARK: - Auxiliary panel construction
 
 /// Where a newly created auxiliary panel should land — applied last, once

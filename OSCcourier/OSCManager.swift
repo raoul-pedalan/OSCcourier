@@ -31,6 +31,18 @@ class OSCManager: ObservableObject {
     // MARK: - Receiving OSC messages (transport control from the outside)
     private var listenSocketFD: Int32 = -1
     private var isListening = false
+    // Bumped on every startListening() call; the background receive loop
+    // captures its own value and checks it against the live one to know
+    // whether IT specifically is still the current listener. `isListening`
+    // alone isn't enough: if startListening() is called again in quick
+    // succession (e.g. loading a project both sets oscReceivePort, which
+    // triggers .onChange -> startListening, AND calls startListening
+    // itself directly), the second call flips isListening back to true
+    // right after the first call's stopListening() flipped it false —
+    // so the FIRST call's now-orphaned thread would see isListening==true
+    // again and loop straight back into recv() on its already-closed
+    // socket instead of exiting.
+    private var listenGeneration = 0
     // Called (on the main thread) whenever a message is received, with the
     // decoded address string (e.g. "/play") and any OSC arguments that came
     // with it (e.g. a float for "/goto 12.5"). Set this from ContentView.
@@ -193,11 +205,13 @@ class OSCManager: ObservableObject {
         listenSocketFD = socketFD
         isListening = true
         lastListenError = nil
+        listenGeneration += 1
+        let myGeneration = listenGeneration
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var buffer = [UInt8](repeating: 0, count: 1024)
             while true {
-                guard let self = self, self.isListening else { break }
+                guard let self = self, self.isListening, self.listenGeneration == myGeneration else { break }
                 let bytesRead = recv(socketFD, &buffer, buffer.count, 0)
                 guard bytesRead > 0 else { continue }
 
@@ -275,6 +289,7 @@ class OSCManager: ObservableObject {
         guard isListening else { return }
         isListening = false
         if listenSocketFD >= 0 {
+            shutdown(listenSocketFD, SHUT_RDWR)
             close(listenSocketFD)
             listenSocketFD = -1
         }

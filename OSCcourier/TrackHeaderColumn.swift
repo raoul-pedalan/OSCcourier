@@ -33,6 +33,16 @@ struct TrackHeaderColumn: View {
     }
 
     var body: some View {
+        // Guards against a transient state where this view's own captured
+        // `index` (fixed at construction by the parent ForEach) has gone
+        // stale relative to `pistes` — e.g. right after deleting a track,
+        // this view (still observing the shared `timelineStore`) can
+        // re-render with its old index before the parent ForEach hands it
+        // a fresh one, which crashed with an index-out-of-range fatal
+        // error. Rendering nothing for that one transient frame is
+        // harmless — the view gets a valid index moments later, or is
+        // removed entirely.
+        if pistes.indices.contains(index) {
         ZStack(alignment: .topLeading) {
             Rectangle()
                 .fill(pistes[index].couleur)
@@ -430,5 +440,6 @@ struct TrackHeaderColumn: View {
             } // end if !pistes[index].isFolded
         }
         .frame(width: 140, height: rowHeight(for: pistes[index]))
+        }
     }
 }

@@ -87,6 +87,12 @@ struct TrackContentColumn: View {
     }
 
     var body: some View {
+        // Same transient-stale-index guard as TrackHeaderColumn.body —
+        // see the comment there. Both views are built by the same
+        // ForEach(Array(pistes.enumerated())...) and read pistes[index]
+        // directly from the shared timelineStore, so both are equally
+        // exposed to a delete-triggered index-out-of-range crash.
+        if pistes.indices.contains(index) {
         ZStack(alignment: .leading) {
             Rectangle()
                 .fill(pistes[index].type != .normal ? pistes[index].couleur.opacity(trackBackgroundOpacity) : Color.clear)
@@ -452,5 +458,6 @@ struct TrackContentColumn: View {
                     onPasteDragEnded(value, index, largeurTimeline)
                 }
         )
+        }
     }
 }
