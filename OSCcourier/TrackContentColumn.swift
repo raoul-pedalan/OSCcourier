@@ -318,110 +318,21 @@ struct TrackContentColumn: View {
                         .opacity(0.5)
                 }
 
-                VStack(spacing: 0) {
-                    if index == 0 {
-                        ZStack {
-                            Rectangle()
-                .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-                                .frame(width: 6, height: 6)
-
-                            if showPointCoordinates {
-                                Text(String(format: "%.2f", event.time) + "s")
-                                    .font(.caption2)
-                                    .foregroundColor(pointCoordinatesColorOnDarkMarker)
-                                    .offset(y: 12)
-                            }
-                        }
-                        .overlay(alignment: .top) {
-                            Text(event.label)
-                                .font(.caption2)
-                                .foregroundColor(.gray)
-                                .fixedSize()
-                                .offset(y: showPointCoordinates ? -12 : -16)
-                        }
-                        // Label-to-square gap stays fixed (via the overlay above);
-                        // this shifts the whole rigid group down a bit when the
-                        // coordinate text is hidden, so it stays roughly centered
-                        // in the track rather than sitting high with empty space
-                        // below it.
-                        .offset(y: showPointCoordinates ? 0 : 6)
-                    } else {
-                        if pistes[index].type == .message {
-                            Text(event.label)
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.gray)
-                                .offset(y: 3)
-
-                            ZStack {
-                                Text("T")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-
-                                if showPointCoordinates {
-                                    Text(String(format: "%.2f", event.time) + "s")
-                                        .font(.caption2)
-                                        .foregroundColor(pointCoordinatesColorOnLightMarker)
-                                        .offset(y: 12)
-                                }
-                            }
-                        } else if pistes[index].type == .bang {
-                            Rectangle()
-                            .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-                                .frame(width: 8, height: 8)
-                                .rotationEffect(.degrees(45))
-
-                            if showPointCoordinates {
-                                Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
-                                    .font(.caption2)
-                                    .foregroundColor(pointCoordinatesColorOnLightMarker)
-                                    .offset(y: 12)
-                            }
-                        } else {
-                            // Curve/step point: anchor the label to the marker itself
-                            // via an overlay (rather than stacking it in the VStack),
-                            // so flipping it above/below doesn't shift where the
-                            // marker sits relative to the path.
-                            let labelAbove = normalizedY < 0.5
-                            Group {
-                                if pistes[index].type == .step {
-                                    if pistes[index].isGate {
-                                        Rectangle()
-                                        .stroke(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur, lineWidth: 2.5)
-                                            .frame(width: 10, height: 10)
-                                            .contentShape(Rectangle())
-                                    } else {
-                                        ZStack {
-                                            Rectangle()
-                                            .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-                                                .frame(width: 17, height: 3)
-                                                .rotationEffect(.degrees(45))
-                                            Rectangle()
-                                            .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-                                                .frame(width: 17, height: 3)
-                                                .rotationEffect(.degrees(-45))
-                                        }
-                                        .frame(width: 17, height: 17)
-                                        .contentShape(Rectangle())
-                                    }
-                                } else {
-                                    Circle()
-                                .fill(selection.selectedPointIDs.contains(event.id) ? Color.white : pistes[index].couleur)
-                                        .frame(width: 12, height: 12)
-                                }
-                            }
-                            .overlay(alignment: labelAbove ? .top : .bottom) {
-                                if showPointCoordinates {
-                                    Text(String(format: "%.2f", event.time) + ", " + String(format: "%.2f", event.y))
-                                        .font(.caption2)
-                                        .foregroundColor(pointCoordinatesColorOnLightMarker)
-                                        .fixedSize()
-                                        .offset(y: labelAbove ? -12 : 12)
-                                }
-                            }
-                        }
-                    }
-                }
+                PointMarkerView(
+                    trackIndex: index,
+                    type: pistes[index].type,
+                    isGate: pistes[index].isGate,
+                    couleur: pistes[index].couleur,
+                    eventLabel: event.label,
+                    eventTime: event.time,
+                    eventY: event.y,
+                    isSelected: selection.selectedPointIDs.contains(event.id),
+                    showPointCoordinates: showPointCoordinates,
+                    normalizedY: normalizedY,
+                    coordinatesColorOnDarkMarker: pointCoordinatesColorOnDarkMarker,
+                    coordinatesColorOnLightMarker: pointCoordinatesColorOnLightMarker
+                )
+                .equatable()
                 .position(x: xPos, y: pointY)
                 .onHover { hovering in
                     pointDrag.isHoveringPoint = hovering
